@@ -1,5 +1,5 @@
 add_executable(bimeup main.cpp)
-target_link_libraries(bimeup PRIVATE bimeup_tools bimeup_platform bimeup_renderer)
+target_link_libraries(bimeup PRIVATE bimeup_tools bimeup_platform bimeup_renderer bimeup_core)
 add_dependencies(bimeup bimeup_shaders)
 bimeup_enable_sanitizers(bimeup)
 

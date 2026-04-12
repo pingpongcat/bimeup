@@ -1,5 +1,7 @@
 #include <vulkan/vulkan.h>
 
+#include <core/SceneUploader.h>
+#include <ifc/IfcModel.h>
 #include <platform/Input.h>
 #include <platform/Window.h>
 #include <renderer/Buffer.h>
@@ -13,11 +15,16 @@
 #include <renderer/Shader.h>
 #include <renderer/Swapchain.h>
 #include <renderer/VulkanContext.h>
+#include <scene/AABB.h>
+#include <scene/Scene.h>
+#include <scene/SceneBuilder.h>
+#include <scene/SceneNode.h>
 #include <tools/Log.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <span>
 #include <string>
@@ -80,9 +87,43 @@ void MakeCube(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
     };
 }
 
+/// Compute scene bounding box from all nodes that have geometry.
+bimeup::scene::AABB ComputeSceneBounds(const bimeup::scene::Scene& scene) {
+    bimeup::scene::AABB bounds;
+    for (size_t i = 0; i < scene.GetNodeCount(); ++i) {
+        const auto& node = scene.GetNode(static_cast<bimeup::scene::NodeId>(i));
+        if (node.bounds.IsValid()) {
+            bounds = bimeup::scene::AABB::Merge(bounds, node.bounds);
+        }
+    }
+    return bounds;
+}
+
+/// Collect unique mesh handles from visible scene nodes (avoids drawing shared batched meshes multiple times).
+std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>>
+CollectDrawCalls(const bimeup::scene::Scene& scene) {
+    std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>> draws;
+    // Track which handles we've already added (batched meshes may be shared by multiple nodes)
+    std::vector<bimeup::renderer::MeshHandle> seen;
+
+    for (size_t i = 0; i < scene.GetNodeCount(); ++i) {
+        const auto& node = scene.GetNode(static_cast<bimeup::scene::NodeId>(i));
+        if (!node.visible || !node.mesh.has_value()) {
+            continue;
+        }
+        auto handle = node.mesh.value();
+        if (std::find(seen.begin(), seen.end(), handle) != seen.end()) {
+            continue;
+        }
+        seen.push_back(handle);
+        draws.emplace_back(handle, node.transform);
+    }
+    return draws;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
     std::printf("bimeup v%s\n", BIMEUP_VERSION);
 
     bimeup::tools::Log::Init("bimeup");
@@ -133,12 +174,42 @@ int main() {
                                        sizeof(CameraUBO), &ubo);
     descriptorSet.UpdateBuffer(0, uboBuffer);
 
-    // Cube geometry via MeshBuffer
-    bimeup::renderer::MeshData cubeMeshData;
-    MakeCube(cubeMeshData.vertices, cubeMeshData.indices);
-
+    // MeshBuffer for all geometry
     bimeup::renderer::MeshBuffer meshBuffer(device);
-    bimeup::renderer::MeshHandle cubeHandle = meshBuffer.Upload(cubeMeshData);
+
+    // Load IFC file or fall back to cube
+    std::optional<bimeup::scene::BuildResult> sceneResult;
+    bool hasScene = false;
+
+    if (argc > 1) {
+        std::string ifcPath = argv[1];
+        LOG_INFO("Loading IFC file: {}", ifcPath);
+
+        bimeup::ifc::IfcModel model;
+        if (model.LoadFromFile(ifcPath)) {
+            LOG_INFO("IFC loaded: {} elements", model.GetElementCount());
+
+            bimeup::scene::SceneBuilder builder;
+            builder.SetBatchingEnabled(true);
+            sceneResult = builder.Build(model);
+            bimeup::core::SceneUploader::Upload(*sceneResult, meshBuffer);
+            hasScene = true;
+
+            LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
+                     sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
+        } else {
+            LOG_ERROR("Failed to load IFC file: {}", ifcPath);
+        }
+    }
+
+    // If no IFC loaded, upload a fallback cube
+    bimeup::renderer::MeshHandle cubeHandle = bimeup::renderer::MeshBuffer::InvalidHandle;
+    if (!hasScene) {
+        LOG_INFO("No IFC file loaded — showing demo cube");
+        bimeup::renderer::MeshData cubeMeshData;
+        MakeCube(cubeMeshData.vertices, cubeMeshData.indices);
+        cubeHandle = meshBuffer.Upload(cubeMeshData);
+    }
 
     // Pipeline
     VkVertexInputBindingDescription binding{};
@@ -173,11 +244,34 @@ int main() {
 
     auto renderMode = bimeup::renderer::RenderMode::Shaded;
 
-    // Camera
+    // Camera — set orbit target and distance based on scene bounds
     bimeup::renderer::Camera camera;
     camera.SetPerspective(45.0F, static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y),
-                          0.1F, 100.0F);
-    camera.SetOrbitTarget(glm::vec3(0.0F));
+                          0.1F, 1000.0F);
+
+    if (hasScene) {
+        auto bounds = ComputeSceneBounds(sceneResult->scene);
+        if (bounds.IsValid()) {
+            glm::vec3 center = bounds.GetCenter();
+            glm::vec3 size = bounds.GetSize();
+            float maxDim = std::max({size.x, size.y, size.z});
+            camera.SetOrbitTarget(center);
+            // Zoom out from default distance (5.0) to fit the model
+            float targetDistance = maxDim * 1.5F;
+            camera.Zoom(targetDistance - 5.0F);
+            LOG_INFO("Scene bounds: center=({:.1f},{:.1f},{:.1f}) size=({:.1f},{:.1f},{:.1f})",
+                     center.x, center.y, center.z, size.x, size.y, size.z);
+        }
+    } else {
+        camera.SetOrbitTarget(glm::vec3(0.0F));
+    }
+
+    // Collect draw calls for the scene
+    std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>> drawCalls;
+    if (hasScene) {
+        drawCalls = CollectDrawCalls(sceneResult->scene);
+        LOG_INFO("Draw calls: {}", drawCalls.size());
+    }
 
     // Input: orbit camera with mouse
     bool rightMouseDown = false;
@@ -269,12 +363,22 @@ int main() {
         activePipeline.Bind(cmd);
         descriptorSet.Bind(cmd, activePipeline.GetLayout());
 
-        glm::mat4 model(1.0F);
-        vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(glm::mat4), &model);
-
         meshBuffer.Bind(cmd);
-        meshBuffer.Draw(cmd, cubeHandle);
+
+        if (hasScene) {
+            // Draw all scene meshes
+            for (const auto& [handle, transform] : drawCalls) {
+                vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(glm::mat4), &transform);
+                meshBuffer.Draw(cmd, handle);
+            }
+        } else {
+            // Draw fallback cube
+            glm::mat4 model(1.0F);
+            vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(glm::mat4), &model);
+            meshBuffer.Draw(cmd, cubeHandle);
+        }
 
         (void)renderLoop.EndFrame();
     }
