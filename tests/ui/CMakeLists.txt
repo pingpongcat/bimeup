@@ -4,6 +4,7 @@ add_executable(ui_tests
     PanelTest.cpp
     PropertyPanelTest.cpp
     SelectionBridgeTest.cpp
+    ThemeTest.cpp
     ToolbarTest.cpp
     UIManagerTest.cpp
     ViewportOverlayTest.cpp

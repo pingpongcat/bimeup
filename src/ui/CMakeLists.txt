@@ -5,6 +5,7 @@ add_library(bimeup_ui STATIC
     src/ImGuiContext.cpp
     src/PropertyPanel.cpp
     src/SelectionBridge.cpp
+    src/Theme.cpp
     src/Toolbar.cpp
     src/UIManager.cpp
     src/ViewportOverlay.cpp

@@ -1,5 +1,6 @@
 #include <ui/ImGuiContext.h>
 
+#include <ui/Theme.h>
 #include <tools/Log.h>
 
 #include <imgui.h>
@@ -26,7 +27,7 @@ ImGuiContext::ImGuiContext() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    ImGui::StyleColorsDark();
+    Theme::Apply();
 }
 
 ImGuiContext::~ImGuiContext() {

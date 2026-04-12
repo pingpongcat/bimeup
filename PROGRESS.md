@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 6 — ImGui Integration & Basic UI
-## Current Task: 6.9
+## Current Stage: 7 — BIM Viewer Features
+## Current Task: 7.1
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -69,7 +69,7 @@
 - [x] 6.6 Implement ui/Toolbar
 - [x] 6.7 Implement ui/ViewportOverlay
 - [x] 6.8 Wire hierarchy → selection → property panel
-- [ ] 6.9 Implement UI theme
+- [x] 6.9 Implement UI theme
 
 ## Stage 7 — BIM Viewer Features
 - [ ] 7.1 Distance measurement tool
