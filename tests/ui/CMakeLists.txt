@@ -2,6 +2,7 @@ add_executable(ui_tests
     HierarchyPanelTest.cpp
     ImGuiContextTest.cpp
     PanelTest.cpp
+    PropertyPanelTest.cpp
     UIManagerTest.cpp
 )
 target_link_libraries(ui_tests PRIVATE bimeup_ui bimeup_ifc GTest::gtest_main)

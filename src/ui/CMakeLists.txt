@@ -3,6 +3,7 @@ find_package(Vulkan REQUIRED)
 add_library(bimeup_ui STATIC
     src/HierarchyPanel.cpp
     src/ImGuiContext.cpp
+    src/PropertyPanel.cpp
     src/UIManager.cpp
 )
 

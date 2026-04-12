@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 6 — ImGui Integration & Basic UI
-## Current Task: 6.5
+## Current Task: 6.6
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -65,7 +65,7 @@
 - [x] 6.2 Create ui/UIManager
 - [x] 6.3 Create ui/Panel interface
 - [x] 6.4 Implement ui/HierarchyPanel
-- [ ] 6.5 Implement ui/PropertyPanel
+- [x] 6.5 Implement ui/PropertyPanel
 - [ ] 6.6 Implement ui/Toolbar
 - [ ] 6.7 Implement ui/ViewportOverlay
 - [ ] 6.8 Wire hierarchy → selection → property panel
