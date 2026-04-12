@@ -77,7 +77,15 @@ void DestroyDebugUtilsMessengerEXT(
 }  // namespace
 
 VulkanContext::VulkanContext(bool enableValidation) {
-    CreateInstance(enableValidation);
+    CreateInstance(enableValidation, {});
+    if (m_validationEnabled) {
+        SetupDebugMessenger();
+    }
+}
+
+VulkanContext::VulkanContext(bool enableValidation,
+                           std::span<const char* const> requiredExtensions) {
+    CreateInstance(enableValidation, requiredExtensions);
     if (m_validationEnabled) {
         SetupDebugMessenger();
     }
@@ -104,7 +112,8 @@ bool VulkanContext::HasDebugMessenger() const {
     return m_debugMessenger != VK_NULL_HANDLE;
 }
 
-void VulkanContext::CreateInstance(bool enableValidation) {
+void VulkanContext::CreateInstance(bool enableValidation,
+                                  std::span<const char* const> extraExtensions) {
     if (enableValidation && CheckValidationLayerSupport()) {
         m_validationEnabled = true;
     } else if (enableValidation) {
@@ -123,7 +132,7 @@ void VulkanContext::CreateInstance(bool enableValidation) {
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    std::vector<const char*> extensions;
+    std::vector<const char*> extensions(extraExtensions.begin(), extraExtensions.end());
     if (m_validationEnabled) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }

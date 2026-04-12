@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 2 — Platform Layer & Window
-## Current Task: 2.5
+## Current Task: 2.6
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -21,7 +21,7 @@
 - [x] 2.2 Create platform/Input — keyboard + mouse abstraction
 - [x] 2.3 Create Vulkan instance + debug messenger
 - [x] 2.4 Create Vulkan physical/logical device selection
-- [ ] 2.5 Create swapchain tied to GLFW surface
+- [x] 2.5 Create swapchain tied to GLFW surface
 - [ ] 2.6 Implement render loop: acquire → clear → present
 - [ ] 2.7 Implement frame timing and FPS tracking
 

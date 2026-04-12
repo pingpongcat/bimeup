@@ -1,14 +1,21 @@
 #include <renderer/Device.h>
 #include <tools/Log.h>
 
+#include <array>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
 namespace bimeup::renderer {
 
 Device::Device(VkInstance instance) {
-    PickPhysicalDevice(instance);
-    CreateLogicalDevice();
+    PickPhysicalDevice(instance, VK_NULL_HANDLE);
+    CreateLogicalDevice(false);
+}
+
+Device::Device(VkInstance instance, VkSurfaceKHR surface) {
+    PickPhysicalDevice(instance, surface);
+    CreateLogicalDevice(true);
 }
 
 Device::~Device() {
@@ -33,7 +40,15 @@ uint32_t Device::GetGraphicsQueueFamily() const {
     return m_graphicsQueueFamily;
 }
 
-void Device::PickPhysicalDevice(VkInstance instance) {
+VkQueue Device::GetPresentQueue() const {
+    return m_presentQueue;
+}
+
+uint32_t Device::GetPresentQueueFamily() const {
+    return m_presentQueueFamily;
+}
+
+void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
 
@@ -51,11 +66,22 @@ void Device::PickPhysicalDevice(VkInstance instance) {
             continue;
         }
 
+        if (surface != VK_NULL_HANDLE) {
+            uint32_t presentFamily = 0;
+            if (!FindPresentQueueFamily(device, surface, presentFamily)) {
+                continue;
+            }
+        }
+
         int score = RateDevice(device);
         if (score > bestScore) {
             bestScore = score;
             m_physicalDevice = device;
             m_graphicsQueueFamily = graphicsFamily;
+            if (surface != VK_NULL_HANDLE) {
+                FindPresentQueueFamily(device, surface, m_presentQueueFamily);
+                m_hasPresentQueue = true;
+            }
         }
     }
 
@@ -70,24 +96,41 @@ void Device::PickPhysicalDevice(VkInstance instance) {
     }
 }
 
-void Device::CreateLogicalDevice() {
+void Device::CreateLogicalDevice(bool enableSwapchain) {
     float queuePriority = 1.0F;
 
-    VkDeviceQueueCreateInfo queueCreateInfo{};
-    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queueCreateInfo.queueFamilyIndex = m_graphicsQueueFamily;
-    queueCreateInfo.queueCount = 1;
-    queueCreateInfo.pQueuePriorities = &queuePriority;
+    std::set<uint32_t> uniqueFamilies = {m_graphicsQueueFamily};
+    if (m_hasPresentQueue) {
+        uniqueFamilies.insert(m_presentQueueFamily);
+    }
+
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+    for (uint32_t family : uniqueFamilies) {
+        VkDeviceQueueCreateInfo queueCreateInfo{};
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex = family;
+        queueCreateInfo.queueCount = 1;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+        queueCreateInfos.push_back(queueCreateInfo);
+    }
 
     VkPhysicalDeviceFeatures deviceFeatures{};
 
+    std::array<const char*, 1> swapchainExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    createInfo.queueCreateInfoCount = 1;
-    createInfo.pQueueCreateInfos = &queueCreateInfo;
+    createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+    createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = 0;
     createInfo.enabledLayerCount = 0;
+
+    if (enableSwapchain) {
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(swapchainExt.size());
+        createInfo.ppEnabledExtensionNames = swapchainExt.data();
+    } else {
+        createInfo.enabledExtensionCount = 0;
+    }
 
     VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
     if (result != VK_SUCCESS) {
@@ -95,6 +138,9 @@ void Device::CreateLogicalDevice() {
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
+    if (m_hasPresentQueue) {
+        vkGetDeviceQueue(m_device, m_presentQueueFamily, 0, &m_presentQueue);
+    }
 }
 
 int Device::RateDevice(VkPhysicalDevice device) {
@@ -120,6 +166,22 @@ bool Device::FindGraphicsQueueFamily(VkPhysicalDevice device, uint32_t& index) {
 
     for (uint32_t i = 0; i < queueFamilyCount; ++i) {
         if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Device::FindPresentQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface,
+                                    uint32_t& index) {
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+    for (uint32_t i = 0; i < queueFamilyCount; ++i) {
+        VkBool32 presentSupport = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+        if (presentSupport == VK_TRUE) {
             index = i;
             return true;
         }

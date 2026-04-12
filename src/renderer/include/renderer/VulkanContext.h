@@ -2,11 +2,14 @@
 
 #include <vulkan/vulkan.h>
 
+#include <span>
+
 namespace bimeup::renderer {
 
 class VulkanContext {
 public:
     explicit VulkanContext(bool enableValidation);
+    VulkanContext(bool enableValidation, std::span<const char* const> requiredExtensions);
     ~VulkanContext();
 
     VulkanContext(const VulkanContext&) = delete;
@@ -19,7 +22,7 @@ public:
     [[nodiscard]] bool HasDebugMessenger() const;
 
 private:
-    void CreateInstance(bool enableValidation);
+    void CreateInstance(bool enableValidation, std::span<const char* const> extraExtensions);
     void SetupDebugMessenger();
     static bool CheckValidationLayerSupport();
 
