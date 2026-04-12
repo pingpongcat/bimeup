@@ -10,6 +10,10 @@ option(BIMEUP_BUILD_TESTS "Build unit tests" OFF)
 option(BIMEUP_ENABLE_VR "Enable OpenXR VR support" OFF)
 option(BIMEUP_ENABLE_RAYTRACING "Enable Vulkan ray tracing" OFF)
 
+# CMake modules
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+include(Sanitizers)
+
 # Output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

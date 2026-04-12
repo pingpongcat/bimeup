@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 1 — Project Bootstrap & Build System
-## Current Task: 1.8
+## Current Stage: 2 — Platform Layer & Window
+## Current Task: 2.1
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -14,7 +14,7 @@
 - [x] 1.5 Create app/main.cpp — initializes logging, prints version
 - [x] 1.6 Create build scripts (debug/release for Linux/Windows)
 - [x] 1.7 Set up GitHub Actions CI
-- [ ] 1.8 Enable clang-tidy and sanitizers
+- [x] 1.8 Enable clang-tidy and sanitizers
 
 ## Stage 2 — Platform Layer & Window
 - [ ] 2.1 Add GLFW submodule, create platform/Window class
