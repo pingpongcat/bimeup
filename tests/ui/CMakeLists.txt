@@ -1,5 +1,6 @@
 add_executable(ui_tests
     ImGuiContextTest.cpp
+    UIManagerTest.cpp
 )
 target_link_libraries(ui_tests PRIVATE bimeup_ui GTest::gtest_main)
 bimeup_enable_sanitizers(ui_tests)

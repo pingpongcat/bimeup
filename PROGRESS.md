@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 6 — ImGui Integration & Basic UI
-## Current Task: 6.2
+## Current Task: 6.3
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -62,7 +62,7 @@
 
 ## Stage 6 — ImGui Integration & Basic UI
 - [x] 6.1 Integrate Dear ImGui with Vulkan + GLFW backend
-- [ ] 6.2 Create ui/UIManager
+- [x] 6.2 Create ui/UIManager
 - [ ] 6.3 Create ui/Panel interface
 - [ ] 6.4 Implement ui/HierarchyPanel
 - [ ] 6.5 Implement ui/PropertyPanel

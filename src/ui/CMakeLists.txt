@@ -2,6 +2,7 @@ find_package(Vulkan REQUIRED)
 
 add_library(bimeup_ui STATIC
     src/ImGuiContext.cpp
+    src/UIManager.cpp
 )
 
 target_include_directories(bimeup_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
