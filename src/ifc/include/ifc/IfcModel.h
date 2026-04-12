@@ -1,7 +1,10 @@
 #pragma once
 
+#include "ifc/IfcElement.h"
+
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,6 +30,11 @@ public:
     std::string GetElementType(uint32_t expressId) const;
     std::string GetGlobalId(uint32_t expressId) const;
     std::string GetElementName(uint32_t expressId) const;
+
+    std::optional<IfcElement> GetElement(uint32_t expressId) const;
+    std::vector<IfcElement> GetElements() const;
+    std::vector<IfcElement> GetElementsByType(const std::string& ifcType) const;
+    std::optional<IfcElement> GetElementByGlobalId(const std::string& guid) const;
 
 private:
     struct Impl;

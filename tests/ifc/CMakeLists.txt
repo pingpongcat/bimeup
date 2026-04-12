@@ -30,3 +30,20 @@ target_compile_definitions(test_ifc_model PRIVATE
 )
 
 gtest_discover_tests(test_ifc_model)
+
+add_executable(test_ifc_element
+    test_ifc_element.cpp
+)
+
+target_link_libraries(test_ifc_element PRIVATE
+    GTest::gtest_main
+    bimeup_ifc
+)
+
+bimeup_enable_sanitizers(test_ifc_element)
+
+target_compile_definitions(test_ifc_element PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/ifc/data"
+)
+
+gtest_discover_tests(test_ifc_element)

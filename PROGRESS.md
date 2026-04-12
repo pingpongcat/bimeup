@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 4 — IFC Loading & Internal Scene
-## Current Task: 4.3
+## Current Task: 4.4
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -39,7 +39,7 @@
 ## Stage 4 — IFC Loading & Internal Scene
 - [x] 4.1 Integrate IFC parsing library as submodule
 - [x] 4.2 Create ifc/IfcModel
-- [ ] 4.3 Create ifc/IfcElement
+- [x] 4.3 Create ifc/IfcElement
 - [ ] 4.4 Create ifc/IfcGeometryExtractor
 - [ ] 4.5 Create ifc/IfcHierarchy
 - [ ] 4.6 Create scene/SceneNode and scene/Scene

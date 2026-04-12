@@ -152,4 +152,59 @@ std::string IfcModel::GetElementName(uint32_t expressId) const {
     }
 }
 
+std::optional<IfcElement> IfcModel::GetElement(uint32_t expressId) const {
+    if (!impl_->loaded) {
+        return std::nullopt;
+    }
+
+    auto* loader = impl_->GetLoader();
+    if (!loader->IsValidExpressID(expressId)) {
+        return std::nullopt;
+    }
+
+    IfcElement element;
+    element.expressId = expressId;
+    element.type = GetElementType(expressId);
+    element.globalId = GetGlobalId(expressId);
+    element.name = GetElementName(expressId);
+
+    if (element.type.empty()) {
+        return std::nullopt;
+    }
+
+    return element;
+}
+
+std::vector<IfcElement> IfcModel::GetElements() const {
+    std::vector<IfcElement> elements;
+    elements.reserve(impl_->elementIds.size());
+    for (uint32_t id : impl_->elementIds) {
+        if (auto elem = GetElement(id)) {
+            elements.push_back(std::move(*elem));
+        }
+    }
+    return elements;
+}
+
+std::vector<IfcElement> IfcModel::GetElementsByType(const std::string& ifcType) const {
+    auto ids = GetExpressIdsByType(ifcType);
+    std::vector<IfcElement> elements;
+    elements.reserve(ids.size());
+    for (uint32_t id : ids) {
+        if (auto elem = GetElement(id)) {
+            elements.push_back(std::move(*elem));
+        }
+    }
+    return elements;
+}
+
+std::optional<IfcElement> IfcModel::GetElementByGlobalId(const std::string& guid) const {
+    for (uint32_t id : impl_->elementIds) {
+        if (GetGlobalId(id) == guid) {
+            return GetElement(id);
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace bimeup::ifc
