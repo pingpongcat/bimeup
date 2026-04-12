@@ -1,5 +1,7 @@
 #include <ui/HierarchyPanel.h>
 
+#include <core/EventBus.h>
+#include <core/Events.h>
 #include <imgui.h>
 
 #include <string>
@@ -39,6 +41,16 @@ std::string FormatLabel(const ifc::HierarchyNode& node) {
 }  // namespace
 
 HierarchyPanel::HierarchyPanel(const ifc::HierarchyNode* root) : m_root(root) {}
+
+void HierarchyPanel::SetEventBus(core::EventBus* bus) {
+    m_bus = bus;
+}
+
+void HierarchyPanel::Select(std::uint32_t expressId, bool additive) {
+    if (m_bus != nullptr) {
+        m_bus->Publish(core::ElementSelected{expressId, additive});
+    }
+}
 
 const char* HierarchyPanel::GetName() const {
     return "Hierarchy";
@@ -85,9 +97,16 @@ void HierarchyPanel::DrawNode(const ifc::HierarchyNode& node) {
     if (node.children.empty()) {
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
         ImGui::TreeNodeEx(label.c_str(), flags);
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+            Select(node.expressId, ImGui::GetIO().KeyCtrl);
+        }
         return;
     }
-    if (ImGui::TreeNodeEx(label.c_str(), flags)) {
+    const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+        Select(node.expressId, ImGui::GetIO().KeyCtrl);
+    }
+    if (open) {
         for (const auto& child : node.children) {
             DrawNode(child);
         }

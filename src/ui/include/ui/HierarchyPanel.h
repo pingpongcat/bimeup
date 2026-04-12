@@ -4,6 +4,11 @@
 #include <ui/Panel.h>
 
 #include <cstddef>
+#include <cstdint>
+
+namespace bimeup::core {
+class EventBus;
+}  // namespace bimeup::core
 
 namespace bimeup::ui {
 
@@ -21,8 +26,12 @@ public:
     [[nodiscard]] std::size_t GetDepth() const;
     [[nodiscard]] std::size_t GetNodeCount() const;
 
+    void SetEventBus(core::EventBus* bus);
+    void Select(std::uint32_t expressId, bool additive = false);
+
 private:
     const ifc::HierarchyNode* m_root = nullptr;
+    core::EventBus* m_bus = nullptr;
 
     void DrawNode(const ifc::HierarchyNode& node);
 };
