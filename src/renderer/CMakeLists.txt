@@ -10,6 +10,7 @@ add_library(bimeup_renderer STATIC
     src/Pipeline.cpp
     src/DescriptorSet.cpp
     src/Camera.cpp
+    src/MeshBuffer.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

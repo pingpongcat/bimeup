@@ -4,6 +4,7 @@
 #include <platform/Window.h>
 #include <renderer/Buffer.h>
 #include <renderer/Camera.h>
+#include <renderer/MeshBuffer.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
 #include <renderer/Pipeline.h>
@@ -25,11 +26,7 @@
 
 namespace {
 
-struct Vertex {
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec4 color;
-};
+using bimeup::renderer::Vertex;
 
 struct CameraUBO {
     glm::mat4 view;
@@ -135,15 +132,12 @@ int main() {
                                        sizeof(CameraUBO), &ubo);
     descriptorSet.UpdateBuffer(0, uboBuffer);
 
-    // Cube geometry
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    MakeCube(vertices, indices);
+    // Cube geometry via MeshBuffer
+    bimeup::renderer::MeshData cubeMeshData;
+    MakeCube(cubeMeshData.vertices, cubeMeshData.indices);
 
-    bimeup::renderer::Buffer vertexBuffer(device, bimeup::renderer::BufferType::Vertex,
-                                          vertices.size() * sizeof(Vertex), vertices.data());
-    bimeup::renderer::Buffer indexBuffer(device, bimeup::renderer::BufferType::Index,
-                                         indices.size() * sizeof(uint32_t), indices.data());
+    bimeup::renderer::MeshBuffer meshBuffer(device);
+    bimeup::renderer::MeshHandle cubeHandle = meshBuffer.Upload(cubeMeshData);
 
     // Pipeline
     VkVertexInputBindingDescription binding{};
@@ -262,11 +256,8 @@ int main() {
         vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(glm::mat4), &model);
 
-        VkBuffer vb = vertexBuffer.GetBuffer();
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
-        vkCmdBindIndexBuffer(cmd, indexBuffer.GetBuffer(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+        meshBuffer.Bind(cmd);
+        meshBuffer.Draw(cmd, cubeHandle);
 
         (void)renderLoop.EndFrame();
     }
