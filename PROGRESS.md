@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 1 — Project Bootstrap & Build System
-## Current Task: 1.6
+## Current Task: 1.7
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -12,7 +12,7 @@
 - [x] 1.3 Create tools/ module with Log wrapper around spdlog
 - [x] 1.4 Create tools/Config — key-value config loader
 - [x] 1.5 Create app/main.cpp — initializes logging, prints version
-- [ ] 1.6 Create build scripts (debug/release for Linux/Windows)
+- [x] 1.6 Create build scripts (debug/release for Linux/Windows)
 - [ ] 1.7 Set up GitHub Actions CI
 - [ ] 1.8 Enable clang-tidy and sanitizers
 
