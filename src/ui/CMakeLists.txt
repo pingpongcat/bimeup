@@ -6,6 +6,7 @@ add_library(bimeup_ui STATIC
     src/PropertyPanel.cpp
     src/Toolbar.cpp
     src/UIManager.cpp
+    src/ViewportOverlay.cpp
 )
 
 target_include_directories(bimeup_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

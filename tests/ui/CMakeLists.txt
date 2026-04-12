@@ -5,6 +5,7 @@ add_executable(ui_tests
     PropertyPanelTest.cpp
     ToolbarTest.cpp
     UIManagerTest.cpp
+    ViewportOverlayTest.cpp
 )
 target_link_libraries(ui_tests PRIVATE bimeup_ui bimeup_ifc bimeup_renderer GTest::gtest_main)
 bimeup_enable_sanitizers(ui_tests)
