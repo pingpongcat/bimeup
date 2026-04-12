@@ -47,7 +47,9 @@ void UIManager::BeginFrame() {
     }
     m_context.BeginFrame();
     for (auto& panel : m_panels) {
-        panel->OnDraw();
+        if (panel->IsVisible()) {
+            panel->OnDraw();
+        }
     }
 }
 
