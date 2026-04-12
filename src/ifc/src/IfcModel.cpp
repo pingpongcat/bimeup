@@ -207,4 +207,11 @@ std::optional<IfcElement> IfcModel::GetElementByGlobalId(const std::string& guid
     return std::nullopt;
 }
 
+webifc::geometry::IfcGeometryProcessor* IfcModel::GetGeometryProcessor() {
+    if (!impl_->loaded) {
+        return nullptr;
+    }
+    return impl_->manager.GetGeometryProcessor(impl_->modelId);
+}
+
 } // namespace bimeup::ifc

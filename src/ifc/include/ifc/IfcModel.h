@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace webifc::geometry { class IfcGeometryProcessor; }
+
 namespace bimeup::ifc {
 
 class IfcModel {
@@ -35,6 +37,9 @@ public:
     std::vector<IfcElement> GetElements() const;
     std::vector<IfcElement> GetElementsByType(const std::string& ifcType) const;
     std::optional<IfcElement> GetElementByGlobalId(const std::string& guid) const;
+
+    // Internal: access geometry processor for mesh extraction
+    webifc::geometry::IfcGeometryProcessor* GetGeometryProcessor();
 
 private:
     struct Impl;
