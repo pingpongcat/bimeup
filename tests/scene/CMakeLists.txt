@@ -2,6 +2,7 @@ add_executable(test_scene
     test_scene.cpp
     test_scene_mesh.cpp
     test_aabb.cpp
+    test_batching.cpp
 )
 
 target_link_libraries(test_scene PRIVATE
