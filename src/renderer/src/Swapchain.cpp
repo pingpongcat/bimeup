@@ -51,6 +51,10 @@ uint32_t Swapchain::GetImageCount() const {
     return static_cast<uint32_t>(m_images.size());
 }
 
+const std::vector<VkImage>& Swapchain::GetImages() const {
+    return m_images;
+}
+
 const std::vector<VkImageView>& Swapchain::GetImageViews() const {
     return m_imageViews;
 }
@@ -99,7 +103,8 @@ void Swapchain::Create(VkSurfaceKHR surface, VkExtent2D windowExtent,
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageUsage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     uint32_t graphicsFamily = m_device.GetGraphicsQueueFamily();
     uint32_t presentFamily = m_device.GetPresentQueueFamily();

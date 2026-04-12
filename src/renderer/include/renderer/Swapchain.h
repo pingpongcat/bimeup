@@ -24,6 +24,7 @@ public:
     [[nodiscard]] VkFormat GetFormat() const;
     [[nodiscard]] VkExtent2D GetExtent() const;
     [[nodiscard]] uint32_t GetImageCount() const;
+    [[nodiscard]] const std::vector<VkImage>& GetImages() const;
     [[nodiscard]] const std::vector<VkImageView>& GetImageViews() const;
 
 private:
