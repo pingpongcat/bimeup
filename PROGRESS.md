@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 3 — Basic Rendering Pipeline
-## Current Task: 3.3
+## Current Task: 3.4
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -28,7 +28,7 @@
 ## Stage 3 — Basic Rendering Pipeline
 - [x] 3.1 Implement renderer/Buffer — vertex + index with VMA
 - [x] 3.2 Implement renderer/Shader — load SPIR-V
-- [ ] 3.3 Implement renderer/Pipeline — graphics pipeline
+- [x] 3.3 Implement renderer/Pipeline — graphics pipeline
 - [ ] 3.4 Implement renderer/DescriptorSet — UBO binding
 - [ ] 3.5 Implement renderer/Camera — perspective + orbit
 - [ ] 3.6 Write basic vertex + fragment shaders
