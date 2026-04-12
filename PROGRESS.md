@@ -71,6 +71,8 @@
 - [x] 6.8 Wire hierarchy → selection → property panel
 - [x] 6.9 Implement UI theme
 - [x] 6.10 Wire UI panels (UIManager, Toolbar, Hierarchy, Property, ViewportOverlay) into main.cpp
+- [x] 6.11 Fix toolbar fit-to-view zoom + wire hover picking into main.cpp
+- [x] 6.12 Enable fillModeNonSolid, fix surface/swapchain destroy order, per-image swapchain semaphores
 
 ## Stage 7 — BIM Viewer Features
 - [ ] 7.1 Distance measurement tool

@@ -166,3 +166,19 @@ TEST_F(CameraTest, ViewMatrixIsConsistentWithLookAt) {
     auto expected = glm::lookAt(pos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     EXPECT_TRUE(Mat4Near(view, expected));
 }
+
+TEST_F(CameraTest, SetDistanceControlsOrbitRadius) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(12.5f);
+
+    float dist = glm::length(m_camera.GetPosition());
+    EXPECT_NEAR(dist, 12.5f, kEpsilon);
+}
+
+TEST_F(CameraTest, SetDistanceClampsToMin) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(-50.0f);
+
+    float dist = glm::length(m_camera.GetPosition());
+    EXPECT_GT(dist, 0.0f);
+}

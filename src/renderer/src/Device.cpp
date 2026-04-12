@@ -138,6 +138,7 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     }
 
     VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.fillModeNonSolid = VK_TRUE;  // wireframe render mode
 
     std::array<const char*, 1> swapchainExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 

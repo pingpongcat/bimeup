@@ -84,7 +84,7 @@ bool RenderLoop::EndFrame() {
 
     VkSemaphore waitSemaphores[] = {m_imageAvailableSemaphores[m_currentFrame]};
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    VkSemaphore signalSemaphores[] = {m_renderFinishedSemaphores[m_currentFrame]};
+    VkSemaphore signalSemaphores[] = {m_renderFinishedSemaphores[m_currentImageIndex]};
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -186,11 +186,18 @@ void RenderLoop::CreateSyncObjects() {
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (vkCreateSemaphore(m_device.GetDevice(), &semaphoreInfo, nullptr,
                               &m_imageAvailableSemaphores[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(m_device.GetDevice(), &semaphoreInfo, nullptr,
-                              &m_renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(m_device.GetDevice(), &fenceInfo, nullptr, &m_inFlightFences[i]) !=
                 VK_SUCCESS) {
             throw std::runtime_error("Failed to create synchronization objects");
+        }
+    }
+
+    uint32_t imageCount = m_swapchain.GetImageCount();
+    m_renderFinishedSemaphores.resize(imageCount, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        if (vkCreateSemaphore(m_device.GetDevice(), &semaphoreInfo, nullptr,
+                              &m_renderFinishedSemaphores[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create render-finished semaphore");
         }
     }
 }
@@ -355,10 +362,14 @@ void RenderLoop::Cleanup() {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
     }
 
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (m_renderFinishedSemaphores[i] != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device, m_renderFinishedSemaphores[i], nullptr);
+    for (VkSemaphore sem : m_renderFinishedSemaphores) {
+        if (sem != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, sem, nullptr);
         }
+    }
+    m_renderFinishedSemaphores.clear();
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (m_imageAvailableSemaphores[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(device, m_imageAvailableSemaphores[i], nullptr);
         }

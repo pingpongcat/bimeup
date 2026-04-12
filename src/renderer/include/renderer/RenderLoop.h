@@ -54,7 +54,10 @@ private:
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> m_commandBuffers{};
 
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAvailableSemaphores{};
-    std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_renderFinishedSemaphores{};
+    // One render-finished semaphore per swapchain image (presentation engine may still hold the
+    // previous one until that image is re-acquired — reusing a per-frame semaphore triggers
+    // VUID-vkQueueSubmit-pSignalSemaphores-00067).
+    std::vector<VkSemaphore> m_renderFinishedSemaphores;
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> m_inFlightFences{};
 
     VkRenderPass m_renderPass = VK_NULL_HANDLE;

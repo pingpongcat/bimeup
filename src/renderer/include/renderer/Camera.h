@@ -10,6 +10,7 @@ public:
 
     void SetPerspective(float fovDeg, float aspect, float near, float far);
     void SetOrbitTarget(glm::vec3 target);
+    void SetDistance(float distance);
     void Orbit(float deltaYaw, float deltaPitch);
     void Zoom(float delta);
     void Pan(glm::vec2 delta);

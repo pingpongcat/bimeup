@@ -22,6 +22,11 @@ void Camera::SetOrbitTarget(glm::vec3 target) {
     UpdatePosition();
 }
 
+void Camera::SetDistance(float distance) {
+    m_distance = std::clamp(distance, kMinDistance, kMaxDistance);
+    UpdatePosition();
+}
+
 void Camera::Orbit(float deltaYaw, float deltaPitch) {
     m_yaw += deltaYaw;
     m_pitch += deltaPitch;

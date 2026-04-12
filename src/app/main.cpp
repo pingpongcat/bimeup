@@ -2,6 +2,7 @@
 
 #include <core/EventBus.h>
 #include <core/Events.h>
+#include <core/Picking.h>
 #include <core/SceneUploader.h>
 #include <core/Selection.h>
 #include <ifc/IfcHierarchy.h>
@@ -112,6 +113,17 @@ bimeup::scene::AABB ComputeSceneBounds(const bimeup::scene::Scene& scene) {
     return bounds;
 }
 
+/// Fit the camera so the given AABB is fully visible, using a simple radius-based heuristic.
+void FitCameraToBounds(bimeup::renderer::Camera& camera, const bimeup::scene::AABB& bounds) {
+    if (!bounds.IsValid()) {
+        return;
+    }
+    glm::vec3 size = bounds.GetSize();
+    float maxDim = std::max({size.x, size.y, size.z});
+    camera.SetOrbitTarget(bounds.GetCenter());
+    camera.SetDistance(std::max(maxDim * 1.5F, 0.5F));
+}
+
 /// Collect unique mesh handles from visible scene nodes (avoids drawing shared batched meshes multiple times).
 std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>>
 CollectDrawCalls(const bimeup::scene::Scene& scene) {
@@ -159,6 +171,19 @@ int main(int argc, char* argv[]) {
         LOG_ERROR("Failed to create window surface");
         return 1;
     }
+
+    // RAII guard ensures the surface is destroyed AFTER swapchain/device (declared below) so
+    // VUID-vkDestroySurfaceKHR-surface-01266 is not violated at shutdown.
+    struct SurfaceGuard {
+        VkInstance instance;
+        VkSurfaceKHR surface;
+        ~SurfaceGuard() {
+            if (surface != VK_NULL_HANDLE) {
+                vkDestroySurfaceKHR(instance, surface, nullptr);
+            }
+        }
+    };
+    SurfaceGuard surfaceGuard{vulkanContext.GetInstance(), surface};
 
     bimeup::renderer::Device device(vulkanContext.GetInstance(), surface);
     auto fbSize = window.GetFramebufferSize();
@@ -264,14 +289,10 @@ int main(int argc, char* argv[]) {
 
     if (hasScene) {
         auto bounds = ComputeSceneBounds(sceneResult->scene);
+        FitCameraToBounds(camera, bounds);
         if (bounds.IsValid()) {
             glm::vec3 center = bounds.GetCenter();
             glm::vec3 size = bounds.GetSize();
-            float maxDim = std::max({size.x, size.y, size.z});
-            camera.SetOrbitTarget(center);
-            // Zoom out from default distance (5.0) to fit the model
-            float targetDistance = maxDim * 1.5F;
-            camera.Zoom(targetDistance - 5.0F);
             LOG_INFO("Scene bounds: center=({:.1f},{:.1f},{:.1f}) size=({:.1f},{:.1f},{:.1f})",
                      center.x, center.y, center.z, size.x, size.y, size.z);
         }
@@ -286,10 +307,32 @@ int main(int argc, char* argv[]) {
         LOG_INFO("Draw calls: {}", drawCalls.size());
     }
 
+    // Event bus + selection (must exist before input callbacks so picking can publish events).
+    bimeup::core::EventBus eventBus;
+    bimeup::core::Selection selection(eventBus);
+
+    // IFC hierarchy (only when a model was loaded).
+    std::unique_ptr<bimeup::ifc::IfcHierarchy> hierarchy;
+    if (hasScene) {
+        hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
+    }
+
     // Input: orbit camera with mouse
     bool rightMouseDown = false;
     bool middleMouseDown = false;
     glm::dvec2 lastMousePos{0.0, 0.0};
+
+    // Shared helpers for picking. These capture references to the renderer/scene state used each frame.
+    auto buildViewProj = [&]() {
+        glm::mat4 proj = camera.GetProjectionMatrix();
+        proj[1][1] *= -1.0F;  // Undo Vulkan Y-flip so picking math matches the rasterized image.
+        return std::make_pair(camera.GetViewMatrix(), proj);
+    };
+    auto windowSize = [&]() {
+        auto fb = window.GetFramebufferSize();
+        return glm::vec2(static_cast<float>(fb.x), static_cast<float>(fb.y));
+    };
+    auto imguiWantsMouse = [] { return ImGui::GetIO().WantCaptureMouse; };
 
     input.OnMouseButton([&](bimeup::platform::MouseButton btn, bool pressed) {
         if (btn == bimeup::platform::MouseButton::Right) {
@@ -299,6 +342,14 @@ int main(int argc, char* argv[]) {
         if (btn == bimeup::platform::MouseButton::Middle) {
             middleMouseDown = pressed;
             lastMousePos = input.GetMousePosition();
+        }
+        if (btn == bimeup::platform::MouseButton::Left && pressed && hasScene && !imguiWantsMouse()) {
+            auto mouse = input.GetMousePosition();
+            auto [view, proj] = buildViewProj();
+            bimeup::core::PickElement(
+                glm::vec2(static_cast<float>(mouse.x), static_cast<float>(mouse.y)),
+                windowSize(), view, proj, sceneResult->scene, sceneResult->meshes,
+                eventBus, ImGui::GetIO().KeyCtrl);
         }
     });
 
@@ -314,6 +365,13 @@ int main(int argc, char* argv[]) {
         if (middleMouseDown) {
             camera.Pan(glm::vec2(static_cast<float>(-delta.x) * 0.005F,
                                  static_cast<float>(delta.y) * 0.005F));
+        }
+
+        if (hasScene && !rightMouseDown && !middleMouseDown && !imguiWantsMouse()) {
+            auto [view, proj] = buildViewProj();
+            bimeup::core::HoverElement(
+                glm::vec2(static_cast<float>(x), static_cast<float>(y)),
+                windowSize(), view, proj, sceneResult->scene, sceneResult->meshes, eventBus);
         }
     });
 
@@ -335,16 +393,6 @@ int main(int argc, char* argv[]) {
     });
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
-
-    // Event bus & selection
-    bimeup::core::EventBus eventBus;
-    bimeup::core::Selection selection(eventBus);
-
-    // IFC hierarchy (only when a model was loaded)
-    std::unique_ptr<bimeup::ifc::IfcHierarchy> hierarchy;
-    if (hasScene) {
-        hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
-    }
 
     // UI
     bimeup::ui::UIManager uiManager;
@@ -417,16 +465,14 @@ int main(int argc, char* argv[]) {
             smoothedFps = smoothedFps == 0.0F ? instantFps : (smoothedFps * 0.9F + instantFps * 0.1F);
         }
 
-        // Fit-to-view request from toolbar: recenter on scene bounds (or origin for cube).
+        // Fit-to-view request from toolbar: recenter + reset zoom to fit scene bounds (or cube).
         if (fitToViewRequested) {
             fitToViewRequested = false;
             if (hasScene) {
-                auto bounds = ComputeSceneBounds(sceneResult->scene);
-                if (bounds.IsValid()) {
-                    camera.SetOrbitTarget(bounds.GetCenter());
-                }
+                FitCameraToBounds(camera, ComputeSceneBounds(sceneResult->scene));
             } else {
                 camera.SetOrbitTarget(glm::vec3(0.0F));
+                camera.SetDistance(5.0F);
             }
         }
 
@@ -500,9 +546,8 @@ int main(int argc, char* argv[]) {
     selectionBridge.reset();  // unsubscribe before uiManager destroys the panel
     uiManager.ShutdownVulkanBackend();
 
-    // Cleanup happens via destructors in reverse order
-    // Explicit surface cleanup needed since it's not wrapped
-    vkDestroySurfaceKHR(vulkanContext.GetInstance(), surface, nullptr);
+    // Cleanup happens via destructors in reverse declaration order:
+    // renderLoop → swapchain → device → surfaceGuard (destroys surface) → vulkanContext.
 
     bimeup::platform::Window::TerminateGlfw();
 
