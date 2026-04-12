@@ -1,1 +1,3 @@
-# Test targets — added per module
+# Test targets
+
+add_subdirectory(tools)
