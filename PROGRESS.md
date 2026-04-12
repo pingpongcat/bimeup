@@ -70,6 +70,7 @@
 - [x] 6.7 Implement ui/ViewportOverlay
 - [x] 6.8 Wire hierarchy → selection → property panel
 - [x] 6.9 Implement UI theme
+- [x] 6.10 Wire UI panels (UIManager, Toolbar, Hierarchy, Property, ViewportOverlay) into main.cpp
 
 ## Stage 7 — BIM Viewer Features
 - [ ] 7.1 Distance measurement tool

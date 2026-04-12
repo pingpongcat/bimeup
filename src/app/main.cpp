@@ -1,6 +1,10 @@
 #include <vulkan/vulkan.h>
 
+#include <core/EventBus.h>
+#include <core/Events.h>
 #include <core/SceneUploader.h>
+#include <core/Selection.h>
+#include <ifc/IfcHierarchy.h>
 #include <ifc/IfcModel.h>
 #include <platform/Input.h>
 #include <platform/Window.h>
@@ -20,7 +24,13 @@
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
 #include <tools/Log.h>
-#include <ui/ImGuiContext.h>
+#include <ui/HierarchyPanel.h>
+#include <ui/PropertyPanel.h>
+#include <ui/SelectionBridge.h>
+#include <ui/Theme.h>
+#include <ui/Toolbar.h>
+#include <ui/UIManager.h>
+#include <ui/ViewportOverlay.h>
 
 #include <imgui.h>
 
@@ -182,19 +192,19 @@ int main(int argc, char* argv[]) {
 
     // Load IFC file or fall back to cube
     std::optional<bimeup::scene::BuildResult> sceneResult;
+    bimeup::ifc::IfcModel ifcModel;
     bool hasScene = false;
 
     if (argc > 1) {
         std::string ifcPath = argv[1];
         LOG_INFO("Loading IFC file: {}", ifcPath);
 
-        bimeup::ifc::IfcModel model;
-        if (model.LoadFromFile(ifcPath)) {
-            LOG_INFO("IFC loaded: {} elements", model.GetElementCount());
+        if (ifcModel.LoadFromFile(ifcPath)) {
+            LOG_INFO("IFC loaded: {} elements", ifcModel.GetElementCount());
 
             bimeup::scene::SceneBuilder builder;
             builder.SetBatchingEnabled(true);
-            sceneResult = builder.Build(model);
+            sceneResult = builder.Build(ifcModel);
             bimeup::core::SceneUploader::Upload(*sceneResult, meshBuffer);
             hasScene = true;
 
@@ -326,9 +336,19 @@ int main(int argc, char* argv[]) {
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
 
-    // ImGui
-    bimeup::ui::ImGuiContext imgui;
-    imgui.InitVulkanBackend({
+    // Event bus & selection
+    bimeup::core::EventBus eventBus;
+    bimeup::core::Selection selection(eventBus);
+
+    // IFC hierarchy (only when a model was loaded)
+    std::unique_ptr<bimeup::ifc::IfcHierarchy> hierarchy;
+    if (hasScene) {
+        hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
+    }
+
+    // UI
+    bimeup::ui::UIManager uiManager;
+    uiManager.InitVulkanBackend({
         .window = window.GetHandle(),
         .instance = vulkanContext.GetInstance(),
         .physicalDevice = device.GetPhysicalDevice(),
@@ -341,16 +361,82 @@ int main(int argc, char* argv[]) {
         .apiVersion = VK_API_VERSION_1_2,
     });
 
-    bool showImGuiDemo = true;
+    bimeup::ui::Theme::Apply();
+
+    // Construct panels and keep raw pointers so we can update them each frame.
+    auto toolbarOwned = std::make_unique<bimeup::ui::Toolbar>();
+    auto hierarchyOwned = std::make_unique<bimeup::ui::HierarchyPanel>();
+    auto propertyOwned = std::make_unique<bimeup::ui::PropertyPanel>();
+    auto overlayOwned = std::make_unique<bimeup::ui::ViewportOverlay>();
+
+    auto* toolbar = toolbarOwned.get();
+    auto* hierarchyPanel = hierarchyOwned.get();
+    auto* propertyPanel = propertyOwned.get();
+    auto* overlay = overlayOwned.get();
+
+    hierarchyPanel->SetEventBus(&eventBus);
+    toolbar->SetRenderMode(renderMode);
+
+    // Bridge selection events → property panel (only meaningful with a model).
+    std::unique_ptr<bimeup::ui::SelectionBridge> selectionBridge;
+    if (hierarchy) {
+        hierarchyPanel->SetRoot(&hierarchy->GetRoot());
+        selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
+            eventBus, *propertyPanel,
+            [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
+    }
+
+    bool fitToViewRequested = false;
+
+    uiManager.AddPanel(std::move(toolbarOwned));
+    uiManager.AddPanel(std::move(hierarchyOwned));
+    uiManager.AddPanel(std::move(propertyOwned));
+    uiManager.AddPanel(std::move(overlayOwned));
+
+    toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
+        renderMode = mode;
+        LOG_INFO("Render mode: {}",
+                 renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
+    });
+    toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
+    toolbar->SetOnOpenFile([] { LOG_INFO("Toolbar: Open File (not implemented yet)"); });
+
+    // FPS tracking
+    double lastFrameTime = glfwGetTime();
+    float smoothedFps = 0.0F;
 
     // Main loop
     while (!window.ShouldClose()) {
         window.PollEvents();
 
-        imgui.BeginFrame();
-        if (showImGuiDemo) {
-            ImGui::ShowDemoWindow(&showImGuiDemo);
+        double now = glfwGetTime();
+        double dt = now - lastFrameTime;
+        lastFrameTime = now;
+        if (dt > 0.0) {
+            float instantFps = static_cast<float>(1.0 / dt);
+            smoothedFps = smoothedFps == 0.0F ? instantFps : (smoothedFps * 0.9F + instantFps * 0.1F);
         }
+
+        // Fit-to-view request from toolbar: recenter on scene bounds (or origin for cube).
+        if (fitToViewRequested) {
+            fitToViewRequested = false;
+            if (hasScene) {
+                auto bounds = ComputeSceneBounds(sceneResult->scene);
+                if (bounds.IsValid()) {
+                    camera.SetOrbitTarget(bounds.GetCenter());
+                }
+            } else {
+                camera.SetOrbitTarget(glm::vec3(0.0F));
+            }
+        }
+
+        // Sync overlay & toolbar state.
+        overlay->SetFps(smoothedFps);
+        overlay->SetCameraPosition(camera.GetPosition());
+        overlay->SetCameraForward(camera.GetForward());
+        toolbar->SetRenderMode(renderMode);
+
+        uiManager.BeginFrame();
 
         // Update camera UBO
         ubo.view = camera.GetViewMatrix();
@@ -405,13 +491,14 @@ int main(int argc, char* argv[]) {
             meshBuffer.Draw(cmd, cubeHandle);
         }
 
-        imgui.EndFrame(cmd);
+        uiManager.EndFrame(cmd);
 
         (void)renderLoop.EndFrame();
     }
 
     renderLoop.WaitIdle();
-    imgui.ShutdownVulkanBackend();
+    selectionBridge.reset();  // unsubscribe before uiManager destroys the panel
+    uiManager.ShutdownVulkanBackend();
 
     // Cleanup happens via destructors in reverse order
     // Explicit surface cleanup needed since it's not wrapped
