@@ -2,6 +2,7 @@ add_library(bimeup_scene STATIC
     src/Scene.cpp
     src/SceneMesh.cpp
     src/SceneBuilder.cpp
+    src/Raycast.cpp
 )
 
 target_include_directories(bimeup_scene PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

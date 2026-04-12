@@ -3,6 +3,7 @@ add_executable(test_scene
     test_scene_mesh.cpp
     test_aabb.cpp
     test_batching.cpp
+    test_raycast.cpp
 )
 
 target_link_libraries(test_scene PRIVATE
