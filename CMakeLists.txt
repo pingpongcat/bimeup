@@ -13,6 +13,7 @@ option(BIMEUP_ENABLE_RAYTRACING "Enable Vulkan ray tracing" OFF)
 # CMake modules
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 include(Sanitizers)
+include(CompileShaders)
 
 # Output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -30,6 +31,11 @@ add_subdirectory(src/renderer)
 # add_subdirectory(src/scene)
 # add_subdirectory(src/core)
 # add_subdirectory(src/ui)
+
+# Shaders
+set(BIMEUP_SHADER_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
+set(BIMEUP_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+bimeup_compile_shaders(bimeup_shaders "${BIMEUP_SHADER_DIR}" "${BIMEUP_SHADER_OUTPUT_DIR}")
 
 # Application
 add_subdirectory(src/app)
