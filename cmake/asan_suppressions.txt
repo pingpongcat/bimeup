@@ -2,3 +2,7 @@ leak:libdecor
 leak:libglib
 leak:libgdk
 leak:libgtk
+leak:libvulkan
+leak:libGLX
+leak:libEGL
+leak:asan_thread_start
