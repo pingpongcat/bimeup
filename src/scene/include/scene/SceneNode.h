@@ -7,6 +7,8 @@
 
 #include <glm/glm.hpp>
 
+#include "AABB.h"
+
 namespace bimeup::scene {
 
 using NodeId = uint32_t;
@@ -20,6 +22,7 @@ struct SceneNode {
     std::string ifcType;
     std::string globalId;
     glm::mat4 transform = glm::mat4(1.0f);
+    AABB bounds;
     std::optional<MeshHandle> mesh;
     NodeId parent = InvalidNodeId;
     std::vector<NodeId> children;
