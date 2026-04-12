@@ -3,6 +3,7 @@
 #include <renderer/Swapchain.h>
 #include <tools/Log.h>
 
+#include <array>
 #include <stdexcept>
 
 namespace bimeup::renderer {
@@ -12,6 +13,9 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain)
     CreateCommandPool();
     CreateCommandBuffers();
     CreateSyncObjects();
+    CreateRenderPass();
+    CreateDepthResources();
+    CreateFramebuffers();
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight)", MAX_FRAMES_IN_FLIGHT);
@@ -50,25 +54,20 @@ bool RenderLoop::BeginFrame() {
         throw std::runtime_error("Failed to begin recording command buffer");
     }
 
-    VkImage image = m_swapchain.GetImages()[m_currentImageIndex];
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = m_clearColor;
+    clearValues[1].depthStencil = {1.0F, 0};
 
-    // Transition: UNDEFINED -> TRANSFER_DST_OPTIMAL
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkRenderPassBeginInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpInfo.renderPass = m_renderPass;
+    rpInfo.framebuffer = m_framebuffers[m_currentImageIndex];
+    rpInfo.renderArea.offset = {0, 0};
+    rpInfo.renderArea.extent = m_swapchain.GetExtent();
+    rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpInfo.pClearValues = clearValues.data();
 
-    // Clear the image
-    VkImageSubresourceRange range{};
-    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    range.baseMipLevel = 0;
-    range.levelCount = 1;
-    range.baseArrayLayer = 0;
-    range.layerCount = 1;
-    vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &m_clearColor, 1,
-                         &range);
-
-    // Transition: TRANSFER_DST_OPTIMAL -> COLOR_ATTACHMENT_OPTIMAL
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     m_frameStarted = true;
     return true;
@@ -76,11 +75,8 @@ bool RenderLoop::BeginFrame() {
 
 bool RenderLoop::EndFrame() {
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
-    VkImage image = m_swapchain.GetImages()[m_currentImageIndex];
 
-    // Transition: COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
-    TransitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    vkCmdEndRenderPass(cmd);
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer");
@@ -150,6 +146,10 @@ uint32_t RenderLoop::GetCurrentImageIndex() const {
     return m_currentImageIndex;
 }
 
+VkRenderPass RenderLoop::GetRenderPass() const {
+    return m_renderPass;
+}
+
 void RenderLoop::CreateCommandPool() {
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -195,8 +195,165 @@ void RenderLoop::CreateSyncObjects() {
     }
 }
 
+void RenderLoop::CreateRenderPass() {
+    m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_swapchain.GetFormat();
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = m_depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    rpInfo.pAttachments = attachments.data();
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create render pass");
+    }
+}
+
+void RenderLoop::CreateDepthResources() {
+    VkExtent2D extent = m_swapchain.GetExtent();
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = m_depthFormat;
+    imageInfo.extent = {extent.width, extent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+    if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                       &m_depthImage, &m_depthAllocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth image");
+    }
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = m_depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr, &m_depthImageView) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth image view");
+    }
+}
+
+void RenderLoop::CreateFramebuffers() {
+    const auto& imageViews = m_swapchain.GetImageViews();
+    VkExtent2D extent = m_swapchain.GetExtent();
+
+    m_framebuffers.resize(imageViews.size());
+
+    for (size_t i = 0; i < imageViews.size(); ++i) {
+        std::array<VkImageView, 2> attachments = {imageViews[i], m_depthImageView};
+
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_renderPass;
+        fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        fbInfo.pAttachments = attachments.data();
+        fbInfo.width = extent.width;
+        fbInfo.height = extent.height;
+        fbInfo.layers = 1;
+
+        if (vkCreateFramebuffer(m_device.GetDevice(), &fbInfo, nullptr, &m_framebuffers[i]) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("Failed to create framebuffer");
+        }
+    }
+}
+
+void RenderLoop::CleanupFrameResources() {
+    VkDevice device = m_device.GetDevice();
+
+    for (auto fb : m_framebuffers) {
+        if (fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, fb, nullptr);
+        }
+    }
+    m_framebuffers.clear();
+
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
+    }
+
+    if (m_depthImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_depthImage, m_depthAllocation);
+        m_depthImage = VK_NULL_HANDLE;
+        m_depthAllocation = VK_NULL_HANDLE;
+    }
+}
+
 void RenderLoop::Cleanup() {
     VkDevice device = m_device.GetDevice();
+
+    CleanupFrameResources();
+
+    if (m_renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_renderPass, nullptr);
+    }
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (m_renderFinishedSemaphores[i] != VK_NULL_HANDLE) {
@@ -215,47 +372,22 @@ void RenderLoop::Cleanup() {
     }
 }
 
-void RenderLoop::TransitionImageLayout(VkCommandBuffer cmd, VkImage image,
-                                       VkImageLayout oldLayout, VkImageLayout newLayout) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+VkFormat RenderLoop::FindDepthFormat(VkPhysicalDevice physicalDevice) {
+    const std::array<VkFormat, 3> candidates = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+    };
 
-    VkPipelineStageFlags srcStage = 0;
-    VkPipelineStageFlags dstStage = 0;
-
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
-        newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-               newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
-               newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
-        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.dstAccessMask = 0;
-        srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    } else {
-        throw std::runtime_error("Unsupported layout transition");
+    for (VkFormat format : candidates) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+            return format;
+        }
     }
 
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    throw std::runtime_error("Failed to find supported depth format");
 }
 
 }  // namespace bimeup::renderer

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <array>
+#include <vector>
 
 namespace bimeup::renderer {
 
@@ -31,15 +33,19 @@ public:
     [[nodiscard]] VkCommandBuffer GetCurrentCommandBuffer() const;
     [[nodiscard]] uint32_t GetCurrentFrameIndex() const;
     [[nodiscard]] uint32_t GetCurrentImageIndex() const;
+    [[nodiscard]] VkRenderPass GetRenderPass() const;
 
 private:
     void CreateCommandPool();
     void CreateCommandBuffers();
     void CreateSyncObjects();
+    void CreateRenderPass();
+    void CreateDepthResources();
+    void CreateFramebuffers();
+    void CleanupFrameResources();
     void Cleanup();
 
-    static void TransitionImageLayout(VkCommandBuffer cmd, VkImage image,
-                                      VkImageLayout oldLayout, VkImageLayout newLayout);
+    static VkFormat FindDepthFormat(VkPhysicalDevice physicalDevice);
 
     const Device& m_device;
     Swapchain& m_swapchain;
@@ -50,6 +56,13 @@ private:
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAvailableSemaphores{};
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_renderFinishedSemaphores{};
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> m_inFlightFences{};
+
+    VkRenderPass m_renderPass = VK_NULL_HANDLE;
+    VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
+    VkImage m_depthImage = VK_NULL_HANDLE;
+    VkImageView m_depthImageView = VK_NULL_HANDLE;
+    VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> m_framebuffers;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;

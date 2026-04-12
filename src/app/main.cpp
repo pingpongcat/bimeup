@@ -1,12 +1,284 @@
+#include <vulkan/vulkan.h>
+
+#include <platform/Input.h>
+#include <platform/Window.h>
+#include <renderer/Buffer.h>
+#include <renderer/Camera.h>
+#include <renderer/DescriptorSet.h>
+#include <renderer/Device.h>
+#include <renderer/Pipeline.h>
+#include <renderer/RenderLoop.h>
+#include <renderer/Shader.h>
+#include <renderer/Swapchain.h>
+#include <renderer/VulkanContext.h>
 #include <tools/Log.h>
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <cstdio>
+#include <span>
+#include <string>
+#include <vector>
+
+#include <GLFW/glfw3.h>
+
+namespace {
+
+struct Vertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec4 color;
+};
+
+struct CameraUBO {
+    glm::mat4 view;
+    glm::mat4 projection;
+};
+
+void MakeCube(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
+    // clang-format off
+    vertices = {
+        // Front (red)
+        {{-0.5F, -0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
+        {{ 0.5F, -0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
+        {{ 0.5F,  0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
+        {{-0.5F,  0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
+        // Back (green)
+        {{ 0.5F, -0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
+        {{-0.5F, -0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
+        {{-0.5F,  0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
+        {{ 0.5F,  0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
+        // Top (blue)
+        {{-0.5F,  0.5F,  0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
+        {{ 0.5F,  0.5F,  0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
+        {{ 0.5F,  0.5F, -0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
+        {{-0.5F,  0.5F, -0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
+        // Bottom (yellow)
+        {{-0.5F, -0.5F, -0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
+        {{ 0.5F, -0.5F, -0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
+        {{ 0.5F, -0.5F,  0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
+        {{-0.5F, -0.5F,  0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
+        // Right (cyan)
+        {{ 0.5F, -0.5F,  0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
+        {{ 0.5F, -0.5F, -0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
+        {{ 0.5F,  0.5F, -0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
+        {{ 0.5F,  0.5F,  0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
+        // Left (magenta)
+        {{-0.5F, -0.5F, -0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
+        {{-0.5F, -0.5F,  0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
+        {{-0.5F,  0.5F,  0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
+        {{-0.5F,  0.5F, -0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
+    };
+    // clang-format on
+
+    indices = {
+        0,  1,  2,  2,  3,  0,   // front
+        4,  5,  6,  6,  7,  4,   // back
+        8,  9,  10, 10, 11, 8,   // top
+        12, 13, 14, 14, 15, 12,  // bottom
+        16, 17, 18, 18, 19, 16,  // right
+        20, 21, 22, 22, 23, 20,  // left
+    };
+}
+
+}  // namespace
 
 int main() {
     std::printf("bimeup v%s\n", BIMEUP_VERSION);
 
     bimeup::tools::Log::Init("bimeup");
     LOG_INFO("Bimeup v{} starting", BIMEUP_VERSION);
+
+    // Platform
+    bimeup::platform::Window::InitGlfw();
+    bimeup::platform::Window window({.width = 1280, .height = 720, .title = "Bimeup"});
+    bimeup::platform::Input input(window);
+
+    // Vulkan context
+    uint32_t glfwExtCount = 0;
+    const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+    std::span<const char* const> requiredExts(glfwExts, glfwExtCount);
+    bimeup::renderer::VulkanContext vulkanContext(true, requiredExts);
+
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if (glfwCreateWindowSurface(vulkanContext.GetInstance(), window.GetHandle(), nullptr,
+                                &surface) != VK_SUCCESS) {
+        LOG_ERROR("Failed to create window surface");
+        return 1;
+    }
+
+    bimeup::renderer::Device device(vulkanContext.GetInstance(), surface);
+    auto fbSize = window.GetFramebufferSize();
+    bimeup::renderer::Swapchain swapchain(
+        device, surface, VkExtent2D{static_cast<uint32_t>(fbSize.x), static_cast<uint32_t>(fbSize.y)});
+    bimeup::renderer::RenderLoop renderLoop(device, swapchain);
+
+    // Shaders
+    std::string shaderDir = BIMEUP_SHADER_DIR;
+    bimeup::renderer::Shader vertShader(device, bimeup::renderer::ShaderStage::Vertex,
+                                        shaderDir + "/basic.vert.spv");
+    bimeup::renderer::Shader fragShader(device, bimeup::renderer::ShaderStage::Fragment,
+                                        shaderDir + "/basic.frag.spv");
+
+    // Descriptor set (camera UBO)
+    bimeup::renderer::DescriptorSetLayout dsLayout(device, {
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
+    });
+    bimeup::renderer::DescriptorPool dsPool(device, 1, {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+    });
+    bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
+
+    CameraUBO ubo{};
+    bimeup::renderer::Buffer uboBuffer(device, bimeup::renderer::BufferType::Uniform,
+                                       sizeof(CameraUBO), &ubo);
+    descriptorSet.UpdateBuffer(0, uboBuffer);
+
+    // Cube geometry
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    MakeCube(vertices, indices);
+
+    bimeup::renderer::Buffer vertexBuffer(device, bimeup::renderer::BufferType::Vertex,
+                                          vertices.size() * sizeof(Vertex), vertices.data());
+    bimeup::renderer::Buffer indexBuffer(device, bimeup::renderer::BufferType::Index,
+                                         indices.size() * sizeof(uint32_t), indices.data());
+
+    // Pipeline
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(Vertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::vector<VkVertexInputAttributeDescription> attrs(3);
+    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
+    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
+    attrs[2] = {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, color)};
+
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(glm::mat4);
+
+    bimeup::renderer::PipelineConfig pipelineConfig{};
+    pipelineConfig.renderPass = renderLoop.GetRenderPass();
+    pipelineConfig.vertexBindings = {binding};
+    pipelineConfig.vertexAttributes = {attrs.begin(), attrs.end()};
+    pipelineConfig.descriptorSetLayouts = {dsLayout.GetLayout()};
+    pipelineConfig.pushConstantRanges = {pushRange};
+    pipelineConfig.depthTestEnable = true;
+    pipelineConfig.depthWriteEnable = true;
+
+    bimeup::renderer::Pipeline pipeline(device, vertShader, fragShader, pipelineConfig);
+
+    // Camera
+    bimeup::renderer::Camera camera;
+    camera.SetPerspective(45.0F, static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y),
+                          0.1F, 100.0F);
+    camera.SetOrbitTarget(glm::vec3(0.0F));
+
+    // Input: orbit camera with mouse
+    bool rightMouseDown = false;
+    bool middleMouseDown = false;
+    glm::dvec2 lastMousePos{0.0, 0.0};
+
+    input.OnMouseButton([&](bimeup::platform::MouseButton btn, bool pressed) {
+        if (btn == bimeup::platform::MouseButton::Right) {
+            rightMouseDown = pressed;
+            lastMousePos = input.GetMousePosition();
+        }
+        if (btn == bimeup::platform::MouseButton::Middle) {
+            middleMouseDown = pressed;
+            lastMousePos = input.GetMousePosition();
+        }
+    });
+
+    input.OnMouseMove([&](double x, double y) {
+        glm::dvec2 pos{x, y};
+        glm::dvec2 delta = pos - lastMousePos;
+        lastMousePos = pos;
+
+        if (rightMouseDown) {
+            camera.Orbit(static_cast<float>(delta.x) * 0.005F,
+                         static_cast<float>(delta.y) * 0.005F);
+        }
+        if (middleMouseDown) {
+            camera.Pan(glm::vec2(static_cast<float>(-delta.x) * 0.005F,
+                                 static_cast<float>(delta.y) * 0.005F));
+        }
+    });
+
+    input.OnScroll([&](double /*xOffset*/, double yOffset) {
+        camera.Zoom(static_cast<float>(-yOffset) * 0.5F);
+    });
+
+    input.OnKey([&](bimeup::platform::Key key, bool pressed) {
+        if (key == bimeup::platform::Key::Escape && pressed) {
+            glfwSetWindowShouldClose(window.GetHandle(), GLFW_TRUE);
+        }
+    });
+
+    renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
+
+    // Main loop
+    while (!window.ShouldClose()) {
+        window.PollEvents();
+
+        // Update camera UBO
+        ubo.view = camera.GetViewMatrix();
+        ubo.projection = camera.GetProjectionMatrix();
+        ubo.projection[1][1] *= -1;  // Vulkan Y-flip
+
+        auto* mapped = static_cast<CameraUBO*>(uboBuffer.Map());
+        *mapped = ubo;
+        uboBuffer.Unmap();
+
+        if (!renderLoop.BeginFrame()) {
+            continue;
+        }
+
+        VkCommandBuffer cmd = renderLoop.GetCurrentCommandBuffer();
+        VkExtent2D extent = swapchain.GetExtent();
+
+        VkViewport viewport{};
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.width = static_cast<float>(extent.width);
+        viewport.height = static_cast<float>(extent.height);
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = extent;
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        pipeline.Bind(cmd);
+        descriptorSet.Bind(cmd, pipeline.GetLayout());
+
+        glm::mat4 model(1.0F);
+        vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(glm::mat4), &model);
+
+        VkBuffer vb = vertexBuffer.GetBuffer();
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+        vkCmdBindIndexBuffer(cmd, indexBuffer.GetBuffer(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+
+        (void)renderLoop.EndFrame();
+    }
+
+    renderLoop.WaitIdle();
+
+    // Cleanup happens via destructors in reverse order
+    // Explicit surface cleanup needed since it's not wrapped
+    vkDestroySurfaceKHR(vulkanContext.GetInstance(), surface, nullptr);
+
+    bimeup::platform::Window::TerminateGlfw();
+
     LOG_INFO("Bimeup shutting down");
     bimeup::tools::Log::Shutdown();
 
