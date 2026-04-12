@@ -214,4 +214,15 @@ webifc::geometry::IfcGeometryProcessor* IfcModel::GetGeometryProcessor() {
     return impl_->manager.GetGeometryProcessor(impl_->modelId);
 }
 
+webifc::parsing::IfcLoader* IfcModel::GetLoader() {
+    if (!impl_->loaded) {
+        return nullptr;
+    }
+    return impl_->GetLoader();
+}
+
+const webifc::schema::IfcSchemaManager& IfcModel::GetSchemaManager() const {
+    return impl_->manager.GetSchemaManager();
+}
+
 } // namespace bimeup::ifc

@@ -1,6 +1,7 @@
 add_library(bimeup_ifc STATIC
     src/IfcModel.cpp
     src/IfcGeometryExtractor.cpp
+    src/IfcHierarchy.cpp
 )
 
 target_include_directories(bimeup_ifc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

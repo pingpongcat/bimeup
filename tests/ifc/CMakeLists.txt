@@ -75,3 +75,22 @@ target_compile_definitions(test_ifc_geometry_extractor PRIVATE
 gtest_discover_tests(test_ifc_geometry_extractor
     PROPERTIES ENVIRONMENT "${IFC_LSAN_SUPPRESSIONS}"
 )
+
+add_executable(test_ifc_hierarchy
+    test_ifc_hierarchy.cpp
+)
+
+target_link_libraries(test_ifc_hierarchy PRIVATE
+    GTest::gtest_main
+    bimeup_ifc
+)
+
+bimeup_enable_sanitizers(test_ifc_hierarchy)
+
+target_compile_definitions(test_ifc_hierarchy PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/ifc/data"
+)
+
+gtest_discover_tests(test_ifc_hierarchy
+    PROPERTIES ENVIRONMENT "${IFC_LSAN_SUPPRESSIONS}"
+)

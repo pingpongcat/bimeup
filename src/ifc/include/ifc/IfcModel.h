@@ -9,6 +9,8 @@
 #include <vector>
 
 namespace webifc::geometry { class IfcGeometryProcessor; }
+namespace webifc::parsing { class IfcLoader; }
+namespace webifc::schema { class IfcSchemaManager; }
 
 namespace bimeup::ifc {
 
@@ -40,6 +42,12 @@ public:
 
     // Internal: access geometry processor for mesh extraction
     webifc::geometry::IfcGeometryProcessor* GetGeometryProcessor();
+
+    // Internal: access loader for relationship/property queries
+    webifc::parsing::IfcLoader* GetLoader();
+
+    // Internal: access schema manager for type code lookups
+    const webifc::schema::IfcSchemaManager& GetSchemaManager() const;
 
 private:
     struct Impl;
