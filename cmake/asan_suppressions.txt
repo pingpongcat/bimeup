@@ -1,0 +1,4 @@
+leak:libdecor
+leak:libglib
+leak:libgdk
+leak:libgtk

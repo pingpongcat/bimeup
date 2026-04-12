@@ -24,7 +24,7 @@ add_subdirectory(external)
 
 # Modules
 add_subdirectory(src/tools)
-# add_subdirectory(src/platform)
+add_subdirectory(src/platform)
 # add_subdirectory(src/renderer)
 # add_subdirectory(src/ifc)
 # add_subdirectory(src/scene)

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 2 — Platform Layer & Window
-## Current Task: 2.1
+## Current Task: 2.2
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -17,7 +17,7 @@
 - [x] 1.8 Enable clang-tidy and sanitizers
 
 ## Stage 2 — Platform Layer & Window
-- [ ] 2.1 Add GLFW submodule, create platform/Window class
+- [x] 2.1 Add GLFW submodule, create platform/Window class
 - [ ] 2.2 Create platform/Input — keyboard + mouse abstraction
 - [ ] 2.3 Create Vulkan instance + debug messenger
 - [ ] 2.4 Create Vulkan physical/logical device selection
