@@ -28,7 +28,7 @@ add_subdirectory(src/tools)
 # add_subdirectory(src/ui)
 
 # Application
-# add_subdirectory(src/app)
+add_subdirectory(src/app)
 
 # Tests
 if(BIMEUP_BUILD_TESTS)
