@@ -7,6 +7,7 @@ add_executable(renderer_tests
     ShaderTest.cpp
     PipelineTest.cpp
     DescriptorSetTest.cpp
+    CameraTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 bimeup_enable_sanitizers(renderer_tests)
