@@ -1,5 +1,6 @@
 add_library(bimeup_core STATIC
     src/Application.cpp
+    src/Picking.cpp
     src/SceneUploader.cpp
 )
 

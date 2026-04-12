@@ -2,6 +2,7 @@ add_executable(test_core
     ApplicationTest.cpp
     EventBusTest.cpp
     EventsTest.cpp
+    PickingTest.cpp
     SceneUploaderTest.cpp
 )
 
