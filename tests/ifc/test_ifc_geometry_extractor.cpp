@@ -110,3 +110,48 @@ TEST_F(IfcGeometryExtractorTest, ExtractMesh_IfcColumn_HasGeometry) {
     EXPECT_GT(mesh->positions.size(), 0u);
     EXPECT_GT(mesh->indices.size(), 0u);
 }
+
+// The example IFC assigns IFCSURFACESTYLE "Concrete, Cast-in-Place gray"
+// (IFCCOLOURRGB 0.7529, 0.7529, 0.7529) to IfcColumn elements via
+// IFCSTYLEDITEM → IFCPRESENTATIONSTYLEASSIGNMENT. The extractor must surface
+// that color on the TriangulatedMesh.
+TEST_F(IfcGeometryExtractorTest, ExtractMesh_IfcColumn_PicksUpSurfaceStyleColor) {
+    bimeup::ifc::IfcGeometryExtractor extractor(model);
+
+    auto columns = model.GetExpressIdsByType("IFCCOLUMN");
+    ASSERT_FALSE(columns.empty());
+
+    std::optional<bimeup::ifc::TriangulatedMesh> mesh;
+    for (uint32_t id : columns) {
+        mesh = extractor.ExtractMesh(id);
+        if (mesh.has_value()) {
+            break;
+        }
+    }
+    ASSERT_TRUE(mesh.has_value());
+
+    constexpr double kExpected = 0.752941176470588;
+    constexpr double kTol = 1e-3;
+    EXPECT_NEAR(mesh->color.r, kExpected, kTol);
+    EXPECT_NEAR(mesh->color.g, kExpected, kTol);
+    EXPECT_NEAR(mesh->color.b, kExpected, kTol);
+    EXPECT_GT(mesh->color.a, 0.0);
+}
+
+TEST_F(IfcGeometryExtractorTest, ExtractAll_ColorsAreInUnitRange) {
+    bimeup::ifc::IfcGeometryExtractor extractor(model);
+
+    auto meshes = extractor.ExtractAll();
+    ASSERT_FALSE(meshes.empty());
+
+    for (const auto& [expressId, mesh] : meshes) {
+        EXPECT_GE(mesh.color.r, 0.0);
+        EXPECT_LE(mesh.color.r, 1.0);
+        EXPECT_GE(mesh.color.g, 0.0);
+        EXPECT_LE(mesh.color.g, 1.0);
+        EXPECT_GE(mesh.color.b, 0.0);
+        EXPECT_LE(mesh.color.b, 1.0);
+        EXPECT_GT(mesh.color.a, 0.0);
+        EXPECT_LE(mesh.color.a, 1.0);
+    }
+}

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 4 — IFC Loading & Internal Scene
-## Current Task: 4.12
+## Current Stage: 5 — Core Application & Selection
+## Current Task: 5.1
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -48,7 +48,7 @@
 - [x] 4.9 Create scene/SceneBuilder
 - [x] 4.10 Implement batching in SceneBuilder
 - [x] 4.11 Upload scene meshes to renderer
-- [ ] 4.12 Implement per-element color from IFC
+- [x] 4.12 Implement per-element color from IFC
 
 ## Stage 5 — Core Application & Selection
 - [ ] 5.1 Create core/Application
