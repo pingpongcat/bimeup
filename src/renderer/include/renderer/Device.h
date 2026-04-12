@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 namespace bimeup::renderer {
 
@@ -21,8 +22,10 @@ public:
     [[nodiscard]] uint32_t GetGraphicsQueueFamily() const;
     [[nodiscard]] VkQueue GetPresentQueue() const;
     [[nodiscard]] uint32_t GetPresentQueueFamily() const;
+    [[nodiscard]] VmaAllocator GetAllocator() const;
 
 private:
+    void CreateAllocator(VkInstance instance);
     void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
     void CreateLogicalDevice(bool enableSwapchain);
     static int RateDevice(VkPhysicalDevice device);
@@ -37,6 +40,7 @@ private:
     uint32_t m_graphicsQueueFamily = 0;
     uint32_t m_presentQueueFamily = 0;
     bool m_hasPresentQueue = false;
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 
 }  // namespace bimeup::renderer

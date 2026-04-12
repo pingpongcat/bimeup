@@ -1,3 +1,4 @@
+#define VMA_IMPLEMENTATION
 #include <renderer/Device.h>
 #include <tools/Log.h>
 
@@ -11,14 +12,19 @@ namespace bimeup::renderer {
 Device::Device(VkInstance instance) {
     PickPhysicalDevice(instance, VK_NULL_HANDLE);
     CreateLogicalDevice(false);
+    CreateAllocator(instance);
 }
 
 Device::Device(VkInstance instance, VkSurfaceKHR surface) {
     PickPhysicalDevice(instance, surface);
     CreateLogicalDevice(true);
+    CreateAllocator(instance);
 }
 
 Device::~Device() {
+    if (m_allocator != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(m_allocator);
+    }
     if (m_device != VK_NULL_HANDLE) {
         vkDestroyDevice(m_device, nullptr);
     }
@@ -46,6 +52,23 @@ VkQueue Device::GetPresentQueue() const {
 
 uint32_t Device::GetPresentQueueFamily() const {
     return m_presentQueueFamily;
+}
+
+VmaAllocator Device::GetAllocator() const {
+    return m_allocator;
+}
+
+void Device::CreateAllocator(VkInstance instance) {
+    VmaAllocatorCreateInfo allocatorInfo{};
+    allocatorInfo.instance = instance;
+    allocatorInfo.physicalDevice = m_physicalDevice;
+    allocatorInfo.device = m_device;
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
+
+    VkResult result = vmaCreateAllocator(&allocatorInfo, &m_allocator);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VMA allocator");
+    }
 }
 
 void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {

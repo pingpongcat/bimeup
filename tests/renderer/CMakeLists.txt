@@ -3,6 +3,7 @@ add_executable(renderer_tests
     DeviceTest.cpp
     SwapchainTest.cpp
     RenderLoopTest.cpp
+    BufferTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 bimeup_enable_sanitizers(renderer_tests)

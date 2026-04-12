@@ -13,6 +13,9 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(glfw)
 
+# VulkanMemoryAllocator (header-only)
+add_subdirectory(VulkanMemoryAllocator)
+
 # googletest (only when tests are enabled)
 if(BIMEUP_BUILD_TESTS)
     add_subdirectory(googletest)
