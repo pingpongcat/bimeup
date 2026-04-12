@@ -1,5 +1,6 @@
 add_library(bimeup_platform STATIC
     src/Window.cpp
+    src/Input.cpp
 )
 
 target_include_directories(bimeup_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

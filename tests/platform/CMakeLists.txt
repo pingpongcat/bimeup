@@ -1,4 +1,4 @@
-add_executable(platform_tests WindowTest.cpp)
+add_executable(platform_tests WindowTest.cpp InputTest.cpp)
 target_link_libraries(platform_tests PRIVATE bimeup_platform GTest::gtest_main)
 bimeup_enable_sanitizers(platform_tests)
 add_test(NAME platform COMMAND platform_tests)

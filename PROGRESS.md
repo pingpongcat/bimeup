@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 2 — Platform Layer & Window
-## Current Task: 2.2
+## Current Task: 2.3
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -18,7 +18,7 @@
 
 ## Stage 2 — Platform Layer & Window
 - [x] 2.1 Add GLFW submodule, create platform/Window class
-- [ ] 2.2 Create platform/Input — keyboard + mouse abstraction
+- [x] 2.2 Create platform/Input — keyboard + mouse abstraction
 - [ ] 2.3 Create Vulkan instance + debug messenger
 - [ ] 2.4 Create Vulkan physical/logical device selection
 - [ ] 2.5 Create swapchain tied to GLFW surface
