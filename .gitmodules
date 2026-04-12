@@ -13,3 +13,6 @@
 [submodule "external/VulkanMemoryAllocator"]
 	path = external/VulkanMemoryAllocator
 	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "external/web-ifc"]
+	path = external/web-ifc
+	url = ../engine_web-ifc

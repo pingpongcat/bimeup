@@ -16,6 +16,9 @@ add_subdirectory(glfw)
 # VulkanMemoryAllocator (header-only)
 add_subdirectory(VulkanMemoryAllocator)
 
+# web-ifc (IFC parsing library)
+include(web-ifc-build.cmake)
+
 # googletest (only when tests are enabled)
 if(BIMEUP_BUILD_TESTS)
     add_subdirectory(googletest)

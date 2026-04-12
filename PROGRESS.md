@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 4 — IFC Loading & Internal Scene
-## Current Task: 4.1
+## Current Task: 4.2
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -37,7 +37,7 @@
 - [x] 3.9 Add render mode switching: shaded / wireframe
 
 ## Stage 4 — IFC Loading & Internal Scene
-- [ ] 4.1 Integrate IFC parsing library as submodule
+- [x] 4.1 Integrate IFC parsing library as submodule
 - [ ] 4.2 Create ifc/IfcModel
 - [ ] 4.3 Create ifc/IfcElement
 - [ ] 4.4 Create ifc/IfcGeometryExtractor
