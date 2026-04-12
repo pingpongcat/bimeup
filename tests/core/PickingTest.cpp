@@ -117,6 +117,71 @@ TEST(PickingTest, ClickOnEmptySpaceDoesNotPublish) {
     EXPECT_EQ(callCount, 0);
 }
 
+TEST(PickingTest, HoverOverElementPublishesHoveredWithId) {
+    scene::Scene scene;
+    std::vector<scene::SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    scene::SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::mat4(1.0f);
+    node.bounds = scene::AABB(glm::vec3(-1.0f, -1.0f, 0.0f),
+                              glm::vec3(1.0f, 1.0f, 0.0f));
+    scene::NodeId id = scene.AddNode(node);
+
+    glm::vec2 size(800.0f, 600.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                                 glm::vec3(0.0f),
+                                 glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(60.0f),
+                                      size.x / size.y, 0.1f, 100.0f);
+
+    EventBus bus;
+    std::optional<ElementHovered> received;
+    bus.Subscribe<ElementHovered>(
+        [&](const ElementHovered& e) { received = e; });
+
+    auto result = HoverElement(size * 0.5f, size, view, proj, scene, meshes, bus);
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, id);
+    ASSERT_TRUE(received.has_value());
+    ASSERT_TRUE(received->expressId.has_value());
+    EXPECT_EQ(*received->expressId, id);
+}
+
+TEST(PickingTest, HoverOverEmptySpacePublishesHoveredWithNullopt) {
+    scene::Scene scene;
+    std::vector<scene::SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    scene::SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::translate(glm::mat4(1.0f),
+                                    glm::vec3(50.0f, 0.0f, 0.0f));
+    node.bounds = scene::AABB(glm::vec3(49.0f, -1.0f, 0.0f),
+                              glm::vec3(51.0f, 1.0f, 0.0f));
+    scene.AddNode(node);
+
+    glm::vec2 size(800.0f, 600.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                                 glm::vec3(0.0f),
+                                 glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(60.0f),
+                                      size.x / size.y, 0.1f, 100.0f);
+
+    EventBus bus;
+    std::optional<ElementHovered> received;
+    bus.Subscribe<ElementHovered>(
+        [&](const ElementHovered& e) { received = e; });
+
+    auto result = HoverElement(size * 0.5f, size, view, proj, scene, meshes, bus);
+
+    EXPECT_FALSE(result.has_value());
+    ASSERT_TRUE(received.has_value());
+    EXPECT_FALSE(received->expressId.has_value());
+}
+
 TEST(PickingTest, ClickWithAdditivePropagatesFlag) {
     scene::Scene scene;
     std::vector<scene::SceneMesh> meshes;

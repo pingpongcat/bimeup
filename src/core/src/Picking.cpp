@@ -47,4 +47,24 @@ bool PickElement(glm::vec2 screenPos,
     return true;
 }
 
+std::optional<scene::NodeId> HoverElement(glm::vec2 screenPos,
+                                          glm::vec2 screenSize,
+                                          const glm::mat4& view,
+                                          const glm::mat4& proj,
+                                          const scene::Scene& scene,
+                                          std::span<const scene::SceneMesh> meshes,
+                                          EventBus& bus) {
+    scene::Ray ray = ScreenPointToRay(screenPos, screenSize, view, proj);
+    auto hit = scene::RaycastScene(ray, scene, meshes);
+
+    ElementHovered event;
+    std::optional<scene::NodeId> result;
+    if (hit.has_value()) {
+        event.expressId = hit->nodeId;
+        result = hit->nodeId;
+    }
+    bus.Publish(event);
+    return result;
+}
+
 }  // namespace bimeup::core

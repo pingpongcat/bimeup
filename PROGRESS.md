@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 5 — Core Application & Selection
-## Current Task: 5.7
+## Current Task: 5.8
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -57,7 +57,7 @@
 - [x] 5.4 Implement CPU raycasting
 - [x] 5.5 Mouse click → ray → selection pipeline
 - [x] 5.6 Element highlighting in renderer
-- [ ] 5.7 Hover highlighting
+- [x] 5.7 Hover highlighting
 - [ ] 5.8 Multi-selection and clearing
 
 ## Stage 6 — ImGui Integration & Basic UI
