@@ -11,6 +11,7 @@ add_library(bimeup_renderer STATIC
     src/DescriptorSet.cpp
     src/Camera.cpp
     src/MeshBuffer.cpp
+    src/Highlight.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

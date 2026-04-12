@@ -10,3 +10,4 @@ build_release/
 .idea/
 cmake-build-*/
 compile_commands.json
+.claude/
