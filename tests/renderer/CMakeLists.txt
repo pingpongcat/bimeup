@@ -1,4 +1,7 @@
-add_executable(renderer_tests VulkanContextTest.cpp)
+add_executable(renderer_tests
+    VulkanContextTest.cpp
+    DeviceTest.cpp
+)
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer GTest::gtest_main)
 bimeup_enable_sanitizers(renderer_tests)
 add_test(NAME renderer COMMAND renderer_tests)
