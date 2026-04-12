@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 5 — Core Application & Selection
-## Current Task: 5.2
+## Current Task: 5.3
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -52,7 +52,7 @@
 
 ## Stage 5 — Core Application & Selection
 - [x] 5.1 Create core/Application
-- [ ] 5.2 Create core/EventBus
+- [x] 5.2 Create core/EventBus
 - [ ] 5.3 Define core events
 - [ ] 5.4 Implement CPU raycasting
 - [ ] 5.5 Mouse click → ray → selection pipeline
