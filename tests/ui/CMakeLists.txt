@@ -3,9 +3,10 @@ add_executable(ui_tests
     ImGuiContextTest.cpp
     PanelTest.cpp
     PropertyPanelTest.cpp
+    ToolbarTest.cpp
     UIManagerTest.cpp
 )
-target_link_libraries(ui_tests PRIVATE bimeup_ui bimeup_ifc GTest::gtest_main)
+target_link_libraries(ui_tests PRIVATE bimeup_ui bimeup_ifc bimeup_renderer GTest::gtest_main)
 bimeup_enable_sanitizers(ui_tests)
 add_test(NAME ui COMMAND ui_tests)
 set_tests_properties(ui PROPERTIES
