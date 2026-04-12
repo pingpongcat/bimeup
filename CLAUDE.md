@@ -1,0 +1,57 @@
+# Bimeup — Session Instructions
+
+## Project
+Bimeup is a C++ BIM viewer (Vulkan + ImGui + OpenXR). Full plan: `PLAN.md`. Progress: `PROGRESS.md`.
+
+## Session Protocol
+
+At the START of every session:
+1. Read `PROGRESS.md` — find the current stage and next unchecked task
+2. Read only the PLAN.md section for that stage — do NOT read the whole plan
+3. Read only the headers/APIs of modules you will touch — do NOT explore the full codebase
+4. State what you will do and which task(s) you will complete
+
+For EACH task:
+1. Write the test FIRST (TDD — test must fail before implementation)
+2. Implement minimal code to pass the test
+3. Run the test — confirm it passes
+4. Run ALL existing tests — confirm no regressions
+5. Mark the task done in `PROGRESS.md` (change `- [ ]` to `- [x]`)
+6. Commit with message: `[stage.task] description`
+
+At the END of every session:
+1. Update `PROGRESS.md` — check off completed tasks, update "Current Task" to the next one
+2. If the stage is done, update "Current Stage" to the next stage
+3. Run the full test suite one final time
+4. Summarize what was done and what comes next
+
+## Hard Rules
+- NEVER read more than 2 modules per session
+- NEVER implement without a failing test first
+- NEVER leave tests failing at end of session
+- NEVER skip running the full test suite before ending
+- Keep each task to a single commit
+- If a task is too large for one session, split it and update PROGRESS.md
+
+## Build & Test Commands
+```bash
+# Configure (from bimeup/)
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBIMEUP_BUILD_TESTS=ON
+
+# Build
+cmake --build build -j$(nproc)
+
+# Run all tests
+cd build && ctest --output-on-failure
+
+# Run specific module tests
+cd build && ctest -R tools --output-on-failure
+cd build && ctest -R platform --output-on-failure
+```
+
+## Dependencies
+All in `external/` as git submodules. Never install system-wide.
+
+## Reference Code
+- `../engine_web-ifc/` — C++ IFC parser (geometry, parsing, schema modules)
+- `../web-ifc-viewer/` — TypeScript BIM viewer (UI patterns, feature reference)
