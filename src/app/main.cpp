@@ -20,6 +20,9 @@
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
 #include <tools/Log.h>
+#include <ui/ImGuiContext.h>
+
+#include <imgui.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -323,9 +326,31 @@ int main(int argc, char* argv[]) {
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
 
+    // ImGui
+    bimeup::ui::ImGuiContext imgui;
+    imgui.InitVulkanBackend({
+        .window = window.GetHandle(),
+        .instance = vulkanContext.GetInstance(),
+        .physicalDevice = device.GetPhysicalDevice(),
+        .device = device.GetDevice(),
+        .queueFamily = device.GetGraphicsQueueFamily(),
+        .queue = device.GetGraphicsQueue(),
+        .renderPass = renderLoop.GetRenderPass(),
+        .minImageCount = swapchain.GetImageCount(),
+        .imageCount = swapchain.GetImageCount(),
+        .apiVersion = VK_API_VERSION_1_2,
+    });
+
+    bool showImGuiDemo = true;
+
     // Main loop
     while (!window.ShouldClose()) {
         window.PollEvents();
+
+        imgui.BeginFrame();
+        if (showImGuiDemo) {
+            ImGui::ShowDemoWindow(&showImGuiDemo);
+        }
 
         // Update camera UBO
         ubo.view = camera.GetViewMatrix();
@@ -380,10 +405,13 @@ int main(int argc, char* argv[]) {
             meshBuffer.Draw(cmd, cubeHandle);
         }
 
+        imgui.EndFrame(cmd);
+
         (void)renderLoop.EndFrame();
     }
 
     renderLoop.WaitIdle();
+    imgui.ShutdownVulkanBackend();
 
     // Cleanup happens via destructors in reverse order
     // Explicit surface cleanup needed since it's not wrapped

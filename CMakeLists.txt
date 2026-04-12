@@ -30,7 +30,7 @@ add_subdirectory(src/renderer)
 add_subdirectory(src/ifc)
 add_subdirectory(src/scene)
 add_subdirectory(src/core)
-# add_subdirectory(src/ui)
+add_subdirectory(src/ui)
 
 # Shaders
 set(BIMEUP_SHADER_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
