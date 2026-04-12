@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 1 — Project Bootstrap & Build System
-## Current Task: 1.4
+## Current Task: 1.5
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -10,7 +10,7 @@
 - [x] 1.1 Create root CMakeLists.txt with C++20, module structure, option flags
 - [x] 1.2 Add git submodules: googletest, spdlog, glm
 - [x] 1.3 Create tools/ module with Log wrapper around spdlog
-- [ ] 1.4 Create tools/Config — key-value config loader
+- [x] 1.4 Create tools/Config — key-value config loader
 - [ ] 1.5 Create app/main.cpp — initializes logging, prints version
 - [ ] 1.6 Create build scripts (debug/release for Linux/Windows)
 - [ ] 1.7 Set up GitHub Actions CI
