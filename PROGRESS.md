@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 2 — Platform Layer & Window
-## Current Task: 2.7
+## Current Stage: 3 — Basic Rendering Pipeline
+## Current Task: 3.1
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -23,7 +23,7 @@
 - [x] 2.4 Create Vulkan physical/logical device selection
 - [x] 2.5 Create swapchain tied to GLFW surface
 - [x] 2.6 Implement render loop: acquire → clear → present
-- [ ] 2.7 Implement frame timing and FPS tracking
+- [x] 2.7 Implement frame timing and FPS tracking
 
 ## Stage 3 — Basic Rendering Pipeline
 - [ ] 3.1 Implement renderer/Buffer — vertex + index with VMA
