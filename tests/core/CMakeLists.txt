@@ -4,6 +4,7 @@ add_executable(test_core
     EventsTest.cpp
     PickingTest.cpp
     SceneUploaderTest.cpp
+    SelectionTest.cpp
 )
 
 target_link_libraries(test_core PRIVATE
