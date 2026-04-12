@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 5 — Core Application & Selection
-## Current Task: 5.1
+## Current Task: 5.2
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -51,7 +51,7 @@
 - [x] 4.12 Implement per-element color from IFC
 
 ## Stage 5 — Core Application & Selection
-- [ ] 5.1 Create core/Application
+- [x] 5.1 Create core/Application
 - [ ] 5.2 Create core/EventBus
 - [ ] 5.3 Define core events
 - [ ] 5.4 Implement CPU raycasting

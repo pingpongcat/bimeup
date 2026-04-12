@@ -1,4 +1,5 @@
 add_executable(test_core
+    ApplicationTest.cpp
     SceneUploaderTest.cpp
 )
 
