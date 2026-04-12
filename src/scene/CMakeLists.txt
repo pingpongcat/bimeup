@@ -1,5 +1,6 @@
 add_library(bimeup_scene STATIC
     src/Scene.cpp
+    src/SceneMesh.cpp
 )
 
 target_include_directories(bimeup_scene PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

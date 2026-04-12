@@ -1,5 +1,6 @@
 add_executable(test_scene
     test_scene.cpp
+    test_scene_mesh.cpp
 )
 
 target_link_libraries(test_scene PRIVATE

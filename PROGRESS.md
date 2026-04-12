@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 4 — IFC Loading & Internal Scene
-## Current Task: 4.7
+## Current Task: 4.8
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -43,7 +43,7 @@
 - [x] 4.4 Create ifc/IfcGeometryExtractor
 - [x] 4.5 Create ifc/IfcHierarchy
 - [x] 4.6 Create scene/SceneNode and scene/Scene
-- [ ] 4.7 Create scene/SceneMesh
+- [x] 4.7 Create scene/SceneMesh
 - [ ] 4.8 Create scene/AABB
 - [ ] 4.9 Create scene/SceneBuilder
 - [ ] 4.10 Implement batching in SceneBuilder
