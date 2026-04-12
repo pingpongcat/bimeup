@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 3 — Basic Rendering Pipeline
-## Current Task: 3.9
+## Current Stage: 4 — IFC Loading & Internal Scene
+## Current Task: 4.1
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -34,7 +34,7 @@
 - [x] 3.6 Write basic vertex + fragment shaders
 - [x] 3.7 Render a colored cube with orbit camera
 - [x] 3.8 Implement renderer/MeshBuffer
-- [ ] 3.9 Add render mode switching: shaded / wireframe
+- [x] 3.9 Add render mode switching: shaded / wireframe
 
 ## Stage 4 — IFC Loading & Internal Scene
 - [ ] 4.1 Integrate IFC parsing library as submodule

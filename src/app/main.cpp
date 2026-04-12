@@ -9,6 +9,7 @@
 #include <renderer/Device.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
+#include <renderer/RenderMode.h>
 #include <renderer/Shader.h>
 #include <renderer/Swapchain.h>
 #include <renderer/VulkanContext.h>
@@ -164,7 +165,13 @@ int main() {
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
 
-    bimeup::renderer::Pipeline pipeline(device, vertShader, fragShader, pipelineConfig);
+    pipelineConfig.polygonMode = bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
+    bimeup::renderer::Pipeline shadedPipeline(device, vertShader, fragShader, pipelineConfig);
+
+    pipelineConfig.polygonMode = bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Wireframe);
+    bimeup::renderer::Pipeline wireframePipeline(device, vertShader, fragShader, pipelineConfig);
+
+    auto renderMode = bimeup::renderer::RenderMode::Shaded;
 
     // Camera
     bimeup::renderer::Camera camera;
@@ -211,6 +218,13 @@ int main() {
         if (key == bimeup::platform::Key::Escape && pressed) {
             glfwSetWindowShouldClose(window.GetHandle(), GLFW_TRUE);
         }
+        if (key == bimeup::platform::Key::W && pressed) {
+            renderMode = (renderMode == bimeup::renderer::RenderMode::Shaded)
+                             ? bimeup::renderer::RenderMode::Wireframe
+                             : bimeup::renderer::RenderMode::Shaded;
+            LOG_INFO("Render mode: {}",
+                     renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
+        }
     });
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
@@ -249,11 +263,14 @@ int main() {
         scissor.extent = extent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        pipeline.Bind(cmd);
-        descriptorSet.Bind(cmd, pipeline.GetLayout());
+        auto& activePipeline = (renderMode == bimeup::renderer::RenderMode::Shaded)
+                                    ? shadedPipeline
+                                    : wireframePipeline;
+        activePipeline.Bind(cmd);
+        descriptorSet.Bind(cmd, activePipeline.GetLayout());
 
         glm::mat4 model(1.0F);
-        vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(glm::mat4), &model);
 
         meshBuffer.Bind(cmd);
