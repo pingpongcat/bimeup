@@ -52,4 +52,23 @@ TEST(ClipPlanesPanelTest, AxisPresetZPositiveNormalIsPlusZ) {
     EXPECT_FLOAT_EQ(eq.w, 0.0F);
 }
 
+TEST(ClipPlanesPanelTest, ActivePlaneIdDefaultsToEmpty) {
+    ClipPlanesPanel panel;
+    EXPECT_FALSE(panel.ActivePlaneId().has_value());
+}
+
+TEST(ClipPlanesPanelTest, SetActivePlaneIdIsPersisted) {
+    ClipPlanesPanel panel;
+    panel.SetActivePlaneId(7U);
+    ASSERT_TRUE(panel.ActivePlaneId().has_value());
+    EXPECT_EQ(*panel.ActivePlaneId(), 7U);
+    panel.SetActivePlaneId(std::nullopt);
+    EXPECT_FALSE(panel.ActivePlaneId().has_value());
+}
+
+TEST(ClipPlanesPanelTest, ActiveGizmoModeDefaultsToTranslate) {
+    ClipPlanesPanel panel;
+    EXPECT_EQ(panel.ActiveGizmoMode(), bimeup::ui::GizmoMode::Translate);
+}
+
 }  // namespace

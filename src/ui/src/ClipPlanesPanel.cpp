@@ -1,6 +1,8 @@
 #include <ui/ClipPlanesPanel.h>
 
 #include <imgui.h>
+#include <ImGuizmo.h>
+#include <renderer/ClipPlane.h>
 #include <renderer/ClipPlaneManager.h>
 
 #include <array>
@@ -42,6 +44,15 @@ void ClipPlanesPanel::OnDraw() {
     const bool atCapacity = count >= renderer::ClipPlaneManager::kMaxPlanes;
 
     ImGui::Text("Planes: %zu / %zu", count, renderer::ClipPlaneManager::kMaxPlanes);
+
+    ImGui::TextUnformatted("Gizmo:");
+    ImGui::SameLine();
+    int mode = static_cast<int>(m_gizmoMode);
+    ImGui::RadioButton("Translate", &mode, static_cast<int>(GizmoMode::Translate));
+    ImGui::SameLine();
+    ImGui::RadioButton("Rotate", &mode, static_cast<int>(GizmoMode::Rotate));
+    m_gizmoMode = static_cast<GizmoMode>(mode);
+
     ImGui::Separator();
 
     struct PresetButton {
@@ -81,12 +92,18 @@ void ClipPlanesPanel::OnDraw() {
     std::optional<std::uint32_t> toRemove;
 
     const auto planesCopy = mgr.Planes();  // copy so edits don't invalidate iteration
+    bool activeStillExists = false;
     for (const auto& entry : planesCopy) {
+        if (m_activePlaneId == entry.id) activeStillExists = true;
         ImGui::PushID(static_cast<int>(entry.id));
 
         char header[32];
         std::snprintf(header, sizeof(header), "Plane %u", entry.id);
         if (ImGui::CollapsingHeader(header)) {
+            bool active = (m_activePlaneId == entry.id);
+            if (ImGui::Checkbox("Active (gizmo)", &active)) {
+                m_activePlaneId = active ? std::optional<std::uint32_t>{entry.id} : std::nullopt;
+            }
             bool enabled = entry.plane.enabled;
             if (ImGui::Checkbox("Enabled", &enabled)) {
                 mgr.SetEnabled(entry.id, enabled);
@@ -117,10 +134,50 @@ void ClipPlanesPanel::OnDraw() {
     }
 
     if (toRemove.has_value()) {
+        if (m_activePlaneId == *toRemove) m_activePlaneId.reset();
         mgr.RemovePlane(*toRemove);
+    } else if (!activeStillExists) {
+        m_activePlaneId.reset();
     }
 
     ImGui::End();
+
+    // Draw the ImGuizmo overlay for the active plane (if any). This is drawn
+    // outside of the panel window so it appears over the scene viewport.
+    if (m_activePlaneId.has_value()) {
+        const renderer::ClipPlane* current = mgr.Find(*m_activePlaneId);
+        if (current != nullptr) {
+            const ImGuiIO& io = ImGui::GetIO();
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
+            ImGuizmo::SetRect(0.0F, 0.0F, io.DisplaySize.x, io.DisplaySize.y);
+
+            glm::mat4 xform = renderer::PlaneToTransform(*current);
+
+            const ImGuizmo::OPERATION op = (m_gizmoMode == GizmoMode::Translate)
+                                               ? ImGuizmo::TRANSLATE
+                                               : ImGuizmo::ROTATE;
+            const bool used = ImGuizmo::Manipulate(&m_view[0][0],
+                                                   &m_projection[0][0],
+                                                   op,
+                                                   ImGuizmo::WORLD,
+                                                   &xform[0][0]);
+            if (used) {
+                const renderer::ClipPlane updated = renderer::TransformToPlane(xform);
+                glm::vec4 eq = updated.equation;
+                if (m_gizmoMode == GizmoMode::Translate) {
+                    // Translation-only drags should not change the normal; re-project
+                    // so numerical drift stays out of the equation.
+                    eq.x = current->equation.x;
+                    eq.y = current->equation.y;
+                    eq.z = current->equation.z;
+                }
+                mgr.UpdatePlane(*m_activePlaneId, eq);
+            }
+        } else {
+            m_activePlaneId.reset();
+        }
+    }
 }
 
 }  // namespace bimeup::ui

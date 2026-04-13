@@ -21,4 +21,13 @@ float SignedDistance(const ClipPlane& plane, const glm::vec3& point);
 
 PointSide ClassifyPoint(const ClipPlane& plane, const glm::vec3& point, float epsilon = 1e-4F);
 
+// Build a transform whose translation is the point on the plane closest to the
+// origin and whose Z axis is aligned with the plane normal. Useful as input to
+// ImGuizmo::Manipulate.
+glm::mat4 PlaneToTransform(const ClipPlane& plane);
+
+// Recover a clip plane from a transform: normal = transform's Z axis,
+// d = -dot(normal, translation). Preserves the `enabled` default (true).
+ClipPlane TransformToPlane(const glm::mat4& transform);
+
 }  // namespace bimeup::renderer
