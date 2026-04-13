@@ -57,4 +57,16 @@ const ClipPlane* ClipPlaneManager::Find(std::uint32_t id) const {
     return &it->plane;
 }
 
+ClipPlanesUbo PackClipPlanes(const ClipPlaneManager& manager) {
+    ClipPlanesUbo ubo{};
+    int n = 0;
+    for (const auto& entry : manager.Planes()) {
+        if (!entry.plane.enabled) continue;
+        ubo.planes[n] = entry.plane.equation;
+        ++n;
+    }
+    ubo.count = glm::ivec4(n, 0, 0, 0);
+    return ubo;
+}
+
 }  // namespace bimeup::renderer

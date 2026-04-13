@@ -20,6 +20,11 @@ layout(set = 0, binding = 1) uniform LightingUBO {
 
 layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
 
+layout(set = 0, binding = 3) uniform ClipPlanesUBO {
+    vec4 planes[6];  // ax + by + cz + d = 0; a point is kept when dot(n,p) + d >= 0
+    ivec4 count;     // x = number of active planes
+} clipPlanes;
+
 vec3 lambertContribution(vec3 n, vec4 dirI, vec4 colE) {
     float enabled = colE.w;
     vec3 toLight = normalize(-dirI.xyz);
@@ -59,6 +64,14 @@ float pcfShadow(vec3 worldPos) {
 }
 
 void main() {
+    // Clip planes: discard fragments behind any active plane (signed distance < 0).
+    for (int i = 0; i < clipPlanes.count.x; ++i) {
+        vec4 eq = clipPlanes.planes[i];
+        if (dot(eq.xyz, fragWorldPos) + eq.w < 0.0) {
+            discard;
+        }
+    }
+
     vec3 n = normalize(fragNormalWorld);
 
     vec3 lit = lights.ambient.rgb;

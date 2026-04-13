@@ -11,6 +11,7 @@
 #include <platform/Window.h>
 #include <renderer/Buffer.h>
 #include <renderer/Camera.h>
+#include <renderer/ClipPlaneManager.h>
 #include <renderer/MeshBuffer.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
@@ -169,13 +170,15 @@ int main(int argc, char* argv[]) {
                                               shaderDir + "/shadow.frag.spv");
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
+    //                 + clip planes UBO (fragment)
     bimeup::renderer::DescriptorSetLayout dsLayout(device, {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
+        {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
     });
     bimeup::renderer::DescriptorPool dsPool(device, 1, {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
     });
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
@@ -190,6 +193,13 @@ int main(int argc, char* argv[]) {
     bimeup::renderer::Buffer lightingBuffer(device, bimeup::renderer::BufferType::Uniform,
                                             sizeof(bimeup::renderer::LightingUbo), &lightingUbo);
     descriptorSet.UpdateBuffer(1, lightingBuffer);
+
+    bimeup::renderer::ClipPlaneManager clipPlaneManager;
+    bimeup::renderer::ClipPlanesUbo clipPlanesUbo = bimeup::renderer::PackClipPlanes(clipPlaneManager);
+    bimeup::renderer::Buffer clipPlanesBuffer(device, bimeup::renderer::BufferType::Uniform,
+                                              sizeof(bimeup::renderer::ClipPlanesUbo),
+                                              &clipPlanesUbo);
+    descriptorSet.UpdateBuffer(3, clipPlanesBuffer);
 
     // Shadow map — created lazily on first enable / resolution change from the panel.
     std::unique_ptr<bimeup::renderer::ShadowMap> shadowMap;
@@ -805,6 +815,12 @@ int main(int argc, char* argv[]) {
         auto* lightMapped = static_cast<bimeup::renderer::LightingUbo*>(lightingBuffer.Map());
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
+
+        // Re-pack clip planes each frame; cheap, and 7.3d will mutate the manager from UI.
+        clipPlanesUbo = bimeup::renderer::PackClipPlanes(clipPlaneManager);
+        auto* clipMapped = static_cast<bimeup::renderer::ClipPlanesUbo*>(clipPlanesBuffer.Map());
+        *clipMapped = clipPlanesUbo;
+        clipPlanesBuffer.Unmap();
 
         if (!renderLoop.BeginFrame()) {
             continue;

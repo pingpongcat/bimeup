@@ -35,4 +35,16 @@ private:
     std::uint32_t nextId_{1};
 };
 
+// std140-packed UBO that mirrors the GLSL ClipPlanesUBO. Only enabled planes
+// are copied (into the first `count.x` slots); disabled planes are skipped so
+// the shader can iterate [0, count.x) without branching per slot.
+struct ClipPlanesUbo {
+    glm::vec4 planes[ClipPlaneManager::kMaxPlanes];
+    glm::ivec4 count;  // x=enabled plane count; y/z/w unused (std140 padding)
+};
+
+static_assert(sizeof(ClipPlanesUbo) == 112, "ClipPlanesUbo must match std140 layout");
+
+ClipPlanesUbo PackClipPlanes(const ClipPlaneManager& manager);
+
 }  // namespace bimeup::renderer

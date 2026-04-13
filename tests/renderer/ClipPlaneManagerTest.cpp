@@ -4,6 +4,8 @@
 
 using bimeup::renderer::ClipPlane;
 using bimeup::renderer::ClipPlaneManager;
+using bimeup::renderer::ClipPlanesUbo;
+using bimeup::renderer::PackClipPlanes;
 
 TEST(ClipPlaneManagerTest, StartsEmpty) {
     ClipPlaneManager mgr;
@@ -112,6 +114,68 @@ TEST(ClipPlaneManagerTest, UpdatePlaneReplacesEquationKeepingEnabled) {
 TEST(ClipPlaneManagerTest, UpdatePlaneUnknownIdReturnsFalse) {
     ClipPlaneManager mgr;
     EXPECT_FALSE(mgr.UpdatePlane(99U, {1.0F, 0.0F, 0.0F, 0.0F}));
+}
+
+// --- PackClipPlanes: builds the std140 UBO the shader reads from. -------------
+
+TEST(ClipPlanesUboTest, SizeMatchesStd140Layout) {
+    // std140: vec4 planes[6] = 6*16 = 96 bytes, ivec4 count = 16 bytes → 112 total.
+    EXPECT_EQ(sizeof(ClipPlanesUbo), 112U);
+}
+
+TEST(ClipPlanesUboTest, EmptyManagerProducesZeroCount) {
+    ClipPlaneManager mgr;
+    const ClipPlanesUbo ubo = PackClipPlanes(mgr);
+    EXPECT_EQ(ubo.count.x, 0);
+}
+
+TEST(ClipPlanesUboTest, SingleEnabledPlaneCopiesEquation) {
+    ClipPlaneManager mgr;
+    const glm::vec4 eq{1.0F, 0.0F, 0.0F, -2.0F};
+    mgr.AddPlane(eq);
+
+    const ClipPlanesUbo ubo = PackClipPlanes(mgr);
+    EXPECT_EQ(ubo.count.x, 1);
+    EXPECT_FLOAT_EQ(ubo.planes[0].x, 1.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[0].y, 0.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[0].z, 0.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[0].w, -2.0F);
+}
+
+TEST(ClipPlanesUboTest, DisabledPlaneIsSkipped) {
+    ClipPlaneManager mgr;
+    const std::uint32_t a = mgr.AddPlane({1.0F, 0.0F, 0.0F, 0.0F});
+    mgr.AddPlane({0.0F, 1.0F, 0.0F, -3.0F});
+    mgr.SetEnabled(a, false);
+
+    const ClipPlanesUbo ubo = PackClipPlanes(mgr);
+    EXPECT_EQ(ubo.count.x, 1);
+    EXPECT_FLOAT_EQ(ubo.planes[0].y, 1.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[0].w, -3.0F);
+}
+
+TEST(ClipPlanesUboTest, MultipleEnabledPlanesPackSequentially) {
+    ClipPlaneManager mgr;
+    mgr.AddPlane({1.0F, 0.0F, 0.0F, -1.0F});
+    mgr.AddPlane({0.0F, 1.0F, 0.0F, -2.0F});
+    mgr.AddPlane({0.0F, 0.0F, 1.0F, -3.0F});
+
+    const ClipPlanesUbo ubo = PackClipPlanes(mgr);
+    EXPECT_EQ(ubo.count.x, 3);
+    EXPECT_FLOAT_EQ(ubo.planes[0].w, -1.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[1].w, -2.0F);
+    EXPECT_FLOAT_EQ(ubo.planes[2].w, -3.0F);
+}
+
+TEST(ClipPlanesUboTest, AllDisabledYieldsZeroCount) {
+    ClipPlaneManager mgr;
+    const std::uint32_t a = mgr.AddPlane({1.0F, 0.0F, 0.0F, 0.0F});
+    const std::uint32_t b = mgr.AddPlane({0.0F, 1.0F, 0.0F, 0.0F});
+    mgr.SetEnabled(a, false);
+    mgr.SetEnabled(b, false);
+
+    const ClipPlanesUbo ubo = PackClipPlanes(mgr);
+    EXPECT_EQ(ubo.count.x, 0);
 }
 
 TEST(ClipPlaneManagerTest, PlanesExposesAllEntriesInInsertionOrder) {
