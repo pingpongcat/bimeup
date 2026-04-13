@@ -20,12 +20,11 @@ TEST(RenderQualityPanelTest, DefaultSettingsEnableAllLights) {
     EXPECT_TRUE(settings.lighting.rim.enabled);
 }
 
-TEST(RenderQualityPanelTest, DefaultSettingsHaveMsaa1ShadowsOffSsaoOff) {
+TEST(RenderQualityPanelTest, DefaultSettingsHaveMsaa1ShadowsOff) {
     RenderQualityPanel panel;
     const auto& s = panel.GetSettings();
     EXPECT_EQ(s.msaaSamples, 1);
     EXPECT_FALSE(s.lighting.shadow.enabled);
-    EXPECT_FALSE(s.ssaoEnabled);
 }
 
 TEST(RenderQualityPanelTest, MutableSettingsAllowsExternalUpdate) {

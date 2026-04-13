@@ -9,9 +9,6 @@ struct RenderQualitySettings {
     renderer::LightingScene lighting{renderer::MakeDefaultLighting()};
 
     int msaaSamples{1};          // R.2 — 1, 2, 4, 8
-    bool ssaoEnabled{false};     // R.4
-    float ssaoRadius{0.5F};
-    float ssaoBias{0.025F};
 };
 
 class RenderQualityPanel : public Panel {

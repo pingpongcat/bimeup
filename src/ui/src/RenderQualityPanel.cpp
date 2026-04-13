@@ -98,13 +98,6 @@ void RenderQualityPanel::OnDraw() {
         ImGui::EndDisabled();
     }
 
-    if (ImGui::CollapsingHeader("SSAO")) {
-        ImGui::TextDisabled("(Stage R.4 — not yet wired)");
-        ImGui::Checkbox("Enabled", &m_settings.ssaoEnabled);
-        ImGui::SliderFloat("Radius", &m_settings.ssaoRadius, 0.05F, 2.0F);
-        ImGui::SliderFloat("Bias", &m_settings.ssaoBias, 0.0F, 0.1F);
-    }
-
     ImGui::End();
 }
 
