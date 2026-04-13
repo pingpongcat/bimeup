@@ -45,7 +45,10 @@ void Camera::RebuildProjection() {
     } else {
         float halfH = m_orthoHeight * 0.5F;
         float halfW = halfH * m_orthoAspect;
-        m_projection = glm::ortho(-halfW, halfW, -halfH, halfH, m_orthoNear, m_orthoFar);
+        // Use ZO (zero-to-one) ortho to match Vulkan's clip Z range [0, 1].
+        // glm::ortho defaults to OpenGL's [-1, 1] which clips everything in
+        // front of the ortho mid-plane in Vulkan.
+        m_projection = glm::orthoRH_ZO(-halfW, halfW, -halfH, halfH, m_orthoNear, m_orthoFar);
     }
     // Vulkan clip space has inverted Y compared to OpenGL
     m_projection[1][1] *= -1.0F;
@@ -72,6 +75,16 @@ void Camera::Zoom(float delta) {
     m_distance += delta;
     m_distance = std::clamp(m_distance, kMinDistance, kMaxDistance);
     UpdatePosition();
+}
+
+void Camera::Frame(const glm::vec3& min, const glm::vec3& max) {
+    if (min.x > max.x || min.y > max.y || min.z > max.z) {
+        return;
+    }
+    glm::vec3 size = max - min;
+    float maxDim = std::max({size.x, size.y, size.z});
+    SetOrbitTarget((min + max) * 0.5F);
+    SetDistance(std::max(maxDim * 1.5F, 0.5F));
 }
 
 void Camera::Pan(glm::vec2 delta) {

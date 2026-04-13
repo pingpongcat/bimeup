@@ -22,6 +22,11 @@ public:
     void Zoom(float delta);
     void Pan(glm::vec2 delta);
 
+    // Fit the camera so the AABB [min,max] is visible. Sets the orbit pivot to
+    // the bounds center and the distance to `max(1.5 * largest_dim, 0.5)`.
+    // Orbit angles are preserved. If max < min on any axis, this is a no-op.
+    void Frame(const glm::vec3& min, const glm::vec3& max);
+
     [[nodiscard]] glm::mat4 GetViewMatrix() const;
     [[nodiscard]] glm::mat4 GetProjectionMatrix() const;
     [[nodiscard]] glm::vec3 GetPosition() const;

@@ -193,7 +193,7 @@ TEST_F(CameraTest, SetOrthographicProducesCorrectMatrix) {
 
     float halfH = 5.0f;
     float halfW = halfH * (16.0f / 9.0f);
-    auto expected = glm::ortho(-halfW, halfW, -halfH, halfH, 0.1f, 100.0f);
+    auto expected = glm::orthoRH_ZO(-halfW, halfW, -halfH, halfH, 0.1f, 100.0f);
     expected[1][1] *= -1.0f;  // Vulkan Y flip
 
     EXPECT_TRUE(Mat4Near(m_camera.GetProjectionMatrix(), expected));
@@ -246,4 +246,45 @@ TEST_F(CameraTest, ToggleProjectionRoundTripRestoresPerspectiveMatrix) {
 
     EXPECT_EQ(m_camera.GetProjectionMode(), bimeup::renderer::ProjectionMode::Perspective);
     EXPECT_TRUE(Mat4Near(m_camera.GetProjectionMatrix(), projBefore));
+}
+
+TEST_F(CameraTest, FrameBoundsCentersPivotOnBoundsCenter) {
+    m_camera.Frame(glm::vec3(-2.0f, 0.0f, 4.0f), glm::vec3(2.0f, 6.0f, 10.0f));
+
+    // Camera orbits around the bounds center; view looks at it.
+    glm::vec3 expectedCenter(0.0f, 3.0f, 7.0f);
+    glm::vec3 forward = m_camera.GetForward();
+    glm::vec3 pos = m_camera.GetPosition();
+    // Forward from camera should point toward expected center.
+    glm::vec3 toCenter = glm::normalize(expectedCenter - pos);
+    EXPECT_GT(glm::dot(forward, toCenter), 0.999f);
+}
+
+TEST_F(CameraTest, FrameBoundsDistanceScalesWithSize) {
+    // Frame a small bounds then a large one; distance should grow.
+    m_camera.Frame(glm::vec3(-1.0f), glm::vec3(1.0f));
+    float smallDist = glm::length(m_camera.GetPosition() - glm::vec3(0.0f));
+
+    m_camera.Frame(glm::vec3(-50.0f), glm::vec3(50.0f));
+    float largeDist = glm::length(m_camera.GetPosition() - glm::vec3(0.0f));
+
+    EXPECT_GT(largeDist, smallDist);
+}
+
+TEST_F(CameraTest, FrameBoundsEnforcesMinimumDistance) {
+    // Degenerate bounds (size = 0) should still produce a usable distance.
+    m_camera.Frame(glm::vec3(5.0f), glm::vec3(5.0f));
+    float dist = glm::length(m_camera.GetPosition() - glm::vec3(5.0f));
+    EXPECT_GT(dist, 0.0f);
+}
+
+TEST_F(CameraTest, FrameBoundsInvalidMinMaxIsNoOp) {
+    // min > max on any axis => invalid bounds; camera must not change.
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    auto posBefore = m_camera.GetPosition();
+
+    m_camera.Frame(glm::vec3(1.0f), glm::vec3(-1.0f));
+
+    EXPECT_TRUE(Vec3Near(m_camera.GetPosition(), posBefore));
 }

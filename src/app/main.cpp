@@ -84,10 +84,7 @@ void FitCameraToBounds(bimeup::renderer::Camera& camera, const bimeup::scene::AA
     if (!bounds.IsValid()) {
         return;
     }
-    glm::vec3 size = bounds.GetSize();
-    float maxDim = std::max({size.x, size.y, size.z});
-    camera.SetOrbitTarget(bounds.GetCenter());
-    camera.SetDistance(std::max(maxDim * 1.5F, 0.5F));
+    camera.Frame(bounds.GetMin(), bounds.GetMax());
 }
 
 /// Collect unique mesh handles from visible scene nodes (avoids drawing shared batched meshes multiple times).
@@ -520,6 +517,8 @@ int main(int argc, char* argv[]) {
         camera.Zoom(static_cast<float>(-yOffset) * 0.5F);
     });
 
+    bool fitToViewRequested = false;
+
     input.OnKey([&](bimeup::platform::Key key, bool pressed) {
         if (key == bimeup::platform::Key::Escape && pressed) {
             glfwSetWindowShouldClose(window.GetHandle(), GLFW_TRUE);
@@ -534,6 +533,35 @@ int main(int argc, char* argv[]) {
         if (key == bimeup::platform::Key::Numpad5 && pressed) {
             camera.ToggleProjection();
             LOG_INFO("Projection: {}", camera.IsOrthographic() ? "Orthographic" : "Perspective");
+        }
+        // Frame-all: same as toolbar Fit-to-View.
+        if (key == bimeup::platform::Key::Home && pressed) {
+            fitToViewRequested = true;
+        }
+        // Frame-selected: fit camera to union-bounds of selected elements.
+        // Falls back to frame-all when nothing is selected.
+        if (key == bimeup::platform::Key::NumpadDecimal && pressed) {
+            bimeup::scene::AABB selBounds;
+            for (auto expressId : selection.Ids()) {
+                auto it = expressIdToNodes.find(expressId);
+                if (it == expressIdToNodes.end()) continue;
+                for (auto nodeId : it->second) {
+                    const auto& node = sceneResult->scene.GetNode(nodeId);
+                    if (node.bounds.IsValid()) {
+                        selBounds = bimeup::scene::AABB::Merge(selBounds, node.bounds);
+                    }
+                }
+            }
+            if (selBounds.IsValid()) {
+                FitCameraToBounds(camera, selBounds);
+            } else {
+                fitToViewRequested = true;
+            }
+        }
+        // Reset pivot: park the orbit target at the world origin (Blender Shift+C).
+        if (key == bimeup::platform::Key::C && pressed &&
+            input.IsKeyDown(bimeup::platform::Key::LeftShift)) {
+            camera.SetOrbitTarget(glm::vec3(0.0F));
         }
     });
 
@@ -584,8 +612,6 @@ int main(int argc, char* argv[]) {
     auto selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
         eventBus, *propertyPanel,
         [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
-
-    bool fitToViewRequested = false;
 
     uiManager.AddPanel(std::move(toolbarOwned));
     uiManager.AddPanel(std::move(hierarchyOwned));

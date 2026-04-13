@@ -1,7 +1,9 @@
 find_program(GLSLC glslc REQUIRED)
 
 function(bimeup_compile_shaders TARGET SHADER_DIR OUTPUT_DIR)
-    file(GLOB SHADER_SOURCES
+    # CONFIGURE_DEPENDS makes CMake re-glob on every build so newly-added shader
+    # files are picked up without a manual reconfigure.
+    file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS
         "${SHADER_DIR}/*.vert"
         "${SHADER_DIR}/*.frag"
         "${SHADER_DIR}/*.comp"
