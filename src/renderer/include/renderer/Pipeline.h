@@ -18,6 +18,7 @@ struct PipelineConfig {
     bool depthTestEnable = false;
     bool depthWriteEnable = false;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
+    VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts;

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: R — Render Quality
-## Current Task: R.2
+## Current Task: R.3
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -91,7 +91,7 @@
 
 ## Stage R — Render Quality
 - [x] R.1 Three-point lighting (key/fill/rim) + ImGui Render Quality panel scaffold
-- [ ] R.2 MSAA (toggle 1×/2×/4×/8×) with resolve pass
+- [x] R.2 MSAA (toggle 1×/2×/4×/8×) with resolve pass
 - [ ] R.3 Shadow mapping for key light (depth pass + PCF sampling)
 - [ ] R.4 SSAO (depth+normal prepass, kernel + blur + composite)
 

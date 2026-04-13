@@ -15,7 +15,8 @@ class RenderLoop {
 public:
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-    RenderLoop(const Device& device, Swapchain& swapchain);
+    RenderLoop(const Device& device, Swapchain& swapchain,
+               VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
     ~RenderLoop();
 
     RenderLoop(const RenderLoop&) = delete;
@@ -34,6 +35,13 @@ public:
     [[nodiscard]] uint32_t GetCurrentFrameIndex() const;
     [[nodiscard]] uint32_t GetCurrentImageIndex() const;
     [[nodiscard]] VkRenderPass GetRenderPass() const;
+    [[nodiscard]] VkSampleCountFlagBits GetSampleCount() const;
+
+    /// Change the MSAA sample count. Waits for GPU idle, tears down the render
+    /// pass / color & depth attachments / framebuffers, and rebuilds them. The
+    /// render pass handle is recreated — any pipeline bound to the previous
+    /// render pass must be rebuilt by the caller before the next BeginFrame().
+    void SetSampleCount(VkSampleCountFlagBits samples);
 
 private:
     void CreateCommandPool();
@@ -65,6 +73,11 @@ private:
     VkImage m_depthImage = VK_NULL_HANDLE;
     VkImageView m_depthImageView = VK_NULL_HANDLE;
     VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
+    // Multisampled color attachment (only used when m_samples > 1x; resolved into the swapchain).
+    VkImage m_colorImage = VK_NULL_HANDLE;
+    VkImageView m_colorImageView = VK_NULL_HANDLE;
+    VmaAllocation m_colorAllocation = VK_NULL_HANDLE;
+    VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkFramebuffer> m_framebuffers;
 
     uint32_t m_currentFrame = 0;

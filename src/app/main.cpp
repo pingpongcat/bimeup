@@ -15,6 +15,7 @@
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
 #include <renderer/Lighting.h>
+#include <renderer/Msaa.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
@@ -152,7 +153,10 @@ int main(int argc, char* argv[]) {
     auto fbSize = window.GetFramebufferSize();
     bimeup::renderer::Swapchain swapchain(
         device, surface, VkExtent2D{static_cast<uint32_t>(fbSize.x), static_cast<uint32_t>(fbSize.y)});
-    bimeup::renderer::RenderLoop renderLoop(device, swapchain);
+    VkSampleCountFlags supportedSamples =
+        bimeup::renderer::GetUsableSampleCounts(device.GetPhysicalDevice());
+    VkSampleCountFlagBits currentSamples = VK_SAMPLE_COUNT_1_BIT;
+    bimeup::renderer::RenderLoop renderLoop(device, swapchain, currentSamples);
 
     // Shaders
     std::string shaderDir = BIMEUP_SHADER_DIR;
@@ -244,11 +248,23 @@ int main(int argc, char* argv[]) {
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
 
-    pipelineConfig.polygonMode = bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
-    bimeup::renderer::Pipeline shadedPipeline(device, vertShader, fragShader, pipelineConfig);
+    auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
+                              std::unique_ptr<bimeup::renderer::Pipeline>& wire) {
+        pipelineConfig.renderPass = renderLoop.GetRenderPass();
+        pipelineConfig.rasterizationSamples = renderLoop.GetSampleCount();
+        pipelineConfig.polygonMode =
+            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
+        shaded = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
+                                                              pipelineConfig);
+        pipelineConfig.polygonMode =
+            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Wireframe);
+        wire = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
+                                                            pipelineConfig);
+    };
 
-    pipelineConfig.polygonMode = bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Wireframe);
-    bimeup::renderer::Pipeline wireframePipeline(device, vertShader, fragShader, pipelineConfig);
+    std::unique_ptr<bimeup::renderer::Pipeline> shadedPipeline;
+    std::unique_ptr<bimeup::renderer::Pipeline> wireframePipeline;
+    buildPipelines(shadedPipeline, wireframePipeline);
 
     auto renderMode = bimeup::renderer::RenderMode::Shaded;
 
@@ -473,18 +489,22 @@ int main(int argc, char* argv[]) {
 
     // UI
     bimeup::ui::UIManager uiManager;
-    uiManager.InitVulkanBackend({
-        .window = window.GetHandle(),
-        .instance = vulkanContext.GetInstance(),
-        .physicalDevice = device.GetPhysicalDevice(),
-        .device = device.GetDevice(),
-        .queueFamily = device.GetGraphicsQueueFamily(),
-        .queue = device.GetGraphicsQueue(),
-        .renderPass = renderLoop.GetRenderPass(),
-        .minImageCount = swapchain.GetImageCount(),
-        .imageCount = swapchain.GetImageCount(),
-        .apiVersion = VK_API_VERSION_1_2,
-    });
+    auto initImGui = [&] {
+        uiManager.InitVulkanBackend({
+            .window = window.GetHandle(),
+            .instance = vulkanContext.GetInstance(),
+            .physicalDevice = device.GetPhysicalDevice(),
+            .device = device.GetDevice(),
+            .queueFamily = device.GetGraphicsQueueFamily(),
+            .queue = device.GetGraphicsQueue(),
+            .renderPass = renderLoop.GetRenderPass(),
+            .minImageCount = swapchain.GetImageCount(),
+            .imageCount = swapchain.GetImageCount(),
+            .apiVersion = VK_API_VERSION_1_2,
+            .msaaSamples = renderLoop.GetSampleCount(),
+        });
+    };
+    initImGui();
 
     bimeup::ui::Theme::Apply();
 
@@ -559,6 +579,26 @@ int main(int argc, char* argv[]) {
             FitCameraToBounds(camera, ComputeSceneBounds(sceneResult->scene));
         }
 
+        // MSAA sample-count change from the Render Quality panel. Clamp request
+        // against device support, then rebuild render pass / attachments /
+        // pipelines / ImGui backend to match.
+        {
+            int requested = renderQualityPanel->GetSettings().msaaSamples;
+            VkSampleCountFlagBits desired =
+                bimeup::renderer::ClampSampleCount(requested, supportedSamples);
+            if (desired != currentSamples) {
+                renderLoop.WaitIdle();
+                uiManager.ShutdownVulkanBackend();
+                renderLoop.SetSampleCount(desired);
+                currentSamples = desired;
+                buildPipelines(shadedPipeline, wireframePipeline);
+                initImGui();
+                // Reflect the clamped value back to the panel so the UI doesn't
+                // claim e.g. 8x when the device only supports 4x.
+                renderQualityPanel->MutableSettings().msaaSamples = static_cast<int>(desired);
+            }
+        }
+
         // Sync overlay & toolbar state.
         overlay->SetFps(smoothedFps);
         overlay->SetCameraPosition(camera.GetPosition());
@@ -614,8 +654,8 @@ int main(int argc, char* argv[]) {
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         auto& activePipeline = (renderMode == bimeup::renderer::RenderMode::Shaded)
-                                    ? shadedPipeline
-                                    : wireframePipeline;
+                                    ? *shadedPipeline
+                                    : *wireframePipeline;
         activePipeline.Bind(cmd);
         descriptorSet.Bind(cmd, activePipeline.GetLayout());
 

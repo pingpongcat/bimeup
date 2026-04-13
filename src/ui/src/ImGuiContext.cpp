@@ -58,7 +58,8 @@ void ImGuiContext::InitVulkanBackend(const VulkanBackendInfo& info) {
     init.ImageCount = info.imageCount;
     init.PipelineInfoMain.RenderPass = info.renderPass;
     init.PipelineInfoMain.Subpass = 0;
-    init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init.PipelineInfoMain.MSAASamples =
+        info.msaaSamples != 0 ? info.msaaSamples : VK_SAMPLE_COUNT_1_BIT;
     init.CheckVkResultFn = CheckVkResult;
 
     if (!ImGui_ImplVulkan_Init(&init)) {

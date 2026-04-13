@@ -17,6 +17,7 @@ struct VulkanBackendInfo {
     uint32_t minImageCount = 2;
     uint32_t imageCount = 2;
     uint32_t apiVersion = VK_API_VERSION_1_0;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 };
 
 class ImGuiContext {

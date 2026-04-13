@@ -63,7 +63,6 @@ void RenderQualityPanel::OnDraw() {
     }
 
     if (ImGui::CollapsingHeader("MSAA")) {
-        ImGui::TextDisabled("(Stage R.2 — not yet wired)");
         static constexpr std::array<int, 4> kSamples{1, 2, 4, 8};
         for (int s : kSamples) {
             char label[8];
