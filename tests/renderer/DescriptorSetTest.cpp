@@ -2,6 +2,7 @@
 #include <renderer/DescriptorSet.h>
 #include <renderer/Buffer.h>
 #include <renderer/Device.h>
+#include <renderer/ShadowPass.h>
 #include <renderer/VulkanContext.h>
 
 using bimeup::renderer::Buffer;
@@ -10,6 +11,7 @@ using bimeup::renderer::DescriptorPool;
 using bimeup::renderer::DescriptorSet;
 using bimeup::renderer::DescriptorSetLayout;
 using bimeup::renderer::Device;
+using bimeup::renderer::ShadowMap;
 using bimeup::renderer::VulkanContext;
 
 class DescriptorSetTest : public ::testing::Test {
@@ -109,6 +111,23 @@ TEST_F(DescriptorSetTest, AllocateMultipleSets) {
     // All three should be distinct
     EXPECT_NE(set1.GetSet(), set2.GetSet());
     EXPECT_NE(set2.GetSet(), set3.GetSet());
+}
+
+TEST_F(DescriptorSetTest, UpdateWithImage) {
+    // Shadow map provides a real image view + sampler for the combined-image-sampler
+    // descriptor update path used by the main pass to sample shadow depth.
+    ShadowMap shadowMap(*m_device, 512U);
+
+    DescriptorSetLayout layout(*m_device, {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}
+    });
+    DescriptorPool pool(*m_device, 1, {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}
+    });
+    DescriptorSet set(*m_device, pool, layout);
+
+    EXPECT_NO_THROW(set.UpdateImage(0, shadowMap.GetImageView(), shadowMap.GetSampler(),
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
 }
 
 TEST_F(DescriptorSetTest, DestructorCleansUp) {

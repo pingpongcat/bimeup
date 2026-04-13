@@ -71,6 +71,8 @@ public:
     [[nodiscard]] VkDescriptorSet GetSet() const;
 
     void UpdateBuffer(uint32_t binding, const Buffer& buffer);
+    void UpdateImage(uint32_t binding, VkImageView imageView, VkSampler sampler,
+                     VkImageLayout imageLayout);
     void Bind(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, uint32_t setIndex = 0) const;
 
 private:

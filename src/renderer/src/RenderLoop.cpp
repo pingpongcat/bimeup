@@ -56,6 +56,10 @@ bool RenderLoop::BeginFrame() {
         throw std::runtime_error("Failed to begin recording command buffer");
     }
 
+    if (m_preMainPass) {
+        m_preMainPass(cmd);
+    }
+
     std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = m_clearColor;
     clearValues[1].depthStencil = {1.0F, 0};
@@ -134,6 +138,10 @@ void RenderLoop::WaitIdle() {
 
 void RenderLoop::SetClearColor(float r, float g, float b, float a) {
     m_clearColor = {{r, g, b, a}};
+}
+
+void RenderLoop::SetPreMainPassCallback(PreMainPassCallback callback) {
+    m_preMainPass = std::move(callback);
 }
 
 VkCommandBuffer RenderLoop::GetCurrentCommandBuffer() const {

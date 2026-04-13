@@ -104,6 +104,26 @@ TEST_F(RenderLoopTest, FrameIndexCycles) {
     m_renderLoop->WaitIdle();
 }
 
+TEST_F(RenderLoopTest, PreMainPassCallbackInvokedEachFrame) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+
+    int calls = 0;
+    VkCommandBuffer capturedCmd = VK_NULL_HANDLE;
+    m_renderLoop->SetPreMainPassCallback([&](VkCommandBuffer cmd) {
+        ++calls;
+        capturedCmd = cmd;
+    });
+
+    bool began = m_renderLoop->BeginFrame();
+    ASSERT_TRUE(began);
+    // Callback must have run during BeginFrame with the frame's active command buffer.
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(capturedCmd, m_renderLoop->GetCurrentCommandBuffer());
+
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
 TEST_F(RenderLoopTest, SetClearColor) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
 

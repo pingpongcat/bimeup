@@ -116,8 +116,9 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = config.colorAttachmentCount;
+    colorBlending.pAttachments =
+        config.colorAttachmentCount == 0 ? nullptr : &colorBlendAttachment;
 
     std::array<VkDynamicState, 2> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,

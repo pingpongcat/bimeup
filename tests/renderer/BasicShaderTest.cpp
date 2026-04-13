@@ -57,6 +57,16 @@ TEST_F(BasicShaderTest, VertexShaderStageInfoCorrect) {
     EXPECT_STREQ(info.pName, "main");
 }
 
+TEST_F(BasicShaderTest, ShadowVertexShaderCompiledToValidSpirv) {
+    std::string path = std::string(BIMEUP_SHADER_DIR) + "/shadow.vert.spv";
+    ASSERT_TRUE(std::filesystem::exists(path)) << "Compiled shadow vertex shader not found: " << path;
+
+    Shader shadowVert(*m_device, ShaderStage::Vertex, path);
+
+    EXPECT_NE(shadowVert.GetModule(), VK_NULL_HANDLE);
+    EXPECT_EQ(shadowVert.GetStage(), ShaderStage::Vertex);
+}
+
 TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     Shader fragShader(*m_device, ShaderStage::Fragment, path);

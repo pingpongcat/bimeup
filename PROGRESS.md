@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: R — Render Quality
-## Current Task: R.3d
+## Current Task: R.4
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -95,7 +95,7 @@
 - [x] R.3a Shadow mapping — light-space matrix math (`renderer::ComputeLightSpaceMatrix`) + unit tests
 - [x] R.3b Shadow mapping — depth-only render pass + shadow map image/sampler
 - [x] R.3c Shadow mapping — LightingUbo shadow fields + `ComputePcfShadow` helper + panel wiring (enable/resolution/bias/PCF radius)
-- [ ] R.3d Shadow mapping — `basic.{vert,frag}` PCF code + `sampler2DShadow` descriptor binding + depth pass executed each frame from `main.cpp`
+- [x] R.3d Shadow mapping — `basic.{vert,frag}` PCF code + `sampler2DShadow` descriptor binding + depth pass executed each frame from `main.cpp`
 - [ ] R.4 SSAO (depth+normal prepass, kernel + blur + composite)
 
 ## Stage 8 — Performance & Large Models

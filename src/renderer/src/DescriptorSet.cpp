@@ -123,6 +123,25 @@ void DescriptorSet::UpdateBuffer(uint32_t binding, const Buffer& buffer) {
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
+void DescriptorSet::UpdateImage(uint32_t binding, VkImageView imageView, VkSampler sampler,
+                                VkImageLayout imageLayout) {
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = sampler;
+    imageInfo.imageView = imageView;
+    imageInfo.imageLayout = imageLayout;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
 void DescriptorSet::Bind(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
                          uint32_t setIndex) const {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, setIndex, 1,

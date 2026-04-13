@@ -20,6 +20,7 @@
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
 #include <renderer/Shader.h>
+#include <renderer/ShadowPass.h>
 #include <renderer/Swapchain.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
@@ -164,14 +165,20 @@ int main(int argc, char* argv[]) {
                                         shaderDir + "/basic.vert.spv");
     bimeup::renderer::Shader fragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                         shaderDir + "/basic.frag.spv");
+    bimeup::renderer::Shader shadowVertShader(device, bimeup::renderer::ShaderStage::Vertex,
+                                              shaderDir + "/shadow.vert.spv");
+    bimeup::renderer::Shader shadowFragShader(device, bimeup::renderer::ShaderStage::Fragment,
+                                              shaderDir + "/shadow.frag.spv");
 
-    // Descriptor set: camera UBO (vertex) + lighting UBO (fragment)
+    // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     bimeup::renderer::DescriptorSetLayout dsLayout(device, {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
     });
     bimeup::renderer::DescriptorPool dsPool(device, 1, {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
     });
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
 
@@ -185,6 +192,16 @@ int main(int argc, char* argv[]) {
     bimeup::renderer::Buffer lightingBuffer(device, bimeup::renderer::BufferType::Uniform,
                                             sizeof(bimeup::renderer::LightingUbo), &lightingUbo);
     descriptorSet.UpdateBuffer(1, lightingBuffer);
+
+    // Shadow map — created lazily on first enable / resolution change from the panel.
+    std::unique_ptr<bimeup::renderer::ShadowMap> shadowMap;
+    std::uint32_t shadowMapResolution = 0;
+
+    // Placeholder 1×1 shadow map used before the first real build, so the descriptor
+    // is always valid (Vulkan validation flags uninitialized COMBINED_IMAGE_SAMPLER reads).
+    bimeup::renderer::ShadowMap placeholderShadow(device, 1U);
+    descriptorSet.UpdateImage(2, placeholderShadow.GetImageView(), placeholderShadow.GetSampler(),
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // MeshBuffer for all geometry
     bimeup::renderer::MeshBuffer meshBuffer(device);
@@ -265,6 +282,29 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<bimeup::renderer::Pipeline> shadedPipeline;
     std::unique_ptr<bimeup::renderer::Pipeline> wireframePipeline;
     buildPipelines(shadedPipeline, wireframePipeline);
+
+    // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
+    VkPushConstantRange shadowPushRange{};
+    shadowPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    shadowPushRange.offset = 0;
+    shadowPushRange.size = sizeof(glm::mat4);
+
+    std::unique_ptr<bimeup::renderer::Pipeline> shadowPipeline;
+    auto buildShadowPipeline = [&] {
+        if (!shadowMap) return;
+        bimeup::renderer::PipelineConfig cfg{};
+        cfg.renderPass = shadowMap->GetRenderPass();
+        cfg.vertexBindings = {binding};
+        cfg.vertexAttributes = {attrs.begin(), attrs.end()};
+        cfg.pushConstantRanges = {shadowPushRange};
+        cfg.depthTestEnable = true;
+        cfg.depthWriteEnable = true;
+        cfg.cullMode = VK_CULL_MODE_FRONT_BIT;  // reduce self-shadow acne on front faces
+        cfg.colorAttachmentCount = 0;
+        cfg.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        shadowPipeline = std::make_unique<bimeup::renderer::Pipeline>(
+            device, shadowVertShader, shadowFragShader, cfg);
+    };
 
     auto renderMode = bimeup::renderer::RenderMode::Shaded;
 
@@ -557,6 +597,55 @@ int main(int argc, char* argv[]) {
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
 
+    // Depth-only shadow pass — recorded before the main render pass each frame
+    // when shadows are enabled. Renders scene geometry from the key light's POV
+    // into `shadowMap`; the main pass then samples it via sampler2DShadow.
+    renderLoop.SetPreMainPassCallback([&](VkCommandBuffer cmd) {
+        if (!shadowMap || !shadowPipeline ||
+            !renderQualityPanel->GetSettings().lighting.shadow.enabled) {
+            return;
+        }
+
+        VkClearValue clear{};
+        clear.depthStencil = {1.0F, 0};
+
+        VkRenderPassBeginInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpInfo.renderPass = shadowMap->GetRenderPass();
+        rpInfo.framebuffer = shadowMap->GetFramebuffer();
+        rpInfo.renderArea.offset = {0, 0};
+        rpInfo.renderArea.extent = {shadowMap->GetResolution(), shadowMap->GetResolution()};
+        rpInfo.clearValueCount = 1;
+        rpInfo.pClearValues = &clear;
+
+        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport vp{};
+        vp.width = static_cast<float>(shadowMap->GetResolution());
+        vp.height = static_cast<float>(shadowMap->GetResolution());
+        vp.minDepth = 0.0F;
+        vp.maxDepth = 1.0F;
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+
+        VkRect2D sc{};
+        sc.extent = {shadowMap->GetResolution(), shadowMap->GetResolution()};
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+
+        shadowPipeline->Bind(cmd);
+        meshBuffer.Bind(cmd);
+
+        const glm::mat4& ls =
+            renderQualityPanel->GetSettings().lighting.shadow.lightSpaceMatrix;
+        for (const auto& [handle, transform] : drawCalls) {
+            glm::mat4 lightSpaceModel = ls * transform;
+            vkCmdPushConstants(cmd, shadowPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(glm::mat4), &lightSpaceModel);
+            meshBuffer.Draw(cmd, handle);
+        }
+
+        vkCmdEndRenderPass(cmd);
+    });
+
     // FPS tracking
     double lastFrameTime = glfwGetTime();
     float smoothedFps = 0.0F;
@@ -625,6 +714,32 @@ int main(int argc, char* argv[]) {
         auto* mapped = static_cast<CameraUBO*>(uboBuffer.Map());
         *mapped = ubo;
         uboBuffer.Unmap();
+
+        // Resolve shadow settings: compute light-space matrix from current scene
+        // bounds + key light direction, and (re)build the shadow map if resolution
+        // or enabled-state changed.
+        auto& shadowSettings = renderQualityPanel->MutableSettings().lighting.shadow;
+        {
+            auto sceneBounds = ComputeSceneBounds(sceneResult->scene);
+            if (sceneBounds.IsValid()) {
+                glm::vec3 size = sceneBounds.GetSize();
+                float radius = 0.5F * glm::length(size);
+                shadowSettings.lightSpaceMatrix = bimeup::renderer::ComputeLightSpaceMatrix(
+                    renderQualityPanel->GetSettings().lighting.key.direction,
+                    sceneBounds.GetCenter(), std::max(radius, 1.0F));
+            }
+
+            if (shadowSettings.enabled &&
+                (!shadowMap || shadowMapResolution != shadowSettings.mapResolution)) {
+                renderLoop.WaitIdle();
+                shadowMap = std::make_unique<bimeup::renderer::ShadowMap>(
+                    device, shadowSettings.mapResolution);
+                shadowMapResolution = shadowSettings.mapResolution;
+                buildShadowPipeline();
+                descriptorSet.UpdateImage(2, shadowMap->GetImageView(), shadowMap->GetSampler(),
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+        }
 
         // Update lighting UBO from the Render Quality panel.
         lightingUbo = bimeup::renderer::PackLighting(renderQualityPanel->GetSettings().lighting);

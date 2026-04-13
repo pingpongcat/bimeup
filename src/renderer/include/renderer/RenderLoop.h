@@ -4,6 +4,7 @@
 #include <vk_mem_alloc.h>
 
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace bimeup::renderer {
@@ -30,6 +31,12 @@ public:
     void WaitIdle();
 
     void SetClearColor(float r, float g, float b, float a = 1.0f);
+
+    /// Register a callback invoked inside BeginFrame() after the command buffer is
+    /// begun but BEFORE the main swapchain render pass starts — suitable for
+    /// recording a depth-only shadow pass whose output is sampled by the main pass.
+    using PreMainPassCallback = std::function<void(VkCommandBuffer)>;
+    void SetPreMainPassCallback(PreMainPassCallback callback);
 
     [[nodiscard]] VkCommandBuffer GetCurrentCommandBuffer() const;
     [[nodiscard]] uint32_t GetCurrentFrameIndex() const;
@@ -84,6 +91,8 @@ private:
     uint32_t m_currentImageIndex = 0;
     VkClearColorValue m_clearColor = {{0.1f, 0.1f, 0.1f, 1.0f}};
     bool m_frameStarted = false;
+
+    PreMainPassCallback m_preMainPass;
 };
 
 }  // namespace bimeup::renderer

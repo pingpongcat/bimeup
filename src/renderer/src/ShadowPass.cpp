@@ -108,8 +108,9 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
         throw std::runtime_error("Failed to create shadow map image view");
     }
 
-    // Border-clamped, linear-filtered sampler. Comparison is wired in R.3c when PCF
-    // is added; a plain sampler works for the resource-creation stage.
+    // Comparison sampler for GLSL sampler2DShadow: depth comparison is done inside
+    // the sampler (returns 1.0 if ref <= stored depth, 0.0 otherwise, filtered).
+    // Border = opaque white so out-of-bounds UVs read as lit.
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -119,6 +120,8 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_TRUE;
+    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     samplerInfo.maxLod = 1.0F;
     if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr,
                         &m_sampler) != VK_SUCCESS) {
