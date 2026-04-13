@@ -73,8 +73,10 @@
 - [x] 6.10 Wire UI panels (UIManager, Toolbar, Hierarchy, Property, ViewportOverlay) into main.cpp
 - [x] 6.11 Fix toolbar fit-to-view zoom + wire hover picking into main.cpp
 - [x] 6.12 Enable fillModeNonSolid, fix surface/swapchain destroy order, per-image swapchain semaphores
+- [x] 6.13 Replace demo cube with bundled sample.ifc as default startup scene
 
 ## Stage 7 — BIM Viewer Features
+- [ ] 7.0 Fix element selection (nodeId→expressId + batching-aware raycast) — blocker before 7.1
 - [ ] 7.1 Distance measurement tool
 - [ ] 7.2 Point snapping
 - [ ] 7.3 Clipping planes

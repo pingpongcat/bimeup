@@ -55,52 +55,6 @@ struct CameraUBO {
     glm::mat4 projection;
 };
 
-void MakeCube(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
-    // clang-format off
-    vertices = {
-        // Front (red)
-        {{-0.5F, -0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
-        {{ 0.5F, -0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
-        {{ 0.5F,  0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
-        {{-0.5F,  0.5F,  0.5F}, { 0, 0, 1}, {1, 0, 0, 1}},
-        // Back (green)
-        {{ 0.5F, -0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
-        {{-0.5F, -0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
-        {{-0.5F,  0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
-        {{ 0.5F,  0.5F, -0.5F}, { 0, 0,-1}, {0, 1, 0, 1}},
-        // Top (blue)
-        {{-0.5F,  0.5F,  0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
-        {{ 0.5F,  0.5F,  0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
-        {{ 0.5F,  0.5F, -0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
-        {{-0.5F,  0.5F, -0.5F}, { 0, 1, 0}, {0, 0, 1, 1}},
-        // Bottom (yellow)
-        {{-0.5F, -0.5F, -0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
-        {{ 0.5F, -0.5F, -0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
-        {{ 0.5F, -0.5F,  0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
-        {{-0.5F, -0.5F,  0.5F}, { 0,-1, 0}, {1, 1, 0, 1}},
-        // Right (cyan)
-        {{ 0.5F, -0.5F,  0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
-        {{ 0.5F, -0.5F, -0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
-        {{ 0.5F,  0.5F, -0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
-        {{ 0.5F,  0.5F,  0.5F}, { 1, 0, 0}, {0, 1, 1, 1}},
-        // Left (magenta)
-        {{-0.5F, -0.5F, -0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
-        {{-0.5F, -0.5F,  0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
-        {{-0.5F,  0.5F,  0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
-        {{-0.5F,  0.5F, -0.5F}, {-1, 0, 0}, {1, 0, 1, 1}},
-    };
-    // clang-format on
-
-    indices = {
-        0,  1,  2,  2,  3,  0,   // front
-        4,  5,  6,  6,  7,  4,   // back
-        8,  9,  10, 10, 11, 8,   // top
-        12, 13, 14, 14, 15, 12,  // bottom
-        16, 17, 18, 18, 19, 16,  // right
-        20, 21, 22, 22, 23, 20,  // left
-    };
-}
-
 /// Compute scene bounding box from all nodes that have geometry.
 bimeup::scene::AABB ComputeSceneBounds(const bimeup::scene::Scene& scene) {
     bimeup::scene::AABB bounds;
@@ -215,39 +169,26 @@ int main(int argc, char* argv[]) {
     // MeshBuffer for all geometry
     bimeup::renderer::MeshBuffer meshBuffer(device);
 
-    // Load IFC file or fall back to cube
+    // Load IFC file (use CLI argument if given, otherwise the bundled sample).
+    std::string ifcPath = (argc > 1) ? std::string(argv[1]) : std::string(BIMEUP_SAMPLE_IFC);
+    LOG_INFO("Loading IFC file: {}", ifcPath);
+
     std::optional<bimeup::scene::BuildResult> sceneResult;
     bimeup::ifc::IfcModel ifcModel;
-    bool hasScene = false;
 
-    if (argc > 1) {
-        std::string ifcPath = argv[1];
-        LOG_INFO("Loading IFC file: {}", ifcPath);
-
-        if (ifcModel.LoadFromFile(ifcPath)) {
-            LOG_INFO("IFC loaded: {} elements", ifcModel.GetElementCount());
-
-            bimeup::scene::SceneBuilder builder;
-            builder.SetBatchingEnabled(true);
-            sceneResult = builder.Build(ifcModel);
-            bimeup::core::SceneUploader::Upload(*sceneResult, meshBuffer);
-            hasScene = true;
-
-            LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
-                     sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
-        } else {
-            LOG_ERROR("Failed to load IFC file: {}", ifcPath);
-        }
+    if (!ifcModel.LoadFromFile(ifcPath)) {
+        LOG_ERROR("Failed to load IFC file: {}", ifcPath);
+        return 1;
     }
+    LOG_INFO("IFC loaded: {} elements", ifcModel.GetElementCount());
 
-    // If no IFC loaded, upload a fallback cube
-    bimeup::renderer::MeshHandle cubeHandle = bimeup::renderer::MeshBuffer::InvalidHandle;
-    if (!hasScene) {
-        LOG_INFO("No IFC file loaded — showing demo cube");
-        bimeup::renderer::MeshData cubeMeshData;
-        MakeCube(cubeMeshData.vertices, cubeMeshData.indices);
-        cubeHandle = meshBuffer.Upload(cubeMeshData);
-    }
+    bimeup::scene::SceneBuilder builder;
+    builder.SetBatchingEnabled(true);
+    sceneResult = builder.Build(ifcModel);
+    bimeup::core::SceneUploader::Upload(*sceneResult, meshBuffer);
+
+    LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
+             sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
 
     // Pipeline
     VkVertexInputBindingDescription binding{};
@@ -287,35 +228,25 @@ int main(int argc, char* argv[]) {
     camera.SetPerspective(45.0F, static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y),
                           0.1F, 1000.0F);
 
-    if (hasScene) {
-        auto bounds = ComputeSceneBounds(sceneResult->scene);
-        FitCameraToBounds(camera, bounds);
-        if (bounds.IsValid()) {
-            glm::vec3 center = bounds.GetCenter();
-            glm::vec3 size = bounds.GetSize();
-            LOG_INFO("Scene bounds: center=({:.1f},{:.1f},{:.1f}) size=({:.1f},{:.1f},{:.1f})",
-                     center.x, center.y, center.z, size.x, size.y, size.z);
-        }
-    } else {
-        camera.SetOrbitTarget(glm::vec3(0.0F));
+    auto bounds = ComputeSceneBounds(sceneResult->scene);
+    FitCameraToBounds(camera, bounds);
+    if (bounds.IsValid()) {
+        glm::vec3 center = bounds.GetCenter();
+        glm::vec3 size = bounds.GetSize();
+        LOG_INFO("Scene bounds: center=({:.1f},{:.1f},{:.1f}) size=({:.1f},{:.1f},{:.1f})",
+                 center.x, center.y, center.z, size.x, size.y, size.z);
     }
 
     // Collect draw calls for the scene
-    std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>> drawCalls;
-    if (hasScene) {
-        drawCalls = CollectDrawCalls(sceneResult->scene);
-        LOG_INFO("Draw calls: {}", drawCalls.size());
-    }
+    std::vector<std::pair<bimeup::renderer::MeshHandle, glm::mat4>> drawCalls =
+        CollectDrawCalls(sceneResult->scene);
+    LOG_INFO("Draw calls: {}", drawCalls.size());
 
     // Event bus + selection (must exist before input callbacks so picking can publish events).
     bimeup::core::EventBus eventBus;
     bimeup::core::Selection selection(eventBus);
 
-    // IFC hierarchy (only when a model was loaded).
-    std::unique_ptr<bimeup::ifc::IfcHierarchy> hierarchy;
-    if (hasScene) {
-        hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
-    }
+    auto hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
 
     // Input: orbit camera with mouse
     bool rightMouseDown = false;
@@ -343,7 +274,7 @@ int main(int argc, char* argv[]) {
             middleMouseDown = pressed;
             lastMousePos = input.GetMousePosition();
         }
-        if (btn == bimeup::platform::MouseButton::Left && pressed && hasScene && !imguiWantsMouse()) {
+        if (btn == bimeup::platform::MouseButton::Left && pressed && !imguiWantsMouse()) {
             auto mouse = input.GetMousePosition();
             auto [view, proj] = buildViewProj();
             bimeup::core::PickElement(
@@ -367,7 +298,7 @@ int main(int argc, char* argv[]) {
                                  static_cast<float>(delta.y) * 0.005F));
         }
 
-        if (hasScene && !rightMouseDown && !middleMouseDown && !imguiWantsMouse()) {
+        if (!rightMouseDown && !middleMouseDown && !imguiWantsMouse()) {
             auto [view, proj] = buildViewProj();
             bimeup::core::HoverElement(
                 glm::vec2(static_cast<float>(x), static_cast<float>(y)),
@@ -425,14 +356,10 @@ int main(int argc, char* argv[]) {
     hierarchyPanel->SetEventBus(&eventBus);
     toolbar->SetRenderMode(renderMode);
 
-    // Bridge selection events → property panel (only meaningful with a model).
-    std::unique_ptr<bimeup::ui::SelectionBridge> selectionBridge;
-    if (hierarchy) {
-        hierarchyPanel->SetRoot(&hierarchy->GetRoot());
-        selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
-            eventBus, *propertyPanel,
-            [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
-    }
+    hierarchyPanel->SetRoot(&hierarchy->GetRoot());
+    auto selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
+        eventBus, *propertyPanel,
+        [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
 
     bool fitToViewRequested = false;
 
@@ -465,15 +392,10 @@ int main(int argc, char* argv[]) {
             smoothedFps = smoothedFps == 0.0F ? instantFps : (smoothedFps * 0.9F + instantFps * 0.1F);
         }
 
-        // Fit-to-view request from toolbar: recenter + reset zoom to fit scene bounds (or cube).
+        // Fit-to-view request from toolbar: recenter + reset zoom to fit scene bounds.
         if (fitToViewRequested) {
             fitToViewRequested = false;
-            if (hasScene) {
-                FitCameraToBounds(camera, ComputeSceneBounds(sceneResult->scene));
-            } else {
-                camera.SetOrbitTarget(glm::vec3(0.0F));
-                camera.SetDistance(5.0F);
-            }
+            FitCameraToBounds(camera, ComputeSceneBounds(sceneResult->scene));
         }
 
         // Sync overlay & toolbar state.
@@ -522,19 +444,10 @@ int main(int argc, char* argv[]) {
 
         meshBuffer.Bind(cmd);
 
-        if (hasScene) {
-            // Draw all scene meshes
-            for (const auto& [handle, transform] : drawCalls) {
-                vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
-                                   0, sizeof(glm::mat4), &transform);
-                meshBuffer.Draw(cmd, handle);
-            }
-        } else {
-            // Draw fallback cube
-            glm::mat4 model(1.0F);
+        for (const auto& [handle, transform] : drawCalls) {
             vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(glm::mat4), &model);
-            meshBuffer.Draw(cmd, cubeHandle);
+                               0, sizeof(glm::mat4), &transform);
+            meshBuffer.Draw(cmd, handle);
         }
 
         uiManager.EndFrame(cmd);
