@@ -3,6 +3,8 @@
 #include <ui/Panel.h>
 #include <ui/UIManager.h>
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <vulkan/vulkan.h>
 
 #include <memory>
@@ -60,6 +62,23 @@ TEST(UIManagerTest, EndFrameWithoutBeginFrameIsSafe) {
 TEST(UIManagerTest, ExposesImGuiContext) {
     bimeup::ui::UIManager manager;
     EXPECT_FALSE(manager.GetContext().HasVulkanBackend());
+}
+
+TEST(UIManagerTest, CameraMatricesDefaultToIdentity) {
+    bimeup::ui::UIManager manager;
+    EXPECT_EQ(manager.GetViewMatrix(), glm::mat4(1.0F));
+    EXPECT_EQ(manager.GetProjectionMatrix(), glm::mat4(1.0F));
+}
+
+TEST(UIManagerTest, StoresCameraMatrices) {
+    bimeup::ui::UIManager manager;
+    const glm::mat4 view = glm::lookAt(glm::vec3(0.0F, 0.0F, 5.0F),
+                                       glm::vec3(0.0F),
+                                       glm::vec3(0.0F, 1.0F, 0.0F));
+    const glm::mat4 proj = glm::perspective(glm::radians(45.0F), 16.0F / 9.0F, 0.1F, 100.0F);
+    manager.SetCameraMatrices(view, proj);
+    EXPECT_EQ(manager.GetViewMatrix(), view);
+    EXPECT_EQ(manager.GetProjectionMatrix(), proj);
 }
 
 }  // namespace

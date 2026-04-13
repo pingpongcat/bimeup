@@ -778,6 +778,7 @@ int main(int argc, char* argv[]) {
         }
         toolbar->SetRenderMode(renderMode);
 
+        uiManager.SetCameraMatrices(camera.GetViewMatrix(), camera.GetProjectionMatrix());
         uiManager.BeginFrame();
 
         // Update camera UBO. Camera::SetPerspective already applies the Vulkan

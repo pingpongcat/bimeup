@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.3e.2 — Thread view/proj matrices into UIManager
+## Current Task: 7.3e.3 — Translate/rotate gizmo for active clip plane
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -87,7 +87,7 @@
   - [x] 7.3d UI panel to edit planes interactively (`ui::ClipPlanesPanel` — add via ±X/Y/Z presets, enable/disable, edit normal+offset, remove; wired in `main.cpp`)
   - [ ] 7.3e ImGuizmo integration — add submodule, thread view/proj into UIManager, translate/rotate gizmo for active clip plane, ViewManipulate cube for camera orientation
     - [x] 7.3e.1 Add ImGuizmo submodule under `external/ImGuizmo`, compile into `imgui` target, smoke test links `ImGuizmo::IsUsing/IsOver`
-    - [ ] 7.3e.2 Thread view/proj matrices into `UIManager` and down to panels that need them
+    - [x] 7.3e.2 Thread view/proj matrices into `UIManager` (`SetCameraMatrices` / `GetViewMatrix` / `GetProjectionMatrix`), pushed each frame from `main.cpp`
     - [ ] 7.3e.3 Translate/rotate gizmo for active clip plane in `ClipPlanesPanel`
     - [ ] 7.3e.4 `ViewManipulate` cube wired to `Camera` orientation
 - [ ] 7.4 Plan view

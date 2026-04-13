@@ -2,6 +2,7 @@
 
 #include <ui/ImGuiContext.h>
 
+#include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 
 #include <cstddef>
@@ -33,12 +34,18 @@ public:
 
     void SetMinImageCount(uint32_t minImageCount);
 
+    void SetCameraMatrices(const glm::mat4& view, const glm::mat4& projection);
+    [[nodiscard]] const glm::mat4& GetViewMatrix() const { return m_view; }
+    [[nodiscard]] const glm::mat4& GetProjectionMatrix() const { return m_projection; }
+
     [[nodiscard]] ImGuiContext& GetContext();
     [[nodiscard]] const ImGuiContext& GetContext() const;
 
 private:
     ImGuiContext m_context;
     std::vector<std::unique_ptr<Panel>> m_panels;
+    glm::mat4 m_view{1.0F};
+    glm::mat4 m_projection{1.0F};
 };
 
 }  // namespace bimeup::ui

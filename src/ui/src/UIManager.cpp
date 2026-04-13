@@ -61,6 +61,11 @@ void UIManager::SetMinImageCount(uint32_t minImageCount) {
     m_context.SetMinImageCount(minImageCount);
 }
 
+void UIManager::SetCameraMatrices(const glm::mat4& view, const glm::mat4& projection) {
+    m_view = view;
+    m_projection = projection;
+}
+
 ImGuiContext& UIManager::GetContext() {
     return m_context;
 }
