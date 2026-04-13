@@ -117,3 +117,57 @@ TEST(MeasureToolTest, ClearMeasurementsErasesHistory) {
     tool.ClearMeasurements();
     EXPECT_TRUE(tool.GetMeasurements().empty());
 }
+
+TEST(MeasureToolTest, NewMeasurementIsVisibleByDefault) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));
+    ASSERT_EQ(tool.GetMeasurements().size(), 1u);
+    EXPECT_TRUE(tool.GetMeasurements()[0].visible);
+}
+
+TEST(MeasureToolTest, SetVisibilityTogglesFlagWithoutRemoving) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));
+    tool.SetVisibility(0, false);
+    ASSERT_EQ(tool.GetMeasurements().size(), 1u);
+    EXPECT_FALSE(tool.GetMeasurements()[0].visible);
+    tool.SetVisibility(0, true);
+    EXPECT_TRUE(tool.GetMeasurements()[0].visible);
+}
+
+TEST(MeasureToolTest, RemoveMeasurementErasesSingleEntry) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));  // #0: distance 1
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(2.0f, 0.0f, 0.0f));  // #1: distance 2
+    tool.RemoveMeasurement(0);
+    ASSERT_EQ(tool.GetMeasurements().size(), 1u);
+    EXPECT_FLOAT_EQ(tool.GetMeasurements()[0].distance, 2.0f);
+}
+
+TEST(MeasureToolTest, RemoveMeasurementOutOfRangeIsNoOp) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));
+    tool.RemoveMeasurement(5);
+    EXPECT_EQ(tool.GetMeasurements().size(), 1u);
+}
+
+TEST(MeasureToolTest, SetAllVisibilityAffectsEveryEntry) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(2.0f, 0.0f, 0.0f));
+    tool.SetAllVisibility(false);
+    for (const auto& r : tool.GetMeasurements()) {
+        EXPECT_FALSE(r.visible);
+    }
+    tool.SetAllVisibility(true);
+    for (const auto& r : tool.GetMeasurements()) {
+        EXPECT_TRUE(r.visible);
+    }
+}

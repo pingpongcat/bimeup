@@ -13,6 +13,7 @@ struct MeasureResult {
     glm::vec3 pointB{0.0f};
     float distance{0.0f};
     glm::vec3 deltaXYZ{0.0f};
+    bool visible{true};
 };
 
 MeasureResult Measure(const glm::vec3& a, const glm::vec3& b);
@@ -32,6 +33,12 @@ public:
     void Cancel();
     /// Erase all saved measurements.
     void ClearMeasurements();
+    /// Remove a single saved measurement by index. Out-of-range indices are no-ops.
+    void RemoveMeasurement(std::size_t index);
+    /// Toggle visibility of a single saved measurement. Out-of-range indices are no-ops.
+    void SetVisibility(std::size_t index, bool visible);
+    /// Set visibility of every saved measurement.
+    void SetAllVisibility(bool visible);
 
     [[nodiscard]] State GetState() const { return state_; }
     [[nodiscard]] const std::optional<glm::vec3>& GetFirstPoint() const { return first_; }

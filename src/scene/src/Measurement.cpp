@@ -44,4 +44,24 @@ void MeasureTool::ClearMeasurements() {
     saved_.clear();
 }
 
+void MeasureTool::RemoveMeasurement(std::size_t index) {
+    if (index >= saved_.size()) {
+        return;
+    }
+    saved_.erase(saved_.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+void MeasureTool::SetVisibility(std::size_t index, bool visible) {
+    if (index >= saved_.size()) {
+        return;
+    }
+    saved_[index].visible = visible;
+}
+
+void MeasureTool::SetAllVisibility(bool visible) {
+    for (auto& r : saved_) {
+        r.visible = visible;
+    }
+}
+
 } // namespace bimeup::scene

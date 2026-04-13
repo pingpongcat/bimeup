@@ -176,6 +176,9 @@ void ViewportOverlay::OnDraw() {
 
         // Saved measurements.
         for (const auto& r : m_measureTool->GetMeasurements()) {
+            if (!r.visible) {
+                continue;
+            }
             auto a = WorldToScreen(r.pointA, m_measureView, m_measureProj, m_measureFbSize);
             auto b = WorldToScreen(r.pointB, m_measureView, m_measureProj, m_measureFbSize);
             if (a && b) {

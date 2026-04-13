@@ -3,6 +3,10 @@
 #include <imgui.h>
 #include <scene/Measurement.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <optional>
+
 namespace bimeup::ui {
 
 const char* MeasurementsPanel::GetName() const {
@@ -27,6 +31,12 @@ void MeasurementsPanel::OnDraw() {
     if (ImGui::SmallButton("Clear all") && m_onClearAll) {
         m_onClearAll();
     }
+    ImGui::SameLine();
+    const bool anyVisible = std::any_of(items.begin(), items.end(),
+                                        [](const auto& r) { return r.visible; });
+    if (ImGui::SmallButton(anyVisible ? "Hide all" : "Show all")) {
+        m_tool->SetAllVisibility(!anyVisible);
+    }
     ImGui::Separator();
 
     if (items.empty()) {
@@ -35,16 +45,21 @@ void MeasurementsPanel::OnDraw() {
         return;
     }
 
-    if (ImGui::BeginTable("measurements", 4,
+    std::optional<std::size_t> toRemove;
+
+    if (ImGui::BeginTable("measurements", 6,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Distance");
         ImGui::TableSetupColumn("From");
         ImGui::TableSetupColumn("To");
+        ImGui::TableSetupColumn("Show");
+        ImGui::TableSetupColumn("");
         ImGui::TableHeadersRow();
 
-        for (size_t i = 0; i < items.size(); ++i) {
+        for (std::size_t i = 0; i < items.size(); ++i) {
             const auto& r = items[i];
+            ImGui::PushID(static_cast<int>(i));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::Text("%zu", i + 1);
@@ -56,8 +71,22 @@ void MeasurementsPanel::OnDraw() {
             ImGui::TableNextColumn();
             ImGui::Text("(%.2f, %.2f, %.2f)", static_cast<double>(r.pointB.x),
                         static_cast<double>(r.pointB.y), static_cast<double>(r.pointB.z));
+            ImGui::TableNextColumn();
+            bool visible = r.visible;
+            if (ImGui::Checkbox("##vis", &visible)) {
+                m_tool->SetVisibility(i, visible);
+            }
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton("X")) {
+                toRemove = i;
+            }
+            ImGui::PopID();
         }
         ImGui::EndTable();
+    }
+
+    if (toRemove.has_value()) {
+        m_tool->RemoveMeasurement(*toRemove);
     }
 
     ImGui::End();

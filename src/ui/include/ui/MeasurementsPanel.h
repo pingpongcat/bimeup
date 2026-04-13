@@ -2,6 +2,7 @@
 
 #include <ui/Panel.h>
 
+#include <cstddef>
 #include <functional>
 
 namespace bimeup::scene {
@@ -19,11 +20,11 @@ public:
     [[nodiscard]] const char* GetName() const override;
     void OnDraw() override;
 
-    void SetTool(const scene::MeasureTool* tool) { m_tool = tool; }
+    void SetTool(scene::MeasureTool* tool) { m_tool = tool; }
     void SetOnClearAll(ClearAllCallback cb) { m_onClearAll = std::move(cb); }
 
 private:
-    const scene::MeasureTool* m_tool = nullptr;
+    scene::MeasureTool* m_tool = nullptr;
     ClearAllCallback m_onClearAll;
 };
 
