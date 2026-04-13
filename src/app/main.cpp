@@ -32,6 +32,7 @@
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
 #include <tools/Log.h>
+#include <ui/ClipPlanesPanel.h>
 #include <ui/HierarchyPanel.h>
 #include <ui/MeasurementsPanel.h>
 #include <ui/PropertyPanel.h>
@@ -626,6 +627,7 @@ int main(int argc, char* argv[]) {
     auto overlayOwned = std::make_unique<bimeup::ui::ViewportOverlay>();
     auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
     auto renderQualityOwned = std::make_unique<bimeup::ui::RenderQualityPanel>();
+    auto clipPlanesOwned = std::make_unique<bimeup::ui::ClipPlanesPanel>();
 
     auto* toolbar = toolbarOwned.get();
     auto* hierarchyPanel = hierarchyOwned.get();
@@ -633,8 +635,10 @@ int main(int argc, char* argv[]) {
     auto* overlay = overlayOwned.get();
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
+    auto* clipPlanesPanel = clipPlanesOwned.get();
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
+    clipPlanesPanel->SetManager(&clipPlaneManager);
 
     hierarchyPanel->SetEventBus(&eventBus);
     toolbar->SetRenderMode(renderMode);
@@ -650,6 +654,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(overlayOwned));
     uiManager.AddPanel(std::move(measurementsOwned));
     uiManager.AddPanel(std::move(renderQualityOwned));
+    uiManager.AddPanel(std::move(clipPlanesOwned));
 
     toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
         renderMode = mode;
