@@ -274,6 +274,8 @@ int main(int argc, char* argv[]) {
     pipelineConfig.pushConstantRanges = {pushRange};
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
+    // Double-sided rendering so clip-plane-exposed interior faces are visible.
+    pipelineConfig.cullMode = VK_CULL_MODE_NONE;
 
     auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
                               std::unique_ptr<bimeup::renderer::Pipeline>& wire) {
@@ -779,8 +781,12 @@ int main(int argc, char* argv[]) {
         }
         toolbar->SetRenderMode(renderMode);
 
-        uiManager.SetCameraMatrices(camera.GetViewMatrix(), camera.GetProjectionMatrix());
-        clipPlanesPanel->SetCameraMatrices(camera.GetViewMatrix(), camera.GetProjectionMatrix());
+        // ImGuizmo expects GL-convention NDC (Y up); Camera::GetProjectionMatrix
+        // pre-flips Y for Vulkan, so undo that before handing it to the gizmo code.
+        glm::mat4 gizmoProj = camera.GetProjectionMatrix();
+        gizmoProj[1][1] *= -1.0F;
+        uiManager.SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
+        clipPlanesPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         uiManager.BeginFrame();
 
         // ImGuizmo view cube: top-right, 128 px square. Captures drags on the

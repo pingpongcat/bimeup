@@ -71,4 +71,41 @@ TEST(ClipPlanesPanelTest, ActiveGizmoModeDefaultsToTranslate) {
     EXPECT_EQ(panel.ActiveGizmoMode(), bimeup::ui::GizmoMode::Translate);
 }
 
+TEST(ClipPlanesPanelTest, PruneActiveIfMissingKeepsExistingId) {
+    ClipPlaneManager mgr;
+    const std::uint32_t id = mgr.AddPlane({0.0F, 1.0F, 0.0F, 0.0F});
+
+    ClipPlanesPanel panel;
+    panel.SetManager(&mgr);
+    panel.SetActivePlaneId(id);
+
+    panel.PruneActiveIfMissing();
+
+    ASSERT_TRUE(panel.ActivePlaneId().has_value());
+    EXPECT_EQ(*panel.ActivePlaneId(), id);
+}
+
+TEST(ClipPlanesPanelTest, PruneActiveIfMissingClearsDanglingId) {
+    ClipPlaneManager mgr;
+    const std::uint32_t id = mgr.AddPlane({0.0F, 1.0F, 0.0F, 0.0F});
+
+    ClipPlanesPanel panel;
+    panel.SetManager(&mgr);
+    panel.SetActivePlaneId(id);
+    mgr.RemovePlane(id);
+
+    panel.PruneActiveIfMissing();
+
+    EXPECT_FALSE(panel.ActivePlaneId().has_value());
+}
+
+TEST(ClipPlanesPanelTest, PruneActiveIfMissingIsSafeWithoutManager) {
+    ClipPlanesPanel panel;
+    panel.SetActivePlaneId(42U);
+    panel.PruneActiveIfMissing();
+    // Without a manager we cannot verify membership; leave the id untouched.
+    ASSERT_TRUE(panel.ActivePlaneId().has_value());
+    EXPECT_EQ(*panel.ActivePlaneId(), 42U);
+}
+
 }  // namespace

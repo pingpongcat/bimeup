@@ -73,6 +73,7 @@ void main() {
     }
 
     vec3 n = normalize(fragNormalWorld);
+    if (!gl_FrontFacing) n = -n;  // Light back faces correctly (double-sided rendering).
 
     vec3 lit = lights.ambient.rgb;
 

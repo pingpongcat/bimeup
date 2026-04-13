@@ -45,6 +45,8 @@ public:
     void SetActivePlaneId(std::optional<std::uint32_t> id) { m_activePlaneId = id; }
     [[nodiscard]] GizmoMode ActiveGizmoMode() const { return m_gizmoMode; }
 
+    void PruneActiveIfMissing();
+
 private:
     renderer::ClipPlaneManager* m_manager = nullptr;
     glm::mat4 m_view{1.0F};

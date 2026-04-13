@@ -27,6 +27,11 @@ const char* ClipPlanesPanel::GetName() const {
     return "Clipping Planes";
 }
 
+void ClipPlanesPanel::PruneActiveIfMissing() {
+    if (!m_activePlaneId.has_value() || m_manager == nullptr) return;
+    if (!m_manager->Contains(*m_activePlaneId)) m_activePlaneId.reset();
+}
+
 void ClipPlanesPanel::OnDraw() {
     if (!ImGui::Begin(GetName())) {
         ImGui::End();
@@ -74,7 +79,8 @@ void ClipPlanesPanel::OnDraw() {
     for (std::size_t i = 0; i < kPresets.size(); ++i) {
         if (i > 0) ImGui::SameLine();
         if (ImGui::SmallButton(kPresets[i].label)) {
-            mgr.AddPlane(MakeAxisPlaneEquation(kPresets[i].preset));
+            const std::uint32_t newId = mgr.AddPlane(MakeAxisPlaneEquation(kPresets[i].preset));
+            m_activePlaneId = newId;
         }
     }
     ImGui::EndDisabled();
@@ -92,9 +98,7 @@ void ClipPlanesPanel::OnDraw() {
     std::optional<std::uint32_t> toRemove;
 
     const auto planesCopy = mgr.Planes();  // copy so edits don't invalidate iteration
-    bool activeStillExists = false;
     for (const auto& entry : planesCopy) {
-        if (m_activePlaneId == entry.id) activeStillExists = true;
         ImGui::PushID(static_cast<int>(entry.id));
 
         char header[32];
@@ -136,9 +140,8 @@ void ClipPlanesPanel::OnDraw() {
     if (toRemove.has_value()) {
         if (m_activePlaneId == *toRemove) m_activePlaneId.reset();
         mgr.RemovePlane(*toRemove);
-    } else if (!activeStillExists) {
-        m_activePlaneId.reset();
     }
+    PruneActiveIfMissing();
 
     ImGui::End();
 
@@ -154,13 +157,16 @@ void ClipPlanesPanel::OnDraw() {
 
             glm::mat4 xform = renderer::PlaneToTransform(*current);
 
+            // PlaneToTransform aligns local +Z with the plane normal. Using LOCAL
+            // mode makes TRANSLATE_Z draw the arrow along that normal regardless
+            // of which world axis it points to.
             const ImGuizmo::OPERATION op = (m_gizmoMode == GizmoMode::Translate)
-                                               ? ImGuizmo::TRANSLATE
+                                               ? ImGuizmo::TRANSLATE_Z
                                                : ImGuizmo::ROTATE;
             const bool used = ImGuizmo::Manipulate(&m_view[0][0],
                                                    &m_projection[0][0],
                                                    op,
-                                                   ImGuizmo::WORLD,
+                                                   ImGuizmo::LOCAL,
                                                    &xform[0][0]);
             if (used) {
                 const renderer::ClipPlane updated = renderer::TransformToPlane(xform);
