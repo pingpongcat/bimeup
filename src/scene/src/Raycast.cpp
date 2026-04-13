@@ -147,6 +147,9 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
             hit.nodeId = owner;
             hit.t = *t;
             hit.point = ray.origin + ray.direction * (*t);
+            hit.triV0 = v0;
+            hit.triV1 = v1;
+            hit.triV2 = v2;
             best = hit;
         }
     }
@@ -188,6 +191,9 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
             hit.nodeId = id;
             hit.t = *t;
             hit.point = ray.origin + ray.direction * (*t);
+            hit.triV0 = v0;
+            hit.triV1 = v1;
+            hit.triV2 = v2;
             best = hit;
         }
     }

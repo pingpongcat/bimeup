@@ -82,3 +82,38 @@ TEST(MeasureToolTest, AddingPointAfterCompleteStartsNewMeasurement) {
     EXPECT_EQ(*tool.GetFirstPoint(), glm::vec3(5.0f, 0.0f, 0.0f));
     EXPECT_FALSE(tool.GetResult().has_value());
 }
+
+TEST(MeasureToolTest, CancelClearsInProgressMeasurement) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.Cancel();
+    EXPECT_EQ(tool.GetState(), MeasureTool::State::Idle);
+    EXPECT_FALSE(tool.GetFirstPoint().has_value());
+}
+
+TEST(MeasureToolTest, CompletedMeasurementIsRecorded) {
+    MeasureTool tool;
+    EXPECT_TRUE(tool.GetMeasurements().empty());
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(3.0f, 0.0f, 0.0f));
+    ASSERT_EQ(tool.GetMeasurements().size(), 1u);
+    EXPECT_FLOAT_EQ(tool.GetMeasurements()[0].distance, 3.0f);
+}
+
+TEST(MeasureToolTest, CancelAfterCompletePreservesRecordedHistory) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(3.0f, 0.0f, 0.0f));
+    tool.AddPoint(glm::vec3(10.0f, 0.0f, 0.0f));  // start a 2nd, only first point set
+    tool.Cancel();
+    EXPECT_EQ(tool.GetMeasurements().size(), 1u);
+    EXPECT_EQ(tool.GetState(), MeasureTool::State::Idle);
+}
+
+TEST(MeasureToolTest, ClearMeasurementsErasesHistory) {
+    MeasureTool tool;
+    tool.AddPoint(glm::vec3(0.0f));
+    tool.AddPoint(glm::vec3(1.0f, 0.0f, 0.0f));
+    tool.ClearMeasurements();
+    EXPECT_TRUE(tool.GetMeasurements().empty());
+}

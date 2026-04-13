@@ -2,6 +2,8 @@
 
 #include <ui/Panel.h>
 
+#include <optional>
+
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -43,6 +45,11 @@ public:
                         const glm::mat4& proj,
                         glm::vec2 framebufferSize);
 
+    /// Snap candidate at the cursor: hover-time world position + whether it
+    /// snapped to a vertex (true) or just landed on a face (false).
+    /// Pass nullopt to clear (e.g. when measure mode is off or cursor is off-model).
+    void SetSnapCandidate(std::optional<glm::vec3> world, bool isVertex);
+
 private:
     float m_fps = 0.0F;
     glm::vec3 m_cameraPosition{0.0F};
@@ -55,6 +62,9 @@ private:
     glm::mat4 m_measureView{1.0F};
     glm::mat4 m_measureProj{1.0F};
     glm::vec2 m_measureFbSize{0.0F};
+
+    std::optional<glm::vec3> m_snapCandidate;
+    bool m_snapIsVertex = false;
 };
 
 }  // namespace bimeup::ui

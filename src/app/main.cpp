@@ -28,6 +28,7 @@
 #include <scene/SceneNode.h>
 #include <tools/Log.h>
 #include <ui/HierarchyPanel.h>
+#include <ui/MeasurementsPanel.h>
 #include <ui/PropertyPanel.h>
 #include <ui/SelectionBridge.h>
 #include <ui/Theme.h>
@@ -41,9 +42,13 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <limits>
+#include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -262,6 +267,8 @@ int main(int argc, char* argv[]) {
     bimeup::core::Selection selection(eventBus);
     bimeup::scene::MeasureTool measureTool;
     bool measureModeActive = false;
+    std::optional<glm::vec3> measureSnapPoint;
+    bool measureSnapIsVertex = false;
 
     // Precompute per-node lists of global vertex indices in the MeshBuffer so
     // that selection highlighting only needs a set-lookup, not a full scan of
@@ -336,7 +343,39 @@ int main(int argc, char* argv[]) {
     };
     auto imguiWantsMouse = [] { return ImGui::GetIO().WantCaptureMouse; };
 
+    // Snap a hit point to the nearest of the hit triangle's three vertices,
+    // using a screen-aware threshold (~3% of view distance) so close-up snaps
+    // tightly while far-away snaps still feel forgiving.
+    auto snapHit = [](const bimeup::scene::RayHit& hit) {
+        const glm::vec3& p = hit.point;
+        const glm::vec3* verts[3] = {&hit.triV0, &hit.triV1, &hit.triV2};
+        float bestDistSq = std::numeric_limits<float>::infinity();
+        const glm::vec3* best = nullptr;
+        for (auto* v : verts) {
+            const glm::vec3 d = *v - p;
+            const float d2 = glm::dot(d, d);
+            if (d2 < bestDistSq) {
+                bestDistSq = d2;
+                best = v;
+            }
+        }
+        const float threshold = std::max(0.05F, hit.t * 0.03F);
+        if (best != nullptr && std::sqrt(bestDistSq) <= threshold) {
+            return std::make_pair(*best, true);  // vertex snap
+        }
+        return std::make_pair(p, false);  // face snap
+    };
+
     input.OnMouseButton([&](bimeup::platform::MouseButton btn, bool pressed) {
+        // Right-click while a measurement is pending → cancel and skip orbit.
+        if (btn == bimeup::platform::MouseButton::Right && pressed && measureModeActive &&
+            measureTool.GetFirstPoint().has_value() && !imguiWantsMouse()) {
+            measureTool.Cancel();
+            LOG_INFO("Measure: cancelled");
+            rightMouseDown = false;
+            return;
+        }
+
         if (btn == bimeup::platform::MouseButton::Right) {
             rightMouseDown = pressed;
             lastMousePos = input.GetMousePosition();
@@ -347,13 +386,12 @@ int main(int argc, char* argv[]) {
         }
         if (btn == bimeup::platform::MouseButton::Left && pressed && !imguiWantsMouse()) {
             auto mouse = input.GetMousePosition();
-            auto [view, proj] = buildViewProj();
             const glm::vec2 sp(static_cast<float>(mouse.x), static_cast<float>(mouse.y));
             if (measureModeActive) {
-                auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
-                if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
-                                                          sceneResult->meshes)) {
-                    measureTool.AddPoint(hit->point);
+                // Commit the snap candidate updated each hover frame. If the cursor
+                // isn't over geometry, no snap → no point dropped.
+                if (measureSnapPoint.has_value()) {
+                    measureTool.AddPoint(*measureSnapPoint);
                     if (auto& res = measureTool.GetResult(); res.has_value()) {
                         LOG_INFO("Measure: {:.3f} m  ({:.2f},{:.2f},{:.2f}) → "
                                  "({:.2f},{:.2f},{:.2f})",
@@ -362,6 +400,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
             } else {
+                auto [view, proj] = buildViewProj();
                 bimeup::core::PickElement(sp, windowSize(), view, proj, sceneResult->scene,
                                           sceneResult->meshes, eventBus,
                                           ImGui::GetIO().KeyCtrl);
@@ -385,9 +424,22 @@ int main(int argc, char* argv[]) {
 
         if (!rightMouseDown && !middleMouseDown && !imguiWantsMouse()) {
             auto [view, proj] = buildViewProj();
-            bimeup::core::HoverElement(
-                glm::vec2(static_cast<float>(x), static_cast<float>(y)),
-                windowSize(), view, proj, sceneResult->scene, sceneResult->meshes, eventBus);
+            const glm::vec2 sp(static_cast<float>(x), static_cast<float>(y));
+            if (measureModeActive) {
+                auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
+                if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
+                                                          sceneResult->meshes)) {
+                    auto [snap, isVertex] = snapHit(*hit);
+                    measureSnapPoint = snap;
+                    measureSnapIsVertex = isVertex;
+                } else {
+                    measureSnapPoint.reset();
+                    measureSnapIsVertex = false;
+                }
+            } else {
+                bimeup::core::HoverElement(sp, windowSize(), view, proj, sceneResult->scene,
+                                           sceneResult->meshes, eventBus);
+            }
         }
     });
 
@@ -432,11 +484,15 @@ int main(int argc, char* argv[]) {
     auto hierarchyOwned = std::make_unique<bimeup::ui::HierarchyPanel>();
     auto propertyOwned = std::make_unique<bimeup::ui::PropertyPanel>();
     auto overlayOwned = std::make_unique<bimeup::ui::ViewportOverlay>();
+    auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
 
     auto* toolbar = toolbarOwned.get();
     auto* hierarchyPanel = hierarchyOwned.get();
     auto* propertyPanel = propertyOwned.get();
     auto* overlay = overlayOwned.get();
+    auto* measurementsPanel = measurementsOwned.get();
+    measurementsPanel->SetTool(&measureTool);
+    measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
 
     hierarchyPanel->SetEventBus(&eventBus);
     toolbar->SetRenderMode(renderMode);
@@ -452,6 +508,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(hierarchyOwned));
     uiManager.AddPanel(std::move(propertyOwned));
     uiManager.AddPanel(std::move(overlayOwned));
+    uiManager.AddPanel(std::move(measurementsOwned));
 
     toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
         renderMode = mode;
@@ -462,7 +519,9 @@ int main(int argc, char* argv[]) {
     toolbar->SetOnOpenFile([] { LOG_INFO("Toolbar: Open File (not implemented yet)"); });
     toolbar->SetOnMeasureModeChanged([&](bool active) {
         measureModeActive = active;
-        measureTool.Reset();
+        measureTool.Cancel();  // drop in-progress; keep saved history
+        measureSnapPoint.reset();
+        measureSnapIsVertex = false;
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
 
@@ -494,8 +553,13 @@ int main(int argc, char* argv[]) {
         overlay->SetCameraForward(camera.GetForward());
         {
             auto [view, proj] = buildViewProj();
-            overlay->SetMeasurement(measureModeActive ? &measureTool : nullptr,
+            // Always show the measurement layer when there's saved history,
+            // even outside measure mode — but only show snap preview while active.
+            const bool hasAny = measureModeActive || !measureTool.GetMeasurements().empty();
+            overlay->SetMeasurement(hasAny ? &measureTool : nullptr,
                                     view, proj, windowSize());
+            overlay->SetSnapCandidate(measureModeActive ? measureSnapPoint : std::nullopt,
+                                      measureSnapIsVertex);
         }
         toolbar->SetRenderMode(renderMode);
 

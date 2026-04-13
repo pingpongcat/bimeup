@@ -3,6 +3,7 @@ find_package(Vulkan REQUIRED)
 add_library(bimeup_ui STATIC
     src/HierarchyPanel.cpp
     src/ImGuiContext.cpp
+    src/MeasurementsPanel.cpp
     src/PropertyPanel.cpp
     src/SelectionBridge.cpp
     src/Theme.cpp

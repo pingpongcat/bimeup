@@ -21,6 +21,11 @@ struct RayHit {
     NodeId nodeId = InvalidNodeId;
     float t = 0.0f;
     glm::vec3 point{0.0f};
+    /// World-space vertices of the triangle that was hit. Useful for vertex
+    /// snapping at the cursor without re-iterating the mesh.
+    glm::vec3 triV0{0.0f};
+    glm::vec3 triV1{0.0f};
+    glm::vec3 triV2{0.0f};
 };
 
 std::optional<float> RayAABBIntersect(const Ray& ray, const AABB& box);

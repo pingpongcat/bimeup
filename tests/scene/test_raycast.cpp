@@ -204,6 +204,51 @@ TEST(RaycastTest, BakedMeshSkipsInvisibleOwnerTriangles) {
     EXPECT_EQ(hitV->nodeId, visibleId);
 }
 
+TEST(RaycastTest, BakedMeshHitReturnsTriangleVertices) {
+    Scene scene;
+    SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::mat4(1.0f);
+    node.bounds = AABB(glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f));
+    NodeId id = scene.AddNode(node);
+
+    SceneMesh mesh;
+    mesh.SetPositions({
+        {-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+    });
+    mesh.SetIndices({0, 1, 2});
+    mesh.SetTriangleOwners({id});
+
+    std::vector<SceneMesh> meshes;
+    meshes.push_back(std::move(mesh));
+
+    Ray ray{glm::vec3(0.0f, 0.0f, -5.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    auto hit = RaycastScene(ray, scene, meshes);
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->triV0, glm::vec3(-1.0f, -1.0f, 0.0f));
+    EXPECT_EQ(hit->triV1, glm::vec3(1.0f, -1.0f, 0.0f));
+    EXPECT_EQ(hit->triV2, glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+TEST(RaycastTest, AttachedMeshHitReturnsWorldSpaceTriangleVertices) {
+    Scene scene;
+    std::vector<SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+    node.bounds = AABB(glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f));
+    scene.AddNode(node);
+
+    Ray ray{glm::vec3(10.0f, 0.0f, -5.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    auto hit = RaycastScene(ray, scene, meshes);
+    ASSERT_TRUE(hit.has_value());
+    // World-space triangle vertices should be translated by the node transform.
+    EXPECT_FLOAT_EQ(hit->triV0.x, 9.0f);
+    EXPECT_FLOAT_EQ(hit->triV1.x, 11.0f);
+}
+
 TEST(RaycastTest, RaycastSceneMissReturnsNullopt) {
     Scene scene;
     std::vector<SceneMesh> meshes;
