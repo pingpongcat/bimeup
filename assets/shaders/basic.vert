@@ -14,8 +14,13 @@ layout(push_constant) uniform PushConstants {
 } push;
 
 layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec3 fragNormalWorld;
 
 void main() {
     gl_Position = camera.projection * camera.view * push.model * vec4(inPosition, 1.0);
     fragColor = inColor;
+
+    // Transform normal into world space. Assumes model transform has no
+    // non-uniform scale (true for current BIM scene); otherwise use inverse-transpose.
+    fragNormalWorld = normalize(mat3(push.model) * inNormal);
 }

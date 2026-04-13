@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.3
+## Current Stage: R — Render Quality
+## Current Task: R.2
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -80,7 +80,7 @@
 - [x] 7.0a Fix projection double Y-flip (model was rendered upside down, picking desynced) + wire selection → visible vertex-color highlight via MeshBuffer::SetVertexColorOverride
 - [x] 7.1 Distance measurement tool (scene::Measure + MeasureTool state machine)
 - [x] 7.2 Point snapping (scene::Snap — vertex/edge/face)
-- [ ] 7.3 Clipping planes
+- [ ] 7.3 Clipping planes (deferred — after Stage R)
 - [ ] 7.4 Plan view
 - [ ] 7.5 Section view
 - [ ] 7.6 Element visibility by IFC type
@@ -88,6 +88,12 @@
 - [ ] 7.8 Element transparency override
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation
+
+## Stage R — Render Quality
+- [x] R.1 Three-point lighting (key/fill/rim) + ImGui Render Quality panel scaffold
+- [ ] R.2 MSAA (toggle 1×/2×/4×/8×) with resolve pass
+- [ ] R.3 Shadow mapping for key light (depth pass + PCF sampling)
+- [ ] R.4 SSAO (depth+normal prepass, kernel + blur + composite)
 
 ## Stage 8 — Performance & Large Models
 - [ ] 8.1 Async IFC loading with progress

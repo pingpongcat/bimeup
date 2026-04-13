@@ -14,6 +14,7 @@
 #include <renderer/MeshBuffer.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
+#include <renderer/Lighting.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
@@ -30,6 +31,7 @@
 #include <ui/HierarchyPanel.h>
 #include <ui/MeasurementsPanel.h>
 #include <ui/PropertyPanel.h>
+#include <ui/RenderQualityPanel.h>
 #include <ui/SelectionBridge.h>
 #include <ui/Theme.h>
 #include <ui/Toolbar.h>
@@ -159,12 +161,13 @@ int main(int argc, char* argv[]) {
     bimeup::renderer::Shader fragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                         shaderDir + "/basic.frag.spv");
 
-    // Descriptor set (camera UBO)
+    // Descriptor set: camera UBO (vertex) + lighting UBO (fragment)
     bimeup::renderer::DescriptorSetLayout dsLayout(device, {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
+        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
     });
     bimeup::renderer::DescriptorPool dsPool(device, 1, {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
     });
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
 
@@ -172,6 +175,12 @@ int main(int argc, char* argv[]) {
     bimeup::renderer::Buffer uboBuffer(device, bimeup::renderer::BufferType::Uniform,
                                        sizeof(CameraUBO), &ubo);
     descriptorSet.UpdateBuffer(0, uboBuffer);
+
+    bimeup::renderer::LightingUbo lightingUbo = bimeup::renderer::PackLighting(
+        bimeup::renderer::MakeDefaultLighting());
+    bimeup::renderer::Buffer lightingBuffer(device, bimeup::renderer::BufferType::Uniform,
+                                            sizeof(bimeup::renderer::LightingUbo), &lightingUbo);
+    descriptorSet.UpdateBuffer(1, lightingBuffer);
 
     // MeshBuffer for all geometry
     bimeup::renderer::MeshBuffer meshBuffer(device);
@@ -485,12 +494,14 @@ int main(int argc, char* argv[]) {
     auto propertyOwned = std::make_unique<bimeup::ui::PropertyPanel>();
     auto overlayOwned = std::make_unique<bimeup::ui::ViewportOverlay>();
     auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
+    auto renderQualityOwned = std::make_unique<bimeup::ui::RenderQualityPanel>();
 
     auto* toolbar = toolbarOwned.get();
     auto* hierarchyPanel = hierarchyOwned.get();
     auto* propertyPanel = propertyOwned.get();
     auto* overlay = overlayOwned.get();
     auto* measurementsPanel = measurementsOwned.get();
+    auto* renderQualityPanel = renderQualityOwned.get();
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
 
@@ -509,6 +520,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(propertyOwned));
     uiManager.AddPanel(std::move(overlayOwned));
     uiManager.AddPanel(std::move(measurementsOwned));
+    uiManager.AddPanel(std::move(renderQualityOwned));
 
     toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
         renderMode = mode;
@@ -573,6 +585,12 @@ int main(int argc, char* argv[]) {
         auto* mapped = static_cast<CameraUBO*>(uboBuffer.Map());
         *mapped = ubo;
         uboBuffer.Unmap();
+
+        // Update lighting UBO from the Render Quality panel.
+        lightingUbo = bimeup::renderer::PackLighting(renderQualityPanel->GetSettings().lighting);
+        auto* lightMapped = static_cast<bimeup::renderer::LightingUbo*>(lightingBuffer.Map());
+        *lightMapped = lightingUbo;
+        lightingBuffer.Unmap();
 
         if (!renderLoop.BeginFrame()) {
             continue;

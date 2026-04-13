@@ -3,6 +3,7 @@ add_executable(ui_tests
     ImGuiContextTest.cpp
     PanelTest.cpp
     PropertyPanelTest.cpp
+    RenderQualityPanelTest.cpp
     SelectionBridgeTest.cpp
     ThemeTest.cpp
     ToolbarTest.cpp
