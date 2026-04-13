@@ -2,6 +2,7 @@ add_executable(ui_tests
     ClipPlanesPanelTest.cpp
     HierarchyPanelTest.cpp
     ImGuiContextTest.cpp
+    ImGuizmoIntegrationTest.cpp
     PanelTest.cpp
     PropertyPanelTest.cpp
     RenderQualityPanelTest.cpp

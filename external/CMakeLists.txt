@@ -29,10 +29,12 @@ add_library(imgui STATIC
     imgui/imgui_demo.cpp
     imgui/backends/imgui_impl_glfw.cpp
     imgui/backends/imgui_impl_vulkan.cpp
+    ImGuizmo/ImGuizmo.cpp
 )
 target_include_directories(imgui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo
 )
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 add_library(imgui::imgui ALIAS imgui)
