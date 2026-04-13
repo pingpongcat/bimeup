@@ -22,8 +22,10 @@ std::optional<ImVec2> WorldToScreen(const glm::vec3& worldPos,
     if (ndc.x < -1.0F || ndc.x > 1.0F || ndc.y < -1.0F || ndc.y > 1.0F) {
         return std::nullopt;
     }
+    // Overlay receives the view/proj used by picking (Vulkan Y-flip undone),
+    // so NDC is OpenGL-convention (y-up). ImGui screen coords are y-down.
     const float sx = (ndc.x * 0.5F + 0.5F) * fbSize.x;
-    const float sy = (ndc.y * 0.5F + 0.5F) * fbSize.y;
+    const float sy = (1.0F - (ndc.y * 0.5F + 0.5F)) * fbSize.y;
     return ImVec2{sx, sy};
 }
 
