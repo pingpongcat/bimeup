@@ -18,6 +18,7 @@ add_executable(renderer_tests
     ShadowPassTest.cpp
     ViewportNavigatorTest.cpp
     ClipPlaneTest.cpp
+    ClipPlaneManagerTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.3b — `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
+## Current Task: 7.3c — UBO + shader integration (`gl_ClipDistance` or frag discard)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -82,7 +82,7 @@
 - [x] 7.2 Point snapping (scene::Snap — vertex/edge/face)
 - [ ] 7.3 Clipping planes
   - [x] 7.3a Math — `renderer::ClipPlane` struct + `SignedDistance`/`ClassifyPoint` helpers + unit tests
-  - [ ] 7.3b `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
+  - [x] 7.3b `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
   - [ ] 7.3c UBO + shader integration (`gl_ClipDistance` or frag discard)
   - [ ] 7.3d UI panel to edit planes interactively
 - [ ] 7.4 Plan view
