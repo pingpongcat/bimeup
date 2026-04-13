@@ -5,6 +5,7 @@ add_executable(test_scene
     test_batching.cpp
     test_raycast.cpp
     test_measurement.cpp
+    test_snap.cpp
 )
 
 target_link_libraries(test_scene PRIVATE

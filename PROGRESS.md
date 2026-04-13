@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.2
+## Current Task: 7.3
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -79,7 +79,7 @@
 - [x] 7.0 Fix element selection (nodeId→expressId + batching-aware raycast)
 - [x] 7.0a Fix projection double Y-flip (model was rendered upside down, picking desynced) + wire selection → visible vertex-color highlight via MeshBuffer::SetVertexColorOverride
 - [x] 7.1 Distance measurement tool (scene::Measure + MeasureTool state machine)
-- [ ] 7.2 Point snapping
+- [x] 7.2 Point snapping (scene::Snap — vertex/edge/face)
 - [ ] 7.3 Clipping planes
 - [ ] 7.4 Plan view
 - [ ] 7.5 Section view

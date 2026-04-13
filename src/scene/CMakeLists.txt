@@ -4,6 +4,7 @@ add_library(bimeup_scene STATIC
     src/SceneBuilder.cpp
     src/Raycast.cpp
     src/Measurement.cpp
+    src/Snap.cpp
 )
 
 target_include_directories(bimeup_scene PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
