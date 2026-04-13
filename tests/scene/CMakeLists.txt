@@ -4,6 +4,7 @@ add_executable(test_scene
     test_aabb.cpp
     test_batching.cpp
     test_raycast.cpp
+    test_measurement.cpp
 )
 
 target_link_libraries(test_scene PRIVATE
