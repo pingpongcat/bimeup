@@ -76,9 +76,26 @@ void RenderQualityPanel::OnDraw() {
     }
 
     if (ImGui::CollapsingHeader("Shadows")) {
-        ImGui::TextDisabled("(Stage R.3 — not yet wired)");
-        ImGui::Checkbox("Enabled", &m_settings.shadowsEnabled);
-        ImGui::SliderInt("Shadow map size", &m_settings.shadowMapSize, 512, 4096);
+        auto& shadow = m_settings.lighting.shadow;
+        ImGui::Checkbox("Enabled", &shadow.enabled);
+
+        ImGui::BeginDisabled(!shadow.enabled);
+        static constexpr std::array<std::uint32_t, 4> kResolutions{512U, 1024U, 2048U, 4096U};
+        ImGui::TextUnformatted("Resolution");
+        ImGui::SameLine();
+        for (std::uint32_t r : kResolutions) {
+            char label[8];
+            std::snprintf(label, sizeof(label), "%u", r);
+            if (ImGui::RadioButton(label, shadow.mapResolution == r)) {
+                shadow.mapResolution = r;
+            }
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
+
+        ImGui::SliderFloat("Bias", &shadow.bias, 0.0F, 0.02F, "%.4f");
+        ImGui::SliderFloat("PCF radius (texels)", &shadow.pcfRadius, 0.0F, 4.0F);
+        ImGui::EndDisabled();
     }
 
     if (ImGui::CollapsingHeader("SSAO")) {

@@ -24,7 +24,7 @@ TEST(RenderQualityPanelTest, DefaultSettingsHaveMsaa1ShadowsOffSsaoOff) {
     RenderQualityPanel panel;
     const auto& s = panel.GetSettings();
     EXPECT_EQ(s.msaaSamples, 1);
-    EXPECT_FALSE(s.shadowsEnabled);
+    EXPECT_FALSE(s.lighting.shadow.enabled);
     EXPECT_FALSE(s.ssaoEnabled);
 }
 
