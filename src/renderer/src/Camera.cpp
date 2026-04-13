@@ -12,7 +12,41 @@ Camera::Camera() {
 }
 
 void Camera::SetPerspective(float fovDeg, float aspect, float near, float far) {
-    m_projection = glm::perspective(glm::radians(fovDeg), aspect, near, far);
+    m_perspFovDeg = fovDeg;
+    m_perspAspect = aspect;
+    m_perspNear = near;
+    m_perspFar = far;
+    m_projectionMode = ProjectionMode::Perspective;
+    RebuildProjection();
+}
+
+void Camera::SetOrthographic(float height, float aspect, float near, float far) {
+    m_orthoHeight = height;
+    m_orthoAspect = aspect;
+    m_orthoNear = near;
+    m_orthoFar = far;
+    m_projectionMode = ProjectionMode::Orthographic;
+    RebuildProjection();
+}
+
+void Camera::ToggleProjection() {
+    if (m_projectionMode == ProjectionMode::Perspective) {
+        float height = 2.0F * m_distance * std::tan(glm::radians(m_perspFovDeg) * 0.5F);
+        SetOrthographic(height, m_perspAspect, m_perspNear, m_perspFar);
+    } else {
+        SetPerspective(m_perspFovDeg, m_orthoAspect, m_orthoNear, m_orthoFar);
+    }
+}
+
+void Camera::RebuildProjection() {
+    if (m_projectionMode == ProjectionMode::Perspective) {
+        m_projection = glm::perspective(glm::radians(m_perspFovDeg), m_perspAspect,
+                                        m_perspNear, m_perspFar);
+    } else {
+        float halfH = m_orthoHeight * 0.5F;
+        float halfW = halfH * m_orthoAspect;
+        m_projection = glm::ortho(-halfW, halfW, -halfH, halfH, m_orthoNear, m_orthoFar);
+    }
     // Vulkan clip space has inverted Y compared to OpenGL
     m_projection[1][1] *= -1.0F;
 }

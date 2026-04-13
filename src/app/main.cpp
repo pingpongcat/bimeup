@@ -531,6 +531,10 @@ int main(int argc, char* argv[]) {
             LOG_INFO("Render mode: {}",
                      renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
         }
+        if (key == bimeup::platform::Key::Numpad5 && pressed) {
+            camera.ToggleProjection();
+            LOG_INFO("Projection: {}", camera.IsOrthographic() ? "Orthographic" : "Perspective");
+        }
     });
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);

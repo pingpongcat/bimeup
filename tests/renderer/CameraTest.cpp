@@ -182,3 +182,68 @@ TEST_F(CameraTest, SetDistanceClampsToMin) {
     float dist = glm::length(m_camera.GetPosition());
     EXPECT_GT(dist, 0.0f);
 }
+
+TEST_F(CameraTest, DefaultProjectionModeIsPerspective) {
+    EXPECT_EQ(m_camera.GetProjectionMode(), bimeup::renderer::ProjectionMode::Perspective);
+    EXPECT_FALSE(m_camera.IsOrthographic());
+}
+
+TEST_F(CameraTest, SetOrthographicProducesCorrectMatrix) {
+    m_camera.SetOrthographic(10.0f, 16.0f / 9.0f, 0.1f, 100.0f);
+
+    float halfH = 5.0f;
+    float halfW = halfH * (16.0f / 9.0f);
+    auto expected = glm::ortho(-halfW, halfW, -halfH, halfH, 0.1f, 100.0f);
+    expected[1][1] *= -1.0f;  // Vulkan Y flip
+
+    EXPECT_TRUE(Mat4Near(m_camera.GetProjectionMatrix(), expected));
+}
+
+TEST_F(CameraTest, SetOrthographicSwitchesMode) {
+    m_camera.SetPerspective(45.0f, 1.0f, 0.1f, 100.0f);
+    m_camera.SetOrthographic(10.0f, 1.0f, 0.1f, 100.0f);
+
+    EXPECT_EQ(m_camera.GetProjectionMode(), bimeup::renderer::ProjectionMode::Orthographic);
+    EXPECT_TRUE(m_camera.IsOrthographic());
+}
+
+TEST_F(CameraTest, SetPerspectiveSwitchesMode) {
+    m_camera.SetOrthographic(10.0f, 1.0f, 0.1f, 100.0f);
+    m_camera.SetPerspective(45.0f, 1.0f, 0.1f, 100.0f);
+
+    EXPECT_EQ(m_camera.GetProjectionMode(), bimeup::renderer::ProjectionMode::Perspective);
+    EXPECT_FALSE(m_camera.IsOrthographic());
+}
+
+TEST_F(CameraTest, ToggleProjectionSwapsMode) {
+    m_camera.SetPerspective(45.0f, 1.0f, 0.1f, 100.0f);
+
+    m_camera.ToggleProjection();
+    EXPECT_TRUE(m_camera.IsOrthographic());
+
+    m_camera.ToggleProjection();
+    EXPECT_FALSE(m_camera.IsOrthographic());
+}
+
+TEST_F(CameraTest, ToggleProjectionDoesNotChangeViewMatrix) {
+    m_camera.SetPerspective(45.0f, 1.0f, 0.1f, 100.0f);
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+
+    auto viewBefore = m_camera.GetViewMatrix();
+    m_camera.ToggleProjection();
+    auto viewAfter = m_camera.GetViewMatrix();
+
+    EXPECT_TRUE(Mat4Near(viewBefore, viewAfter));
+}
+
+TEST_F(CameraTest, ToggleProjectionRoundTripRestoresPerspectiveMatrix) {
+    m_camera.SetPerspective(45.0f, 1.5f, 0.1f, 100.0f);
+    auto projBefore = m_camera.GetProjectionMatrix();
+
+    m_camera.ToggleProjection();  // -> ortho
+    m_camera.ToggleProjection();  // -> perspective
+
+    EXPECT_EQ(m_camera.GetProjectionMode(), bimeup::renderer::ProjectionMode::Perspective);
+    EXPECT_TRUE(Mat4Near(m_camera.GetProjectionMatrix(), projBefore));
+}

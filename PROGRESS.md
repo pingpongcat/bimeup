@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: N — Navigation (Blender-style viewport)
-## Current Task: N.1b
+## Current Task: N.1c
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -100,7 +100,7 @@
 
 ## Stage N — Navigation (Blender-style viewport)
 - [x] N.1a Input mapping — `renderer::ViewportNavigator::ClassifyDrag` (MMB=orbit, Shift+MMB=pan, Ctrl+MMB=dolly) + wire into `main.cpp`
-- [ ] N.1b Ortho toggle — `Camera::SetOrthographic` + numpad 5 binding
+- [x] N.1b Ortho toggle — `Camera::SetOrthographic` + numpad 5 binding
 - [ ] N.1c Framing — frame-selected (numpad .) + frame-all (Home) + reset pivot (Shift+C)
 - [ ] N.1d Axis snaps — numpad 1/3/7 (+ Ctrl for opposite side) → preset views
 
