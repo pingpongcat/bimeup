@@ -21,6 +21,8 @@
 #include <renderer/Swapchain.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
+#include <scene/Measurement.h>
+#include <scene/Raycast.h>
 #include <scene/Scene.h>
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
@@ -258,6 +260,8 @@ int main(int argc, char* argv[]) {
     // Event bus + selection (must exist before input callbacks so picking can publish events).
     bimeup::core::EventBus eventBus;
     bimeup::core::Selection selection(eventBus);
+    bimeup::scene::MeasureTool measureTool;
+    bool measureModeActive = false;
 
     // Precompute per-node lists of global vertex indices in the MeshBuffer so
     // that selection highlighting only needs a set-lookup, not a full scan of
@@ -344,10 +348,24 @@ int main(int argc, char* argv[]) {
         if (btn == bimeup::platform::MouseButton::Left && pressed && !imguiWantsMouse()) {
             auto mouse = input.GetMousePosition();
             auto [view, proj] = buildViewProj();
-            bimeup::core::PickElement(
-                glm::vec2(static_cast<float>(mouse.x), static_cast<float>(mouse.y)),
-                windowSize(), view, proj, sceneResult->scene, sceneResult->meshes,
-                eventBus, ImGui::GetIO().KeyCtrl);
+            const glm::vec2 sp(static_cast<float>(mouse.x), static_cast<float>(mouse.y));
+            if (measureModeActive) {
+                auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
+                if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
+                                                          sceneResult->meshes)) {
+                    measureTool.AddPoint(hit->point);
+                    if (auto& res = measureTool.GetResult(); res.has_value()) {
+                        LOG_INFO("Measure: {:.3f} m  ({:.2f},{:.2f},{:.2f}) → "
+                                 "({:.2f},{:.2f},{:.2f})",
+                                 res->distance, res->pointA.x, res->pointA.y, res->pointA.z,
+                                 res->pointB.x, res->pointB.y, res->pointB.z);
+                    }
+                }
+            } else {
+                bimeup::core::PickElement(sp, windowSize(), view, proj, sceneResult->scene,
+                                          sceneResult->meshes, eventBus,
+                                          ImGui::GetIO().KeyCtrl);
+            }
         }
     });
 
@@ -442,6 +460,11 @@ int main(int argc, char* argv[]) {
     });
     toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
     toolbar->SetOnOpenFile([] { LOG_INFO("Toolbar: Open File (not implemented yet)"); });
+    toolbar->SetOnMeasureModeChanged([&](bool active) {
+        measureModeActive = active;
+        measureTool.Reset();
+        LOG_INFO("Measure mode: {}", active ? "on" : "off");
+    });
 
     // FPS tracking
     double lastFrameTime = glfwGetTime();
@@ -469,6 +492,11 @@ int main(int argc, char* argv[]) {
         overlay->SetFps(smoothedFps);
         overlay->SetCameraPosition(camera.GetPosition());
         overlay->SetCameraForward(camera.GetForward());
+        {
+            auto [view, proj] = buildViewProj();
+            overlay->SetMeasurement(measureModeActive ? &measureTool : nullptr,
+                                    view, proj, windowSize());
+        }
         toolbar->SetRenderMode(renderMode);
 
         uiManager.BeginFrame();

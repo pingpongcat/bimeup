@@ -77,4 +77,36 @@ TEST(ToolbarTest, TriggerFitToViewNoCallbackIsNoop) {
     SUCCEED();
 }
 
+TEST(ToolbarTest, MeasureModeDefaultsOff) {
+    Toolbar toolbar;
+    EXPECT_FALSE(toolbar.IsMeasureModeActive());
+}
+
+TEST(ToolbarTest, TriggerMeasureModeUpdatesStateAndInvokesCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    bool received = false;
+    toolbar.SetOnMeasureModeChanged([&](bool active) {
+        received = active;
+        ++calls;
+    });
+    toolbar.TriggerMeasureMode(true);
+    EXPECT_TRUE(toolbar.IsMeasureModeActive());
+    EXPECT_TRUE(received);
+    EXPECT_EQ(calls, 1);
+
+    toolbar.TriggerMeasureMode(false);
+    EXPECT_FALSE(toolbar.IsMeasureModeActive());
+    EXPECT_FALSE(received);
+    EXPECT_EQ(calls, 2);
+}
+
+TEST(ToolbarTest, TriggerMeasureModeWithSameStateDoesNotFireCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    toolbar.SetOnMeasureModeChanged([&](bool) { ++calls; });
+    toolbar.TriggerMeasureMode(false);  // same as default
+    EXPECT_EQ(calls, 0);
+}
+
 }  // namespace

@@ -1,10 +1,36 @@
 #include <ui/ViewportOverlay.h>
 
 #include <imgui.h>
+#include <scene/Measurement.h>
+
+#include <cstdio>
+#include <optional>
 
 namespace bimeup::ui {
 
 namespace {
+
+std::optional<ImVec2> WorldToScreen(const glm::vec3& worldPos,
+                                    const glm::mat4& view,
+                                    const glm::mat4& proj,
+                                    const glm::vec2& fbSize) {
+    glm::vec4 clip = proj * view * glm::vec4(worldPos, 1.0F);
+    if (clip.w <= 0.0F) {
+        return std::nullopt;  // behind camera
+    }
+    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    if (ndc.x < -1.0F || ndc.x > 1.0F || ndc.y < -1.0F || ndc.y > 1.0F) {
+        return std::nullopt;
+    }
+    const float sx = (ndc.x * 0.5F + 0.5F) * fbSize.x;
+    const float sy = (ndc.y * 0.5F + 0.5F) * fbSize.y;
+    return ImVec2{sx, sy};
+}
+
+void DrawMeasurePoint(ImDrawList* dl, const ImVec2& p, ImU32 color) {
+    dl->AddCircleFilled(p, 5.0F, color);
+    dl->AddCircle(p, 5.0F, IM_COL32(0, 0, 0, 255), 0, 1.5F);
+}
 
 void DrawAxesGizmo(glm::vec3 forward) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -92,6 +118,16 @@ bool ViewportOverlay::IsAxesGizmoVisible() const {
     return m_axesGizmoVisible;
 }
 
+void ViewportOverlay::SetMeasurement(const scene::MeasureTool* tool,
+                                     const glm::mat4& view,
+                                     const glm::mat4& proj,
+                                     glm::vec2 framebufferSize) {
+    m_measureTool = tool;
+    m_measureView = view;
+    m_measureProj = proj;
+    m_measureFbSize = framebufferSize;
+}
+
 void ViewportOverlay::OnDraw() {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -114,6 +150,36 @@ void ViewportOverlay::OnDraw() {
         }
     }
     ImGui::End();
+
+    if (m_measureTool != nullptr && m_measureFbSize.x > 0.0F && m_measureFbSize.y > 0.0F) {
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const ImU32 col = IM_COL32(255, 220, 60, 255);
+        const ImU32 line = IM_COL32(255, 220, 60, 220);
+
+        const auto& first = m_measureTool->GetFirstPoint();
+        const auto& result = m_measureTool->GetResult();
+
+        if (result.has_value()) {
+            auto a = WorldToScreen(result->pointA, m_measureView, m_measureProj, m_measureFbSize);
+            auto b = WorldToScreen(result->pointB, m_measureView, m_measureProj, m_measureFbSize);
+            if (a && b) {
+                dl->AddLine(*a, *b, line, 2.0F);
+                DrawMeasurePoint(dl, *a, col);
+                DrawMeasurePoint(dl, *b, col);
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.3f m", static_cast<double>(result->distance));
+                ImVec2 mid{(a->x + b->x) * 0.5F, (a->y + b->y) * 0.5F - 12.0F};
+                dl->AddRectFilled({mid.x - 4.0F, mid.y - 2.0F},
+                                  {mid.x + 80.0F, mid.y + 16.0F}, IM_COL32(0, 0, 0, 160), 3.0F);
+                dl->AddText(mid, IM_COL32(255, 255, 255, 255), buf);
+            }
+        } else if (first.has_value()) {
+            auto a = WorldToScreen(*first, m_measureView, m_measureProj, m_measureFbSize);
+            if (a) {
+                DrawMeasurePoint(dl, *a, col);
+            }
+        }
+    }
 }
 
 }  // namespace bimeup::ui

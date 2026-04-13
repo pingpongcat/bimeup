@@ -20,6 +20,10 @@ void Toolbar::SetOnFitToView(FitToViewCallback callback) {
     m_onFitToView = std::move(callback);
 }
 
+void Toolbar::SetOnMeasureModeChanged(MeasureModeCallback callback) {
+    m_onMeasureModeChanged = std::move(callback);
+}
+
 renderer::RenderMode Toolbar::GetRenderMode() const {
     return m_renderMode;
 }
@@ -50,6 +54,16 @@ void Toolbar::TriggerFitToView() {
     }
 }
 
+void Toolbar::TriggerMeasureMode(bool active) {
+    if (active == m_measureModeActive) {
+        return;
+    }
+    m_measureModeActive = active;
+    if (m_onMeasureModeChanged) {
+        m_onMeasureModeChanged(active);
+    }
+}
+
 void Toolbar::OnDraw() {
     if (ImGui::Begin(GetName())) {
         if (ImGui::Button("Open File...")) {
@@ -76,6 +90,15 @@ void Toolbar::OnDraw() {
 
         if (ImGui::Button("Fit to View")) {
             TriggerFitToView();
+        }
+
+        ImGui::SameLine();
+        ImGui::Separator();
+        ImGui::SameLine();
+
+        bool measure = m_measureModeActive;
+        if (ImGui::Checkbox("Measure", &measure)) {
+            TriggerMeasureMode(measure);
         }
     }
     ImGui::End();
