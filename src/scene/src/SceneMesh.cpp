@@ -18,6 +18,10 @@ void SceneMesh::SetIndices(std::vector<uint32_t> indices) {
     indices_ = std::move(indices);
 }
 
+void SceneMesh::SetTriangleOwners(std::vector<NodeId> owners) {
+    triangleOwners_ = std::move(owners);
+}
+
 void SceneMesh::SetUniformColor(const glm::vec4& color) {
     colors_.assign(positions_.size(), color);
 }

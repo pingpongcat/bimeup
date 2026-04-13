@@ -6,6 +6,8 @@
 
 #include <glm/glm.hpp>
 
+#include "SceneNode.h"
+
 namespace bimeup::scene {
 
 class SceneMesh {
@@ -18,10 +20,17 @@ public:
     /// Set all vertex colors to a single uniform color (resizes to match position count).
     void SetUniformColor(const glm::vec4& color);
 
+    /// Per-triangle owning NodeId for this mesh (length = index_count / 3).
+    /// When empty, the mesh is treated as "attached" (picked via the node that
+    /// references it with its transform); when populated, positions are assumed
+    /// to be world-space and ownership is resolved per triangle.
+    void SetTriangleOwners(std::vector<NodeId> owners);
+
     [[nodiscard]] const std::vector<glm::vec3>& GetPositions() const { return positions_; }
     [[nodiscard]] const std::vector<glm::vec3>& GetNormals() const { return normals_; }
     [[nodiscard]] const std::vector<glm::vec4>& GetColors() const { return colors_; }
     [[nodiscard]] const std::vector<uint32_t>& GetIndices() const { return indices_; }
+    [[nodiscard]] const std::vector<NodeId>& GetTriangleOwners() const { return triangleOwners_; }
 
     [[nodiscard]] size_t GetVertexCount() const { return positions_.size(); }
     [[nodiscard]] size_t GetIndexCount() const { return indices_.size(); }
@@ -36,6 +45,7 @@ private:
     std::vector<glm::vec3> normals_;
     std::vector<glm::vec4> colors_;
     std::vector<uint32_t> indices_;
+    std::vector<NodeId> triangleOwners_;
 };
 
 } // namespace bimeup::scene

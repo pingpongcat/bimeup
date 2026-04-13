@@ -42,8 +42,11 @@ bool PickElement(glm::vec2 screenPos,
         return false;
     }
 
-    ElementSelected event{.expressId = hit->nodeId, .additive = additive};
-    bus.Publish(event);
+    // Translate NodeId (dense scene index) into the IFC expressId carried by
+    // the owning SceneNode — the rest of the app (PropertyPanel, HierarchyPanel,
+    // SelectionBridge) keys selection by expressId.
+    uint32_t expressId = scene.GetNode(hit->nodeId).expressId;
+    bus.Publish(ElementSelected{.expressId = expressId, .additive = additive});
     return true;
 }
 
@@ -60,7 +63,7 @@ std::optional<scene::NodeId> HoverElement(glm::vec2 screenPos,
     ElementHovered event;
     std::optional<scene::NodeId> result;
     if (hit.has_value()) {
-        event.expressId = hit->nodeId;
+        event.expressId = scene.GetNode(hit->nodeId).expressId;
         result = hit->nodeId;
     }
     bus.Publish(event);

@@ -123,6 +123,87 @@ TEST(RaycastTest, RaycastSceneIgnoresInvisibleNodes) {
     EXPECT_FALSE(hit.has_value());
 }
 
+TEST(RaycastTest, BakedMeshRoutesTrianglesToOwners) {
+    // Two nodes that share one merged mesh (positions in world-space, identity
+    // node transforms). The ray passes through BOTH nodes' AABBs and hits B's
+    // triangle first. The legacy per-node loop would attribute B's triangle to
+    // the first node whose AABB the ray enters (A), returning the wrong owner;
+    // the baked-mesh path must resolve ownership per triangle.
+    Scene scene;
+
+    SceneNode nodeA;
+    nodeA.mesh = 0;
+    nodeA.transform = glm::mat4(1.0f);
+    // A's element occupies z∈[-0.1, 0.1]
+    nodeA.bounds = AABB(glm::vec3(-1.0f, -1.0f, -0.1f), glm::vec3(1.0f, 1.0f, 0.1f));
+    NodeId idA = scene.AddNode(nodeA);
+
+    SceneNode nodeB;
+    nodeB.mesh = 0;
+    nodeB.transform = glm::mat4(1.0f);
+    // B's element sits CLOSER to the camera at z∈[-5.1, -4.9]
+    nodeB.bounds = AABB(glm::vec3(-1.0f, -1.0f, -5.1f), glm::vec3(1.0f, 1.0f, -4.9f));
+    NodeId idB = scene.AddNode(nodeB);
+
+    SceneMesh merged;
+    merged.SetPositions({
+        // Triangle 0 at z=0 (A's)
+        {-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        // Triangle 1 at z=-5 (B's) — closer to the ray origin
+        {-1.0f, -1.0f, -5.0f}, {1.0f, -1.0f, -5.0f}, {0.0f, 1.0f, -5.0f},
+    });
+    merged.SetIndices({0, 1, 2, 3, 4, 5});
+    merged.SetTriangleOwners({idA, idB});
+
+    std::vector<SceneMesh> meshes;
+    meshes.push_back(std::move(merged));
+
+    Ray ray{glm::vec3(0.0f, 0.0f, -10.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    auto hit = RaycastScene(ray, scene, meshes);
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->nodeId, idB);
+    EXPECT_FLOAT_EQ(hit->t, 5.0f);
+}
+
+TEST(RaycastTest, BakedMeshSkipsInvisibleOwnerTriangles) {
+    Scene scene;
+
+    SceneNode hiddenNode;
+    hiddenNode.mesh = 0;
+    hiddenNode.transform = glm::mat4(1.0f);
+    hiddenNode.bounds = AABB(glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f));
+    hiddenNode.visible = false;
+    NodeId hiddenId = scene.AddNode(hiddenNode);
+
+    SceneNode visibleNode;
+    visibleNode.mesh = 0;
+    visibleNode.transform = glm::mat4(1.0f);
+    visibleNode.bounds = AABB(glm::vec3(9.0f, -1.0f, 0.0f), glm::vec3(11.0f, 1.0f, 0.0f));
+    NodeId visibleId = scene.AddNode(visibleNode);
+
+    SceneMesh merged;
+    merged.SetPositions({
+        {-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        {9.0f, -1.0f, 0.0f}, {11.0f, -1.0f, 0.0f}, {10.0f, 1.0f, 0.0f},
+    });
+    merged.SetIndices({0, 1, 2, 3, 4, 5});
+    merged.SetTriangleOwners({hiddenId, visibleId});
+
+    std::vector<SceneMesh> meshes;
+    meshes.push_back(std::move(merged));
+
+    // Ray pointing at triangle 0 (hidden) — should miss.
+    Ray rayHidden{glm::vec3(0.0f, 0.0f, -5.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    auto hit = RaycastScene(rayHidden, scene, meshes);
+    EXPECT_FALSE(hit.has_value());
+
+    // Ray pointing at triangle 1 (visible) — still works.
+    Ray rayVisible{glm::vec3(10.0f, 0.0f, -5.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    auto hitV = RaycastScene(rayVisible, scene, meshes);
+    ASSERT_TRUE(hitV.has_value());
+    EXPECT_EQ(hitV->nodeId, visibleId);
+}
+
 TEST(RaycastTest, RaycastSceneMissReturnsNullopt) {
     Scene scene;
     std::vector<SceneMesh> meshes;

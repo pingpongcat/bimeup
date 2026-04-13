@@ -111,11 +111,54 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
                                    const Scene& scene,
                                    std::span<const SceneMesh> meshes) {
     std::optional<RayHit> best;
-
     size_t nodeCount = scene.GetNodeCount();
+
+    // Baked-mesh path: meshes whose triangleOwners are set are assumed to be in
+    // world-space already (output of SceneBuilder batching), and each triangle
+    // carries the NodeId of the IFC element it came from. Iterate triangles once.
+    std::vector<bool> bakedMesh(meshes.size(), false);
+    for (size_t handle = 0; handle < meshes.size(); ++handle) {
+        const SceneMesh& mesh = meshes[handle];
+        const auto& owners = mesh.GetTriangleOwners();
+        if (owners.empty()) {
+            continue;
+        }
+        bakedMesh[handle] = true;
+
+        const auto& positions = mesh.GetPositions();
+        const auto& indices = mesh.GetIndices();
+        size_t triangleCount = indices.size() / 3;
+        for (size_t tri = 0; tri < triangleCount; ++tri) {
+            if (tri >= owners.size()) break;
+            NodeId owner = owners[tri];
+            if (owner >= nodeCount) continue;
+            const SceneNode& ownerNode = scene.GetNode(owner);
+            if (!ownerNode.visible) continue;
+
+            const glm::vec3& v0 = positions[indices[tri * 3]];
+            const glm::vec3& v1 = positions[indices[tri * 3 + 1]];
+            const glm::vec3& v2 = positions[indices[tri * 3 + 2]];
+
+            auto t = RayTriangleIntersect(ray, v0, v1, v2);
+            if (!t.has_value()) continue;
+            if (best.has_value() && *t >= best->t) continue;
+
+            RayHit hit;
+            hit.nodeId = owner;
+            hit.t = *t;
+            hit.point = ray.origin + ray.direction * (*t);
+            best = hit;
+        }
+    }
+
+    // Attached-mesh path: legacy per-node iteration for meshes without owners.
     for (NodeId id = 0; id < nodeCount; ++id) {
         const SceneNode& node = scene.GetNode(id);
         if (!node.visible || !node.mesh.has_value()) {
+            continue;
+        }
+        MeshHandle handle = *node.mesh;
+        if (handle >= meshes.size() || bakedMesh[handle]) {
             continue;
         }
 
@@ -128,10 +171,6 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
             continue;
         }
 
-        MeshHandle handle = *node.mesh;
-        if (handle >= meshes.size()) {
-            continue;
-        }
         const SceneMesh& mesh = meshes[handle];
         const auto& positions = mesh.GetPositions();
         const auto& indices = mesh.GetIndices();

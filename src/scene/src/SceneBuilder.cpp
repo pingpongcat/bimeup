@@ -62,24 +62,31 @@ void BuildHierarchy(Scene& scene,
                     NodeId parentId,
                     const std::unordered_map<uint32_t, ifc::TriangulatedMesh>& meshMap) {
     SceneNode sNode;
+    sNode.expressId = hNode.expressId;
     sNode.name = hNode.name;
     sNode.ifcType = hNode.type;
     sNode.globalId = hNode.globalId;
     sNode.parent = parentId;
 
-    // If this element has geometry, convert and store the mesh
     auto it = meshMap.find(hNode.expressId);
+    std::optional<SceneMesh> convertedMesh;
     if (it != meshMap.end()) {
         MeshHandle handle = static_cast<MeshHandle>(meshes.size());
-        SceneMesh converted = ConvertMesh(it->second);
-
-        sNode.bounds = AABB::FromVertices(converted.GetPositions());
+        convertedMesh = ConvertMesh(it->second);
+        sNode.bounds = AABB::FromVertices(convertedMesh->GetPositions());
         sNode.mesh = handle;
-
-        meshes.push_back(std::move(converted));
     }
 
     NodeId nodeId = scene.AddNode(std::move(sNode));
+
+    // Tag every triangle of this mesh with its owning NodeId so batching can
+    // carry per-triangle ownership through the merge step.
+    if (convertedMesh.has_value()) {
+        size_t triangleCount = convertedMesh->GetIndices().size() / 3;
+        std::vector<NodeId> owners(triangleCount, nodeId);
+        convertedMesh->SetTriangleOwners(std::move(owners));
+        meshes.push_back(std::move(*convertedMesh));
+    }
 
     for (const auto& child : hNode.children) {
         BuildHierarchy(scene, meshes, child, nodeId, meshMap);
@@ -154,6 +161,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
     std::vector<glm::vec3> normals;
     std::vector<glm::vec4> colors;
     std::vector<uint32_t> indices;
+    std::vector<NodeId> triangleOwners;
 
     uint32_t vertexOffset = 0;
     for (const auto* m : meshes) {
@@ -161,6 +169,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
         const auto& mNrm = m->GetNormals();
         const auto& mCol = m->GetColors();
         const auto& mIdx = m->GetIndices();
+        const auto& mOwn = m->GetTriangleOwners();
 
         positions.insert(positions.end(), mPos.begin(), mPos.end());
         normals.insert(normals.end(), mNrm.begin(), mNrm.end());
@@ -168,6 +177,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
         for (auto idx : mIdx) {
             indices.push_back(idx + vertexOffset);
         }
+        triangleOwners.insert(triangleOwners.end(), mOwn.begin(), mOwn.end());
         vertexOffset += static_cast<uint32_t>(m->GetVertexCount());
     }
 
@@ -175,6 +185,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
     merged.SetNormals(std::move(normals));
     merged.SetColors(std::move(colors));
     merged.SetIndices(std::move(indices));
+    merged.SetTriangleOwners(std::move(triangleOwners));
 
     return merged;
 }

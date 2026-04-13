@@ -76,7 +76,7 @@
 - [x] 6.13 Replace demo cube with bundled sample.ifc as default startup scene
 
 ## Stage 7 — BIM Viewer Features
-- [ ] 7.0 Fix element selection (nodeId→expressId + batching-aware raycast) — blocker before 7.1
+- [x] 7.0 Fix element selection (nodeId→expressId + batching-aware raycast)
 - [ ] 7.1 Distance measurement tool
 - [ ] 7.2 Point snapping
 - [ ] 7.3 Clipping planes

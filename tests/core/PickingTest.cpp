@@ -52,17 +52,20 @@ TEST(PickingTest, ScreenCenterProducesForwardRay) {
     EXPECT_NEAR(dir.z, -1.0f, 1e-4f);
 }
 
-TEST(PickingTest, ClickOnElementPublishesElementSelected) {
+TEST(PickingTest, ClickOnElementPublishesExpressIdFromNode) {
+    // The published event must carry the node's IFC expressId, not the scene NodeId.
     scene::Scene scene;
     std::vector<scene::SceneMesh> meshes;
     meshes.push_back(MakeQuadMesh());
 
     scene::SceneNode node;
+    node.expressId = 42;  // distinct from the scene NodeId (which will be 0).
     node.mesh = 0;
     node.transform = glm::mat4(1.0f);
     node.bounds = scene::AABB(glm::vec3(-1.0f, -1.0f, 0.0f),
                               glm::vec3(1.0f, 1.0f, 0.0f));
     scene::NodeId id = scene.AddNode(node);
+    ASSERT_NE(id, node.expressId);
 
     glm::vec2 size(800.0f, 600.0f);
     glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
@@ -81,7 +84,7 @@ TEST(PickingTest, ClickOnElementPublishesElementSelected) {
 
     EXPECT_TRUE(hit);
     ASSERT_TRUE(received.has_value());
-    EXPECT_EQ(received->expressId, id);
+    EXPECT_EQ(received->expressId, 42u);
     EXPECT_FALSE(received->additive);
 }
 
@@ -117,17 +120,19 @@ TEST(PickingTest, ClickOnEmptySpaceDoesNotPublish) {
     EXPECT_EQ(callCount, 0);
 }
 
-TEST(PickingTest, HoverOverElementPublishesHoveredWithId) {
+TEST(PickingTest, HoverOverElementPublishesHoveredWithExpressId) {
     scene::Scene scene;
     std::vector<scene::SceneMesh> meshes;
     meshes.push_back(MakeQuadMesh());
 
     scene::SceneNode node;
+    node.expressId = 77;
     node.mesh = 0;
     node.transform = glm::mat4(1.0f);
     node.bounds = scene::AABB(glm::vec3(-1.0f, -1.0f, 0.0f),
                               glm::vec3(1.0f, 1.0f, 0.0f));
     scene::NodeId id = scene.AddNode(node);
+    ASSERT_NE(id, node.expressId);
 
     glm::vec2 size(800.0f, 600.0f);
     glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
@@ -147,7 +152,7 @@ TEST(PickingTest, HoverOverElementPublishesHoveredWithId) {
     EXPECT_EQ(*result, id);
     ASSERT_TRUE(received.has_value());
     ASSERT_TRUE(received->expressId.has_value());
-    EXPECT_EQ(*received->expressId, id);
+    EXPECT_EQ(*received->expressId, 77u);
 }
 
 TEST(PickingTest, HoverOverEmptySpacePublishesHoveredWithNullopt) {
