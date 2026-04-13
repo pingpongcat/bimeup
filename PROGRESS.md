@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: N — Navigation (Blender-style viewport)
-## Current Task: N.1 complete — next stage TBD (Stage 7 or Stage 8)
+## Current Stage: 7 — BIM Viewer Features
+## Current Task: 7.3b — `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -80,7 +80,11 @@
 - [x] 7.0a Fix projection double Y-flip (model was rendered upside down, picking desynced) + wire selection → visible vertex-color highlight via MeshBuffer::SetVertexColorOverride
 - [x] 7.1 Distance measurement tool (scene::Measure + MeasureTool state machine)
 - [x] 7.2 Point snapping (scene::Snap — vertex/edge/face)
-- [ ] 7.3 Clipping planes (deferred — after Stage R)
+- [ ] 7.3 Clipping planes
+  - [x] 7.3a Math — `renderer::ClipPlane` struct + `SignedDistance`/`ClassifyPoint` helpers + unit tests
+  - [ ] 7.3b `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
+  - [ ] 7.3c UBO + shader integration (`gl_ClipDistance` or frag discard)
+  - [ ] 7.3d UI panel to edit planes interactively
 - [ ] 7.4 Plan view
 - [ ] 7.5 Section view
 - [ ] 7.6 Element visibility by IFC type

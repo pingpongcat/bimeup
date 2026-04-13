@@ -16,6 +16,7 @@ add_library(bimeup_renderer STATIC
     src/Msaa.cpp
     src/ShadowPass.cpp
     src/ViewportNavigator.cpp
+    src/ClipPlane.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
