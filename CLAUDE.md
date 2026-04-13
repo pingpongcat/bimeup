@@ -15,21 +15,23 @@ For EACH task:
 1. Write the test FIRST (TDD — test must fail before implementation)
 2. Implement minimal code to pass the test
 3. Run the test — confirm it passes
-4. Run ALL existing tests — confirm no regressions
+4. Run the tests for the module(s) you touched — confirm no local regressions
+   (e.g. `ctest -R renderer`, or a gtest filter like `--gtest_filter='ClipPlane*'`)
 5. Mark the task done in `PROGRESS.md` (change `- [ ]` to `- [x]`)
 6. Commit with message: `[stage.task] description`
 
 At the END of every session:
 1. Update `PROGRESS.md` — check off completed tasks, update "Current Task" to the next one
-2. If the stage is done, update "Current Stage" to the next stage
-3. Run the full test suite one final time
-4. Summarize what was done and what comes next
+2. If this session completed the last task of a stage:
+   - Update "Current Stage" to the next stage
+   - Run the FULL test suite (`ctest --output-on-failure`) as the stage gate
+3. Summarize what was done and what comes next
 
 ## Hard Rules
 - NEVER read more than 2 modules per session
 - NEVER implement without a failing test first
 - NEVER leave tests failing at end of session
-- NEVER skip running the full test suite before ending
+- NEVER skip the full test suite at stage completion (it's the gate for moving to the next stage)
 - Keep each task to a single commit
 - If a task is too large for one session, split it and update PROGRESS.md
 
