@@ -377,3 +377,40 @@ TEST_F(CameraTest, AxisViewPreservesDistanceAndTarget) {
     // Right view: camera should be at target + (d, 0, 0).
     EXPECT_TRUE(Vec3Near(m_camera.GetPosition(), target + glm::vec3(8.0f, 0.0f, 0.0f)));
 }
+
+using bimeup::renderer::YawPitchFromForward;
+
+TEST(YawPitchFromForwardTest, IdentityForwardIsZeroYawZeroPitch) {
+    // Camera at +Z looking toward origin has forward = (0, 0, -1).
+    glm::vec2 yp = YawPitchFromForward({0.0F, 0.0F, -1.0F});
+    EXPECT_NEAR(yp.x, 0.0F, kEpsilon);
+    EXPECT_NEAR(yp.y, 0.0F, kEpsilon);
+}
+
+TEST(YawPitchFromForwardTest, LookingDownIsPositivePitch) {
+    // forward.y = -1 → pitch = asin(1) = pi/2, camera is above target looking down.
+    glm::vec2 yp = YawPitchFromForward({0.0F, -1.0F, 0.0F});
+    EXPECT_NEAR(yp.y, std::numbers::pi_v<float> * 0.5F, 1e-3F);
+}
+
+TEST(YawPitchFromForwardTest, LookingAlongMinusXIsYawPiOverTwo) {
+    // forward = (-1, 0, 0) → camera is at +X of target, yaw = pi/2.
+    glm::vec2 yp = YawPitchFromForward({-1.0F, 0.0F, 0.0F});
+    EXPECT_NEAR(yp.x, std::numbers::pi_v<float> * 0.5F, 1e-3F);
+    EXPECT_NEAR(yp.y, 0.0F, 1e-3F);
+}
+
+TEST_F(CameraTest, SetYawPitchPlacesCameraAtExpectedPosition) {
+    m_camera.SetOrbitTarget({0.0F, 0.0F, 0.0F});
+    m_camera.SetDistance(5.0F);
+    m_camera.SetYawPitch(std::numbers::pi_v<float> * 0.5F, 0.0F);
+    // yaw=pi/2 → position = (d, 0, 0).
+    EXPECT_TRUE(Vec3Near(m_camera.GetPosition(), {5.0F, 0.0F, 0.0F}, 1e-3F));
+}
+
+TEST_F(CameraTest, SetYawPitchClampsPitch) {
+    m_camera.SetYawPitch(0.0F, 10.0F);  // well above kMaxPitch
+    // Forward should be near -Y (looking down).
+    glm::vec3 f = m_camera.GetForward();
+    EXPECT_LT(f.y, -0.9F);
+}

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.3e.4 — ViewManipulate cube for camera orientation
+## Current Task: 7.4 — Plan view
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -80,16 +80,16 @@
 - [x] 7.0a Fix projection double Y-flip (model was rendered upside down, picking desynced) + wire selection → visible vertex-color highlight via MeshBuffer::SetVertexColorOverride
 - [x] 7.1 Distance measurement tool (scene::Measure + MeasureTool state machine)
 - [x] 7.2 Point snapping (scene::Snap — vertex/edge/face)
-- [ ] 7.3 Clipping planes
+- [x] 7.3 Clipping planes
   - [x] 7.3a Math — `renderer::ClipPlane` struct + `SignedDistance`/`ClassifyPoint` helpers + unit tests
   - [x] 7.3b `ClipPlaneManager` (up to 6 planes, add/remove/enable/update) + unit tests
   - [x] 7.3c UBO + shader integration (`ClipPlanesUbo` + `PackClipPlanes` + `basic.frag` discard + descriptor binding 3)
   - [x] 7.3d UI panel to edit planes interactively (`ui::ClipPlanesPanel` — add via ±X/Y/Z presets, enable/disable, edit normal+offset, remove; wired in `main.cpp`)
-  - [ ] 7.3e ImGuizmo integration — add submodule, thread view/proj into UIManager, translate/rotate gizmo for active clip plane, ViewManipulate cube for camera orientation
+  - [x] 7.3e ImGuizmo integration — submodule, UIManager view/proj, clip plane Manipulate, ViewManipulate cube
     - [x] 7.3e.1 Add ImGuizmo submodule under `external/ImGuizmo`, compile into `imgui` target, smoke test links `ImGuizmo::IsUsing/IsOver`
     - [x] 7.3e.2 Thread view/proj matrices into `UIManager` (`SetCameraMatrices` / `GetViewMatrix` / `GetProjectionMatrix`), pushed each frame from `main.cpp`
     - [x] 7.3e.3 Translate/rotate gizmo for active clip plane (`renderer::PlaneToTransform` / `TransformToPlane` + `ImGuizmo::Manipulate` in `ClipPlanesPanel`)
-    - [ ] 7.3e.4 `ViewManipulate` cube wired to `Camera` orientation
+    - [x] 7.3e.4 `ViewManipulate` cube wired to `Camera` orientation (`Camera::SetYawPitch` + `renderer::YawPitchFromForward`, called after `uiManager.BeginFrame()` in `main.cpp`)
 - [ ] 7.4 Plan view
 - [ ] 7.5 Section view
 - [ ] 7.6 Element visibility by IFC type

@@ -119,6 +119,12 @@ void Camera::SetAxisView(AxisView view) {
     UpdatePosition();
 }
 
+void Camera::SetYawPitch(float yaw, float pitch) {
+    m_yaw = yaw;
+    m_pitch = std::clamp(pitch, kMinPitch, kMaxPitch);
+    UpdatePosition();
+}
+
 void Camera::Pan(glm::vec2 delta) {
     glm::vec3 forward = GetForward();
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0F, 1.0F, 0.0F)));
@@ -149,6 +155,13 @@ void Camera::UpdatePosition() {
     float y = m_distance * std::sin(m_pitch);
     float z = m_distance * std::cos(m_pitch) * std::cos(m_yaw);
     m_position = m_target + glm::vec3(x, y, z);
+}
+
+glm::vec2 YawPitchFromForward(const glm::vec3& forward) {
+    glm::vec3 f = glm::normalize(forward);
+    float pitch = std::asin(std::clamp(-f.y, -1.0F, 1.0F));
+    float yaw = std::atan2(-f.x, -f.z);
+    return {yaw, pitch};
 }
 
 }  // namespace bimeup::renderer

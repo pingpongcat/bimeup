@@ -44,6 +44,7 @@
 #include <ui/ViewportOverlay.h>
 
 #include <imgui.h>
+#include <ImGuizmo.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -781,6 +782,25 @@ int main(int argc, char* argv[]) {
         uiManager.SetCameraMatrices(camera.GetViewMatrix(), camera.GetProjectionMatrix());
         clipPlanesPanel->SetCameraMatrices(camera.GetViewMatrix(), camera.GetProjectionMatrix());
         uiManager.BeginFrame();
+
+        // ImGuizmo view cube: top-right, 128 px square. Captures drags on the
+        // cube and mutates the view matrix; we extract yaw/pitch back onto the
+        // orbit camera so the next frame's camera.GetViewMatrix() matches.
+        {
+            const auto ws = windowSize();
+            constexpr float kCubeSize = 128.0F;
+            const ImVec2 cubePos(ws.x - kCubeSize - 10.0F, 10.0F);
+            const ImVec2 cubeDim(kCubeSize, kCubeSize);
+            glm::mat4 viewCopy = camera.GetViewMatrix();
+            ImGuizmo::ViewManipulate(&viewCopy[0][0], 8.0F,
+                                     cubePos, cubeDim, 0x10101010);
+            if (ImGuizmo::IsUsingViewManipulate()) {
+                // Forward in world space: negated third row of the view's upper-3x3.
+                glm::vec3 forward{-viewCopy[0][2], -viewCopy[1][2], -viewCopy[2][2]};
+                const glm::vec2 yp = bimeup::renderer::YawPitchFromForward(forward);
+                camera.SetYawPitch(yp.x, yp.y);
+            }
+        }
 
         // Update camera UBO. Camera::SetPerspective already applies the Vulkan
         // Y-flip to m_projection[1][1]; do not flip again here.

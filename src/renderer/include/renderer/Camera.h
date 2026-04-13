@@ -31,6 +31,9 @@ public:
     void Zoom(float delta);
     void Pan(glm::vec2 delta);
 
+    // Set orientation directly. Pitch is clamped to the same range as Orbit.
+    void SetYawPitch(float yaw, float pitch);
+
     // Fit the camera so the AABB [min,max] is visible. Sets the orbit pivot to
     // the bounds center and the distance to `max(1.5 * largest_dim, 0.5)`.
     // Orbit angles are preserved. If max < min on any axis, this is a no-op.
@@ -74,5 +77,9 @@ private:
     glm::vec3 m_position{0.0F};
     glm::mat4 m_projection{1.0F};
 };
+
+// Recover (yaw, pitch) from a normalized forward direction in the convention
+// used by Camera::UpdatePosition: pitch = asin(-forward.y), yaw = atan2(-f.x, -f.z).
+glm::vec2 YawPitchFromForward(const glm::vec3& forward);
 
 }  // namespace bimeup::renderer
