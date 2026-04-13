@@ -1,9 +1,16 @@
 #include <gtest/gtest.h>
 #include <renderer/ShadowPass.h>
+#include <renderer/Device.h>
+#include <renderer/VulkanContext.h>
 
 #include <glm/glm.hpp>
 
+#include <memory>
+
 using bimeup::renderer::ComputeLightSpaceMatrix;
+using bimeup::renderer::Device;
+using bimeup::renderer::ShadowMap;
+using bimeup::renderer::VulkanContext;
 
 namespace {
 
@@ -71,4 +78,54 @@ TEST(ShadowPassTest, PointNearLightHasSmallerDepthThanPointFarFromLight) {
     EXPECT_LT(high, low);
     EXPECT_GE(high, 0.0F);
     EXPECT_LE(low, 1.0F);
+}
+
+class ShadowMapTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        m_context = std::make_unique<VulkanContext>(true);
+        m_device = std::make_unique<Device>(m_context->GetInstance());
+    }
+
+    void TearDown() override {
+        m_map.reset();
+        m_device.reset();
+        m_context.reset();
+    }
+
+    std::unique_ptr<VulkanContext> m_context;
+    std::unique_ptr<Device> m_device;
+    std::unique_ptr<ShadowMap> m_map;
+};
+
+TEST_F(ShadowMapTest, CreatesAllHandles) {
+    m_map = std::make_unique<ShadowMap>(*m_device, 1024U);
+
+    EXPECT_NE(m_map->GetImage(), VK_NULL_HANDLE);
+    EXPECT_NE(m_map->GetImageView(), VK_NULL_HANDLE);
+    EXPECT_NE(m_map->GetSampler(), VK_NULL_HANDLE);
+    EXPECT_NE(m_map->GetRenderPass(), VK_NULL_HANDLE);
+    EXPECT_NE(m_map->GetFramebuffer(), VK_NULL_HANDLE);
+}
+
+TEST_F(ShadowMapTest, StoresRequestedResolution) {
+    m_map = std::make_unique<ShadowMap>(*m_device, 2048U);
+
+    EXPECT_EQ(m_map->GetResolution(), 2048U);
+}
+
+TEST_F(ShadowMapTest, UsesDepthFormat) {
+    m_map = std::make_unique<ShadowMap>(*m_device, 1024U);
+
+    const VkFormat fmt = m_map->GetFormat();
+    EXPECT_TRUE(fmt == VK_FORMAT_D32_SFLOAT || fmt == VK_FORMAT_D16_UNORM)
+        << "Unexpected shadow map format: " << fmt;
+}
+
+TEST_F(ShadowMapTest, DestructorCleansUp) {
+    {
+        ShadowMap map(*m_device, 512U);
+        EXPECT_NE(map.GetFramebuffer(), VK_NULL_HANDLE);
+    }
+    // Validation layers + sanitizers would catch leaks
 }

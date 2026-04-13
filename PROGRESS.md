@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: R — Render Quality
-## Current Task: R.3b
+## Current Task: R.3c
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -93,7 +93,7 @@
 - [x] R.1 Three-point lighting (key/fill/rim) + ImGui Render Quality panel scaffold
 - [x] R.2 MSAA (toggle 1×/2×/4×/8×) with resolve pass
 - [x] R.3a Shadow mapping — light-space matrix math (`renderer::ComputeLightSpaceMatrix`) + unit tests
-- [ ] R.3b Shadow mapping — depth-only render pass + shadow map image/sampler
+- [x] R.3b Shadow mapping — depth-only render pass + shadow map image/sampler
 - [ ] R.3c Shadow mapping — PCF sampling in main frag + panel toggle/resolution wiring
 - [ ] R.4 SSAO (depth+normal prepass, kernel + blur + composite)
 
