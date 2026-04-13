@@ -21,11 +21,34 @@ MeshHandle MeshBuffer::Upload(const MeshData& data) {
 
     m_vertices.insert(m_vertices.end(), data.vertices.begin(), data.vertices.end());
     m_indices.insert(m_indices.end(), data.indices.begin(), data.indices.end());
+    m_baselineColors.reserve(m_vertices.size());
+    for (const auto& v : data.vertices) {
+        m_baselineColors.push_back(v.color);
+    }
 
     m_dirty = true;
     RebuildGpuBuffers();
 
     return handle;
+}
+
+void MeshBuffer::SetVertexColorOverride(const std::vector<uint32_t>& indices, glm::vec4 color) {
+    if (m_vertices.size() != m_baselineColors.size()) {
+        return;
+    }
+    for (size_t i = 0; i < m_vertices.size(); ++i) {
+        m_vertices[i].color = m_baselineColors[i];
+    }
+    for (uint32_t idx : indices) {
+        if (idx < m_vertices.size()) {
+            m_vertices[idx].color = color;
+        }
+    }
+    // The old vertex buffer may still be in-flight on the GPU. Wait for idle
+    // before RebuildGpuBuffers swaps the unique_ptr and frees it.
+    vkDeviceWaitIdle(m_device.GetDevice());
+    m_dirty = true;
+    RebuildGpuBuffers();
 }
 
 void MeshBuffer::Remove(MeshHandle handle) {

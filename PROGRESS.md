@@ -77,6 +77,7 @@
 
 ## Stage 7 — BIM Viewer Features
 - [x] 7.0 Fix element selection (nodeId→expressId + batching-aware raycast)
+- [x] 7.0a Fix projection double Y-flip (model was rendered upside down, picking desynced) + wire selection → visible vertex-color highlight via MeshBuffer::SetVertexColorOverride
 - [ ] 7.1 Distance measurement tool
 - [ ] 7.2 Point snapping
 - [ ] 7.3 Clipping planes

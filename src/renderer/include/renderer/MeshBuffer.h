@@ -55,6 +55,13 @@ public:
     void Bind(VkCommandBuffer cmd) const;
     void Draw(VkCommandBuffer cmd, MeshHandle handle) const;
 
+    /// Replace the per-vertex color of the given global vertex indices with `color`,
+    /// restoring all other vertices to their originally uploaded colors. Pass an
+    /// empty `indices` to clear any previous override.
+    void SetVertexColorOverride(const std::vector<uint32_t>& indices, glm::vec4 color);
+
+    [[nodiscard]] const std::vector<Vertex>& GetVerticesForTesting() const { return m_vertices; }
+
 private:
     void RebuildGpuBuffers();
 
@@ -63,6 +70,7 @@ private:
 
     // CPU-side staging
     std::vector<Vertex> m_vertices;
+    std::vector<glm::vec4> m_baselineColors;  // original colors from Upload, parallel to m_vertices
     std::vector<uint32_t> m_indices;
     std::unordered_map<MeshHandle, DrawParams> m_meshes;
 

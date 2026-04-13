@@ -98,6 +98,42 @@ TEST_F(MeshBufferTest, RemoveMeshMakesHandleInvalid) {
     EXPECT_FALSE(m_meshBuffer->IsValid(handle));
 }
 
+TEST_F(MeshBufferTest, SetVertexColorOverrideTintsGivenIndices) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    MeshHandle h1 = m_meshBuffer->Upload(MakeTriangle());
+    MeshHandle h2 = m_meshBuffer->Upload(MakeQuad());
+    (void)h1;
+    (void)h2;
+
+    // Override vertex indices belonging to the quad (global indices 3..6) with yellow.
+    glm::vec4 tint(1.0F, 1.0F, 0.0F, 1.0F);
+    m_meshBuffer->SetVertexColorOverride({3, 4, 5, 6}, tint);
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    ASSERT_EQ(verts.size(), 7u);
+    // Triangle (indices 0..2) remains at its original colors (red, green, blue).
+    EXPECT_EQ(verts[0].color, glm::vec4(1.0F, 0.0F, 0.0F, 1.0F));
+    EXPECT_EQ(verts[1].color, glm::vec4(0.0F, 1.0F, 0.0F, 1.0F));
+    EXPECT_EQ(verts[2].color, glm::vec4(0.0F, 0.0F, 1.0F, 1.0F));
+    // Quad vertices are tinted.
+    for (uint32_t i = 3; i <= 6; ++i) {
+        EXPECT_EQ(verts[i].color, tint) << "vertex " << i;
+    }
+}
+
+TEST_F(MeshBufferTest, SetVertexColorOverrideRestoresPreviousOverride) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    m_meshBuffer->Upload(MakeTriangle());
+
+    m_meshBuffer->SetVertexColorOverride({0, 1, 2}, glm::vec4(1.0F, 1.0F, 0.0F, 1.0F));
+    m_meshBuffer->SetVertexColorOverride({}, glm::vec4(0.0F));
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    EXPECT_EQ(verts[0].color, glm::vec4(1.0F, 0.0F, 0.0F, 1.0F));
+    EXPECT_EQ(verts[1].color, glm::vec4(0.0F, 1.0F, 0.0F, 1.0F));
+    EXPECT_EQ(verts[2].color, glm::vec4(0.0F, 0.0F, 1.0F, 1.0F));
+}
+
 TEST_F(MeshBufferTest, MeshCountTracksUploadAndRemove) {
     m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
     EXPECT_EQ(m_meshBuffer->MeshCount(), 0);

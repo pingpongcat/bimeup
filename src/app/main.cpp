@@ -185,6 +185,19 @@ int main(int argc, char* argv[]) {
     bimeup::scene::SceneBuilder builder;
     builder.SetBatchingEnabled(true);
     sceneResult = builder.Build(ifcModel);
+
+    // Snapshot node→sceneMeshIdx before Upload overwrites node.mesh with the
+    // renderer handle — we still need the scene-mesh-index to find triangle
+    // ownership when highlighting selected elements.
+    std::unordered_map<bimeup::scene::NodeId, size_t> nodeToSceneMeshIdx;
+    for (size_t i = 0; i < sceneResult->scene.GetNodeCount(); ++i) {
+        auto nodeId = static_cast<bimeup::scene::NodeId>(i);
+        const auto& node = sceneResult->scene.GetNode(nodeId);
+        if (node.mesh.has_value()) {
+            nodeToSceneMeshIdx[nodeId] = node.mesh.value();
+        }
+    }
+
     bimeup::core::SceneUploader::Upload(*sceneResult, meshBuffer);
 
     LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
@@ -245,6 +258,60 @@ int main(int argc, char* argv[]) {
     // Event bus + selection (must exist before input callbacks so picking can publish events).
     bimeup::core::EventBus eventBus;
     bimeup::core::Selection selection(eventBus);
+
+    // Precompute per-node lists of global vertex indices in the MeshBuffer so
+    // that selection highlighting only needs a set-lookup, not a full scan of
+    // every mesh's triangle owners on each click.
+    std::unordered_map<bimeup::scene::NodeId, std::vector<uint32_t>> nodeVertexIndices;
+    std::unordered_map<uint32_t, std::vector<bimeup::scene::NodeId>> expressIdToNodes;
+    for (size_t i = 0; i < sceneResult->scene.GetNodeCount(); ++i) {
+        auto nodeId = static_cast<bimeup::scene::NodeId>(i);
+        const auto& node = sceneResult->scene.GetNode(nodeId);
+        if (node.expressId != 0) {
+            expressIdToNodes[node.expressId].push_back(nodeId);
+        }
+        if (!node.mesh.has_value()) continue;
+        auto it = nodeToSceneMeshIdx.find(nodeId);
+        if (it == nodeToSceneMeshIdx.end()) continue;
+
+        const auto& sceneMesh = sceneResult->meshes[it->second];
+        const auto& owners = sceneMesh.GetTriangleOwners();
+        const auto& indices = sceneMesh.GetIndices();
+        auto params = meshBuffer.GetDrawParams(node.mesh.value());
+        int32_t baseVertex = params.vertexOffset;
+
+        std::vector<uint32_t>& out = nodeVertexIndices[nodeId];
+        if (owners.empty()) {
+            // Un-batched mesh — every vertex in this mesh belongs to this node.
+            out.reserve(sceneMesh.GetVertexCount());
+            for (size_t v = 0; v < sceneMesh.GetVertexCount(); ++v) {
+                out.push_back(static_cast<uint32_t>(baseVertex + v));
+            }
+        } else {
+            size_t triCount = indices.size() / 3;
+            for (size_t tri = 0; tri < triCount && tri < owners.size(); ++tri) {
+                if (owners[tri] != nodeId) continue;
+                for (int k = 0; k < 3; ++k) {
+                    out.push_back(static_cast<uint32_t>(baseVertex + indices[tri * 3 + k]));
+                }
+            }
+        }
+    }
+
+    constexpr glm::vec4 kHighlightColor(1.0F, 0.85F, 0.2F, 1.0F);
+    selection.SetOnChanged([&] {
+        std::vector<uint32_t> verts;
+        for (auto expressId : selection.Ids()) {
+            auto it = expressIdToNodes.find(expressId);
+            if (it == expressIdToNodes.end()) continue;
+            for (auto nodeId : it->second) {
+                auto vit = nodeVertexIndices.find(nodeId);
+                if (vit == nodeVertexIndices.end()) continue;
+                verts.insert(verts.end(), vit->second.begin(), vit->second.end());
+            }
+        }
+        meshBuffer.SetVertexColorOverride(verts, kHighlightColor);
+    });
 
     auto hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
 
@@ -406,10 +473,10 @@ int main(int argc, char* argv[]) {
 
         uiManager.BeginFrame();
 
-        // Update camera UBO
+        // Update camera UBO. Camera::SetPerspective already applies the Vulkan
+        // Y-flip to m_projection[1][1]; do not flip again here.
         ubo.view = camera.GetViewMatrix();
         ubo.projection = camera.GetProjectionMatrix();
-        ubo.projection[1][1] *= -1;  // Vulkan Y-flip
 
         auto* mapped = static_cast<CameraUBO*>(uboBuffer.Map());
         *mapped = ubo;
