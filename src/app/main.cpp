@@ -22,6 +22,7 @@
 #include <renderer/Shader.h>
 #include <renderer/ShadowPass.h>
 #include <renderer/Swapchain.h>
+#include <renderer/ViewportNavigator.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
 #include <scene/Measurement.h>
@@ -392,7 +393,6 @@ int main(int argc, char* argv[]) {
     auto hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
 
     // Input: orbit camera with mouse
-    bool rightMouseDown = false;
     bool middleMouseDown = false;
     glm::dvec2 lastMousePos{0.0, 0.0};
 
@@ -432,19 +432,14 @@ int main(int argc, char* argv[]) {
     };
 
     input.OnMouseButton([&](bimeup::platform::MouseButton btn, bool pressed) {
-        // Right-click while a measurement is pending → cancel and skip orbit.
+        // Right-click while a measurement is pending → cancel.
         if (btn == bimeup::platform::MouseButton::Right && pressed && measureModeActive &&
             measureTool.GetFirstPoint().has_value() && !imguiWantsMouse()) {
             measureTool.Cancel();
             LOG_INFO("Measure: cancelled");
-            rightMouseDown = false;
             return;
         }
 
-        if (btn == bimeup::platform::MouseButton::Right) {
-            rightMouseDown = pressed;
-            lastMousePos = input.GetMousePosition();
-        }
         if (btn == bimeup::platform::MouseButton::Middle) {
             middleMouseDown = pressed;
             lastMousePos = input.GetMousePosition();
@@ -478,16 +473,29 @@ int main(int argc, char* argv[]) {
         glm::dvec2 delta = pos - lastMousePos;
         lastMousePos = pos;
 
-        if (rightMouseDown) {
-            camera.Orbit(static_cast<float>(delta.x) * 0.005F,
-                         static_cast<float>(delta.y) * 0.005F);
-        }
         if (middleMouseDown) {
-            camera.Pan(glm::vec2(static_cast<float>(-delta.x) * 0.005F,
-                                 static_cast<float>(delta.y) * 0.005F));
+            bimeup::renderer::NavModifiers mods{
+                ImGui::GetIO().KeyShift, ImGui::GetIO().KeyCtrl, ImGui::GetIO().KeyAlt};
+            auto action = bimeup::renderer::ClassifyDrag(
+                bimeup::renderer::NavButton::Middle, mods);
+            switch (action) {
+                case bimeup::renderer::NavAction::Orbit:
+                    camera.Orbit(static_cast<float>(delta.x) * 0.005F,
+                                 static_cast<float>(delta.y) * 0.005F);
+                    break;
+                case bimeup::renderer::NavAction::Pan:
+                    camera.Pan(glm::vec2(static_cast<float>(-delta.x) * 0.005F,
+                                         static_cast<float>(delta.y) * 0.005F));
+                    break;
+                case bimeup::renderer::NavAction::Dolly:
+                    camera.Zoom(static_cast<float>(delta.y) * 0.02F);
+                    break;
+                case bimeup::renderer::NavAction::None:
+                    break;
+            }
         }
 
-        if (!rightMouseDown && !middleMouseDown && !imguiWantsMouse()) {
+        if (!middleMouseDown && !imguiWantsMouse()) {
             auto [view, proj] = buildViewProj();
             const glm::vec2 sp(static_cast<float>(x), static_cast<float>(y));
             if (measureModeActive) {

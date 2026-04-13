@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: R — Render Quality
-## Current Task: R.4
+## Current Stage: N — Navigation (Blender-style viewport)
+## Current Task: N.1b
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -96,7 +96,13 @@
 - [x] R.3b Shadow mapping — depth-only render pass + shadow map image/sampler
 - [x] R.3c Shadow mapping — LightingUbo shadow fields + `ComputePcfShadow` helper + panel wiring (enable/resolution/bias/PCF radius)
 - [x] R.3d Shadow mapping — `basic.{vert,frag}` PCF code + `sampler2DShadow` descriptor binding + depth pass executed each frame from `main.cpp`
-- [ ] R.4 SSAO (depth+normal prepass, kernel + blur + composite)
+- [ ] R.4 SSAO (deferred — shadow mapping already covers architectural depth cues; revisit after Stage N)
+
+## Stage N — Navigation (Blender-style viewport)
+- [x] N.1a Input mapping — `renderer::ViewportNavigator::ClassifyDrag` (MMB=orbit, Shift+MMB=pan, Ctrl+MMB=dolly) + wire into `main.cpp`
+- [ ] N.1b Ortho toggle — `Camera::SetOrthographic` + numpad 5 binding
+- [ ] N.1c Framing — frame-selected (numpad .) + frame-all (Home) + reset pivot (Shift+C)
+- [ ] N.1d Axis snaps — numpad 1/3/7 (+ Ctrl for opposite side) → preset views
 
 ## Stage 8 — Performance & Large Models
 - [ ] 8.1 Async IFC loading with progress
