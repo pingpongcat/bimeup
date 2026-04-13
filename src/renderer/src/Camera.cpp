@@ -87,6 +87,38 @@ void Camera::Frame(const glm::vec3& min, const glm::vec3& max) {
     SetDistance(std::max(maxDim * 1.5F, 0.5F));
 }
 
+void Camera::SetAxisView(AxisView view) {
+    // Use a pitch just under π/2 for top/bottom to avoid the lookAt
+    // singularity when the view direction aligns with the world up vector.
+    constexpr float kHalfPi = 1.57079632679F;
+    constexpr float kTopPitch = kHalfPi - 1e-3F;
+    switch (view) {
+        case AxisView::Front:
+            m_yaw = 0.0F;
+            m_pitch = 0.0F;
+            break;
+        case AxisView::Back:
+            m_yaw = kHalfPi * 2.0F;
+            m_pitch = 0.0F;
+            break;
+        case AxisView::Right:
+            m_yaw = kHalfPi;
+            m_pitch = 0.0F;
+            break;
+        case AxisView::Left:
+            m_yaw = -kHalfPi;
+            m_pitch = 0.0F;
+            break;
+        case AxisView::Top:
+            m_pitch = kTopPitch;
+            break;
+        case AxisView::Bottom:
+            m_pitch = -kTopPitch;
+            break;
+    }
+    UpdatePosition();
+}
+
 void Camera::Pan(glm::vec2 delta) {
     glm::vec3 forward = GetForward();
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0F, 1.0F, 0.0F)));

@@ -288,3 +288,92 @@ TEST_F(CameraTest, FrameBoundsInvalidMinMaxIsNoOp) {
 
     EXPECT_TRUE(Vec3Near(m_camera.GetPosition(), posBefore));
 }
+
+TEST_F(CameraTest, AxisViewFrontLooksAlongNegativeZ) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Front);
+
+    auto pos = m_camera.GetPosition();
+    auto fwd = m_camera.GetForward();
+    EXPECT_TRUE(Vec3Near(pos, glm::vec3(0.0f, 0.0f, 5.0f)));
+    EXPECT_TRUE(Vec3Near(fwd, glm::vec3(0.0f, 0.0f, -1.0f)));
+}
+
+TEST_F(CameraTest, AxisViewBackLooksAlongPositiveZ) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Back);
+
+    auto pos = m_camera.GetPosition();
+    auto fwd = m_camera.GetForward();
+    EXPECT_TRUE(Vec3Near(pos, glm::vec3(0.0f, 0.0f, -5.0f)));
+    EXPECT_TRUE(Vec3Near(fwd, glm::vec3(0.0f, 0.0f, 1.0f)));
+}
+
+TEST_F(CameraTest, AxisViewRightLooksAlongNegativeX) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Right);
+
+    auto pos = m_camera.GetPosition();
+    auto fwd = m_camera.GetForward();
+    EXPECT_TRUE(Vec3Near(pos, glm::vec3(5.0f, 0.0f, 0.0f)));
+    EXPECT_TRUE(Vec3Near(fwd, glm::vec3(-1.0f, 0.0f, 0.0f)));
+}
+
+TEST_F(CameraTest, AxisViewLeftLooksAlongPositiveX) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Left);
+
+    auto pos = m_camera.GetPosition();
+    auto fwd = m_camera.GetForward();
+    EXPECT_TRUE(Vec3Near(pos, glm::vec3(-5.0f, 0.0f, 0.0f)));
+    EXPECT_TRUE(Vec3Near(fwd, glm::vec3(1.0f, 0.0f, 0.0f)));
+}
+
+TEST_F(CameraTest, AxisViewTopLooksDown) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Top);
+
+    auto fwd = m_camera.GetForward();
+    auto pos = m_camera.GetPosition();
+    // Forward must point predominantly down (negative Y).
+    EXPECT_LT(fwd.y, -0.99f);
+    // Camera above target.
+    EXPECT_GT(pos.y, 0.0f);
+    // View matrix must be free of NaN (no gimbal singularity).
+    auto view = m_camera.GetViewMatrix();
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            EXPECT_FALSE(std::isnan(view[c][r]));
+}
+
+TEST_F(CameraTest, AxisViewBottomLooksUp) {
+    m_camera.SetOrbitTarget(glm::vec3(0.0f));
+    m_camera.SetDistance(5.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Bottom);
+
+    auto fwd = m_camera.GetForward();
+    auto pos = m_camera.GetPosition();
+    EXPECT_GT(fwd.y, 0.99f);
+    EXPECT_LT(pos.y, 0.0f);
+    auto view = m_camera.GetViewMatrix();
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            EXPECT_FALSE(std::isnan(view[c][r]));
+}
+
+TEST_F(CameraTest, AxisViewPreservesDistanceAndTarget) {
+    glm::vec3 target(3.0f, 4.0f, -2.0f);
+    m_camera.SetOrbitTarget(target);
+    m_camera.SetDistance(8.0f);
+    m_camera.SetAxisView(bimeup::renderer::AxisView::Right);
+
+    float dist = glm::length(m_camera.GetPosition() - target);
+    EXPECT_NEAR(dist, 8.0f, kEpsilon);
+    // Right view: camera should be at target + (d, 0, 0).
+    EXPECT_TRUE(Vec3Near(m_camera.GetPosition(), target + glm::vec3(8.0f, 0.0f, 0.0f)));
+}

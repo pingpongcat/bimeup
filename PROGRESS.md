@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: N — Navigation (Blender-style viewport)
-## Current Task: N.1d
+## Current Task: N.1 complete — next stage TBD (Stage 7 or Stage 8)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -102,7 +102,7 @@
 - [x] N.1a Input mapping — `renderer::ViewportNavigator::ClassifyDrag` (MMB=orbit, Shift+MMB=pan, Ctrl+MMB=dolly) + wire into `main.cpp`
 - [x] N.1b Ortho toggle — `Camera::SetOrthographic` + numpad 5 binding
 - [x] N.1c Framing — `Camera::Frame(min,max)` + Home (frame-all) / Numpad . (frame-selected, falls back to frame-all) / Shift+C (reset pivot to origin)
-- [ ] N.1d Axis snaps — numpad 1/3/7 (+ Ctrl for opposite side) → preset views
+- [x] N.1d Axis snaps — `Camera::SetAxisView(AxisView)` + numpad 1/3/7 (Ctrl = opposite side) for Front/Back/Right/Left/Top/Bottom
 
 ## Stage 8 — Performance & Large Models
 - [ ] 8.1 Async IFC loading with progress

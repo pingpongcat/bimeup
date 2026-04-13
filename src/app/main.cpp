@@ -563,6 +563,27 @@ int main(int argc, char* argv[]) {
             input.IsKeyDown(bimeup::platform::Key::LeftShift)) {
             camera.SetOrbitTarget(glm::vec3(0.0F));
         }
+        // Axis-aligned preset views (Blender convention, Y-up).
+        // Numpad 1/3/7 → Front/Right/Top; hold Ctrl for the opposite side.
+        if (pressed &&
+            (key == bimeup::platform::Key::Numpad1 ||
+             key == bimeup::platform::Key::Numpad3 ||
+             key == bimeup::platform::Key::Numpad7)) {
+            bool ctrl = input.IsKeyDown(bimeup::platform::Key::LeftControl) ||
+                        input.IsKeyDown(bimeup::platform::Key::RightControl);
+            bimeup::renderer::AxisView view = bimeup::renderer::AxisView::Front;
+            if (key == bimeup::platform::Key::Numpad1) {
+                view = ctrl ? bimeup::renderer::AxisView::Back
+                            : bimeup::renderer::AxisView::Front;
+            } else if (key == bimeup::platform::Key::Numpad3) {
+                view = ctrl ? bimeup::renderer::AxisView::Left
+                            : bimeup::renderer::AxisView::Right;
+            } else {
+                view = ctrl ? bimeup::renderer::AxisView::Bottom
+                            : bimeup::renderer::AxisView::Top;
+            }
+            camera.SetAxisView(view);
+        }
     });
 
     renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);

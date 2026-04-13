@@ -9,6 +9,15 @@ enum class ProjectionMode {
     Orthographic,
 };
 
+enum class AxisView {
+    Front,   // +Z looking along -Z
+    Back,    // -Z looking along +Z
+    Right,   // +X looking along -X
+    Left,    // -X looking along +X
+    Top,     // +Y looking along -Y
+    Bottom,  // -Y looking along +Y
+};
+
 class Camera {
 public:
     Camera();
@@ -26,6 +35,10 @@ public:
     // the bounds center and the distance to `max(1.5 * largest_dim, 0.5)`.
     // Orbit angles are preserved. If max < min on any axis, this is a no-op.
     void Frame(const glm::vec3& min, const glm::vec3& max);
+
+    // Snap to an axis-aligned preset view around the current orbit target.
+    // Preserves distance and target. Numpad 1/3/7 (+ Ctrl for opposites).
+    void SetAxisView(AxisView view);
 
     [[nodiscard]] glm::mat4 GetViewMatrix() const;
     [[nodiscard]] glm::mat4 GetProjectionMatrix() const;
