@@ -672,6 +672,11 @@ int main(int argc, char* argv[]) {
         if (planBounds.IsValid()) {
             planViewPanel->SetSceneBounds(planBounds.GetMin(), planBounds.GetMax());
         }
+        const auto initialSize = windowSize();
+        if (initialSize.y > 0) {
+            planViewPanel->SetViewportAspect(
+                static_cast<float>(initialSize.x) / static_cast<float>(initialSize.y));
+        }
     }
 
     hierarchyPanel->SetEventBus(&eventBus);
@@ -772,7 +777,9 @@ int main(int argc, char* argv[]) {
             surface,
             VkExtent2D{static_cast<uint32_t>(size.x), static_cast<uint32_t>(size.y)});
         renderLoop.RecreateForSwapchain();
-        camera.SetAspect(static_cast<float>(size.x) / static_cast<float>(size.y));
+        const float aspect = static_cast<float>(size.x) / static_cast<float>(size.y);
+        camera.SetAspect(aspect);
+        planViewPanel->SetViewportAspect(aspect);
     };
 
     // FPS tracking

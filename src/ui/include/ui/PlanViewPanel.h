@@ -40,6 +40,8 @@ public:
 
     void SetSceneBounds(const glm::vec3& min, const glm::vec3& max);
 
+    void SetViewportAspect(float aspect) { m_viewportAspect = aspect; }
+
     void SetCutAbove(float cutAbove) { m_cutAbove = cutAbove; }
     [[nodiscard]] float CutAbove() const { return m_cutAbove; }
 
@@ -64,6 +66,7 @@ private:
     glm::vec3 m_sceneMax{1.0F};
     bool m_hasBounds = false;
     float m_cutAbove = 1.2F;
+    float m_viewportAspect = 1.0F;
     int m_activeLevel = -1;
     std::uint32_t m_clipPlaneId = 0;  // 0 == ClipPlaneManager::kInvalidId
 };

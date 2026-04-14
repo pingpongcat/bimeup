@@ -69,10 +69,16 @@ void PlanViewPanel::ApplyCameraForPlan() {
 
     const glm::vec3 center = 0.5F * (min + max);
     const glm::vec3 size = max - min;
-    const float orthoHeight = 1.2F * std::max(size.x, size.z);
+    // Fit both X and Z into the ortho frustum regardless of viewport aspect.
+    // With ortho `height` as vertical extent and width = height * aspect,
+    // we need height >= size.z and height * aspect >= size.x.
+    const float aspect = (m_viewportAspect > 0.0F) ? m_viewportAspect : 1.0F;
+    const float heightForZ = size.z;
+    const float heightForX = size.x / aspect;
+    const float orthoHeight = 1.2F * std::max(heightForZ, heightForX);
 
     m_camera->SetOrbitTarget(center);
-    m_camera->SetOrthographic(orthoHeight, 1.0F, 0.1F, 1000.0F);
+    m_camera->SetOrthographic(orthoHeight, aspect, 0.1F, 1000.0F);
     m_camera->SetAxisView(renderer::AxisView::Top);
 }
 
