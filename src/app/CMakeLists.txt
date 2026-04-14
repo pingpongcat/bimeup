@@ -7,5 +7,5 @@ bimeup_enable_sanitizers(bimeup)
 target_compile_definitions(bimeup PRIVATE
     BIMEUP_VERSION="${PROJECT_VERSION}"
     BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}"
-    BIMEUP_SAMPLE_IFC="${CMAKE_SOURCE_DIR}/assets/sample.ifc"
+    BIMEUP_SAMPLE_IFC="${CMAKE_SOURCE_DIR}/../sample_house.ifc"
 )

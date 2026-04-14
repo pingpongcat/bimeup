@@ -4,6 +4,7 @@ add_executable(ui_tests
     ImGuiContextTest.cpp
     ImGuizmoIntegrationTest.cpp
     PanelTest.cpp
+    PlanViewPanelTest.cpp
     PropertyPanelTest.cpp
     RenderQualityPanelTest.cpp
     SelectionBridgeTest.cpp

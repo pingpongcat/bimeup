@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.4 — Plan view
+## Current Task: 7.5 — Section view
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -90,7 +90,7 @@
     - [x] 7.3e.2 Thread view/proj matrices into `UIManager` (`SetCameraMatrices` / `GetViewMatrix` / `GetProjectionMatrix`), pushed each frame from `main.cpp`
     - [x] 7.3e.3 Translate/rotate gizmo for active clip plane (`renderer::PlaneToTransform` / `TransformToPlane` + `ImGuizmo::Manipulate` in `ClipPlanesPanel`)
     - [x] 7.3e.4 `ViewManipulate` cube wired to `Camera` orientation (`Camera::SetYawPitch` + `renderer::YawPitchFromForward`, called after `uiManager.BeginFrame()` in `main.cpp`)
-- [ ] 7.4 Plan view
+- [x] 7.4 Plan view (`ui::PlanViewPanel` — Ground Floor / Roof switcher; creates horizontal clip plane at `elevation + cutAbove` and switches camera to top-down ortho framed to scene XZ; default sample swapped to `sample_house.ifc`)
 - [ ] 7.5 Section view
 - [ ] 7.6 Element visibility by IFC type
 - [ ] 7.7 Element isolation

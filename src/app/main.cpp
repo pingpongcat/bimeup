@@ -33,6 +33,7 @@
 #include <scene/SceneNode.h>
 #include <tools/Log.h>
 #include <ui/ClipPlanesPanel.h>
+#include <ui/PlanViewPanel.h>
 #include <ui/HierarchyPanel.h>
 #include <ui/MeasurementsPanel.h>
 #include <ui/PropertyPanel.h>
@@ -647,6 +648,7 @@ int main(int argc, char* argv[]) {
     auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
     auto renderQualityOwned = std::make_unique<bimeup::ui::RenderQualityPanel>();
     auto clipPlanesOwned = std::make_unique<bimeup::ui::ClipPlanesPanel>();
+    auto planViewOwned = std::make_unique<bimeup::ui::PlanViewPanel>();
 
     auto* toolbar = toolbarOwned.get();
     auto* hierarchyPanel = hierarchyOwned.get();
@@ -655,9 +657,22 @@ int main(int argc, char* argv[]) {
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
     auto* clipPlanesPanel = clipPlanesOwned.get();
+    auto* planViewPanel = planViewOwned.get();
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
     clipPlanesPanel->SetManager(&clipPlaneManager);
+    planViewPanel->SetClipPlaneManager(&clipPlaneManager);
+    planViewPanel->SetCamera(&camera);
+    planViewPanel->SetLevels({
+        {"Ground Floor", 0.0F},
+        {"Roof", 2.5F},
+    });
+    {
+        auto planBounds = ComputeSceneBounds(sceneResult->scene);
+        if (planBounds.IsValid()) {
+            planViewPanel->SetSceneBounds(planBounds.GetMin(), planBounds.GetMax());
+        }
+    }
 
     hierarchyPanel->SetEventBus(&eventBus);
     toolbar->SetRenderMode(renderMode);
@@ -674,6 +689,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(measurementsOwned));
     uiManager.AddPanel(std::move(renderQualityOwned));
     uiManager.AddPanel(std::move(clipPlanesOwned));
+    uiManager.AddPanel(std::move(planViewOwned));
 
     toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
         renderMode = mode;

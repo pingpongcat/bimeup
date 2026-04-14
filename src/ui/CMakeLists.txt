@@ -5,6 +5,7 @@ add_library(bimeup_ui STATIC
     src/HierarchyPanel.cpp
     src/ImGuiContext.cpp
     src/MeasurementsPanel.cpp
+    src/PlanViewPanel.cpp
     src/PropertyPanel.cpp
     src/RenderQualityPanel.cpp
     src/SelectionBridge.cpp
