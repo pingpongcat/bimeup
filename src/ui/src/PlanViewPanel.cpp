@@ -58,6 +58,13 @@ void PlanViewPanel::Deactivate() {
         m_clipManager->RemovePlane(m_clipPlaneId);
     }
     m_clipPlaneId = renderer::ClipPlaneManager::kInvalidId;
+
+    if (m_camera != nullptr && m_hasSavedProjection && m_savedWasPerspective &&
+        m_camera->IsOrthographic()) {
+        m_camera->ToggleProjection();
+    }
+    m_hasSavedProjection = false;
+
     m_activeLevel = -1;
 }
 
@@ -78,6 +85,11 @@ void PlanViewPanel::ApplyCameraForPlan() {
     const float heightForZ = size.z;
     const float heightForX = size.x / aspect;
     const float orthoHeight = 1.2F * std::max(heightForZ, heightForX);
+
+    if (!m_hasSavedProjection) {
+        m_savedWasPerspective = !m_camera->IsOrthographic();
+        m_hasSavedProjection = true;
+    }
 
     m_camera->SetOrbitTarget(center);
     m_camera->SetOrthographic(orthoHeight, aspect, 0.1F, 1000.0F);

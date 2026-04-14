@@ -884,6 +884,9 @@ int main(int argc, char* argv[]) {
                 glm::vec3 forward{-viewCopy[0][2], -viewCopy[1][2], -viewCopy[2][2]};
                 const glm::vec2 yp = bimeup::renderer::YawPitchFromForward(forward);
                 camera.SetYawPitch(yp.x, yp.y);
+                if (planViewPanel != nullptr && planViewPanel->ActiveLevel() >= 0) {
+                    planViewPanel->Deactivate();
+                }
             }
         }
 

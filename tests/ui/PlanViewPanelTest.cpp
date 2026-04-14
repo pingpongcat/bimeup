@@ -80,6 +80,39 @@ TEST(PlanViewPanelTest, ActivateLevelReusesSamePlaneEntry) {
     EXPECT_EQ(mgr.Count(), 1U);
 }
 
+TEST(PlanViewPanelTest, DeactivateRestoresPerspectiveProjection) {
+    Camera camera;
+    camera.SetPerspective(45.0F, 1.0F, 0.1F, 100.0F);
+    ASSERT_FALSE(camera.IsOrthographic());
+
+    ClipPlaneManager mgr;
+    PlanViewPanel panel;
+    panel.SetCamera(&camera);
+    panel.SetClipPlaneManager(&mgr);
+    panel.SetLevels({{"Ground Floor", 0.0F}});
+
+    ASSERT_TRUE(panel.ActivateLevel(0));
+    ASSERT_TRUE(camera.IsOrthographic());
+
+    panel.Deactivate();
+    EXPECT_FALSE(camera.IsOrthographic());
+}
+
+TEST(PlanViewPanelTest, DeactivateLeavesOrthoIfCameraStartedOrtho) {
+    Camera camera;
+    camera.SetOrthographic(10.0F, 1.0F, 0.1F, 100.0F);
+    ASSERT_TRUE(camera.IsOrthographic());
+
+    PlanViewPanel panel;
+    panel.SetCamera(&camera);
+    panel.SetLevels({{"Ground Floor", 0.0F}});
+
+    ASSERT_TRUE(panel.ActivateLevel(0));
+    panel.Deactivate();
+    // User was already in ortho mode — don't silently flip them to perspective.
+    EXPECT_TRUE(camera.IsOrthographic());
+}
+
 TEST(PlanViewPanelTest, DeactivateRemovesManagedPlane) {
     ClipPlaneManager mgr;
     PlanViewPanel panel;

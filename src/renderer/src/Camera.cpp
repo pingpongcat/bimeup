@@ -81,7 +81,7 @@ void Camera::Zoom(float delta) {
     if (m_projectionMode == ProjectionMode::Orthographic) {
         // Proportional zoom: each unit of delta scales ortho height by ~20%.
         // Matches perspective feel since ortho has no distance to move through.
-        constexpr float kOrthoZoomRate = 0.2F;
+        constexpr float kOrthoZoomRate = 0.4F;
         constexpr float kMinOrthoHeight = 0.01F;
         constexpr float kMaxOrthoHeight = 100000.0F;
         const float factor = std::max(1.0F + delta * kOrthoZoomRate, 0.1F);

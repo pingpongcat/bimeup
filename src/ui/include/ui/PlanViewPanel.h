@@ -69,6 +69,12 @@ private:
     float m_viewportAspect = 1.0F;
     int m_activeLevel = -1;
     std::uint32_t m_clipPlaneId = 0;  // 0 == ClipPlaneManager::kInvalidId
+
+    // Remembered so Deactivate can restore the pre-plan projection. Populated
+    // on the first ActivateLevel; a second ActivateLevel while already active
+    // must not overwrite (the camera is already orthographic at that point).
+    bool m_hasSavedProjection = false;
+    bool m_savedWasPerspective = true;
 };
 
 }  // namespace bimeup::ui
