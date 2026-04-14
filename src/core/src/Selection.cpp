@@ -8,10 +8,13 @@ namespace bimeup::core {
 Selection::Selection(EventBus& bus) : m_bus(bus) {
     m_subscription = m_bus.Subscribe<ElementSelected>(
         [this](const ElementSelected& event) { OnElementSelected(event); });
+    m_clearSubscription = m_bus.Subscribe<SelectionCleared>(
+        [this](const SelectionCleared&) { Clear(); });
 }
 
 Selection::~Selection() {
     m_bus.Unsubscribe<ElementSelected>(m_subscription);
+    m_bus.Unsubscribe<SelectionCleared>(m_clearSubscription);
 }
 
 void Selection::Clear() {

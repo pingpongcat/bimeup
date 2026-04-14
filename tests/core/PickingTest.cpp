@@ -88,6 +88,74 @@ TEST(PickingTest, ClickOnElementPublishesExpressIdFromNode) {
     EXPECT_FALSE(received->additive);
 }
 
+TEST(PickingTest, ClickOnEmptySpacePublishesSelectionClearedWhenNotAdditive) {
+    scene::Scene scene;
+    std::vector<scene::SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    scene::SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::translate(glm::mat4(1.0f),
+                                    glm::vec3(50.0f, 0.0f, 0.0f));
+    node.bounds = scene::AABB(glm::vec3(49.0f, -1.0f, 0.0f),
+                              glm::vec3(51.0f, 1.0f, 0.0f));
+    scene.AddNode(node);
+
+    glm::vec2 size(800.0f, 600.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                                 glm::vec3(0.0f),
+                                 glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(60.0f),
+                                      size.x / size.y, 0.1f, 100.0f);
+
+    EventBus bus;
+    int clearedCount = 0;
+    bus.Subscribe<SelectionCleared>(
+        [&](const SelectionCleared&) { ++clearedCount; });
+
+    bool hit = PickElement(size * 0.5f, size, view, proj, scene, meshes, bus,
+                           /*additive=*/false);
+
+    EXPECT_FALSE(hit);
+    EXPECT_EQ(clearedCount, 1);
+}
+
+TEST(PickingTest, ClickOnEmptySpaceWithAdditivePreservesSelection) {
+    scene::Scene scene;
+    std::vector<scene::SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    scene::SceneNode node;
+    node.mesh = 0;
+    node.transform = glm::translate(glm::mat4(1.0f),
+                                    glm::vec3(50.0f, 0.0f, 0.0f));
+    node.bounds = scene::AABB(glm::vec3(49.0f, -1.0f, 0.0f),
+                              glm::vec3(51.0f, 1.0f, 0.0f));
+    scene.AddNode(node);
+
+    glm::vec2 size(800.0f, 600.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                                 glm::vec3(0.0f),
+                                 glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(60.0f),
+                                      size.x / size.y, 0.1f, 100.0f);
+
+    EventBus bus;
+    int clearedCount = 0;
+    int selectedCount = 0;
+    bus.Subscribe<SelectionCleared>(
+        [&](const SelectionCleared&) { ++clearedCount; });
+    bus.Subscribe<ElementSelected>(
+        [&](const ElementSelected&) { ++selectedCount; });
+
+    bool hit = PickElement(size * 0.5f, size, view, proj, scene, meshes, bus,
+                           /*additive=*/true);
+
+    EXPECT_FALSE(hit);
+    EXPECT_EQ(clearedCount, 0);  // additive miss must preserve selection
+    EXPECT_EQ(selectedCount, 0);
+}
+
 TEST(PickingTest, ClickOnEmptySpaceDoesNotPublish) {
     scene::Scene scene;
     std::vector<scene::SceneMesh> meshes;

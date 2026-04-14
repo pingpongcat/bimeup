@@ -35,6 +35,7 @@ private:
 
     EventBus& m_bus;
     uint32_t m_subscription = 0;
+    uint32_t m_clearSubscription = 0;
     std::unordered_set<Id> m_selected;
     ChangedCallback m_onChanged;
 };

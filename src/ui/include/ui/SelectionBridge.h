@@ -9,6 +9,7 @@
 namespace bimeup::core {
 class EventBus;
 struct ElementSelected;
+struct SelectionCleared;
 }  // namespace bimeup::core
 
 namespace bimeup::ui {
@@ -36,11 +37,13 @@ public:
 
 private:
     void OnElementSelected(const core::ElementSelected& event);
+    void OnSelectionCleared();
 
     core::EventBus& m_bus;
     PropertyPanel& m_propertyPanel;
     ElementLookup m_lookup;
     uint32_t m_subscription = 0;
+    uint32_t m_clearSubscription = 0;
     ifc::IfcElement m_current;
     bool m_hasCurrent = false;
 };

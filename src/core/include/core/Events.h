@@ -13,6 +13,8 @@ struct ElementSelected {
     bool additive = false;
 };
 
+struct SelectionCleared {};
+
 struct ElementHovered {
     std::optional<uint32_t> expressId;
 };

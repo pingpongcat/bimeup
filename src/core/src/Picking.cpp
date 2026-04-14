@@ -39,6 +39,11 @@ bool PickElement(glm::vec2 screenPos,
     scene::Ray ray = ScreenPointToRay(screenPos, screenSize, view, proj);
     auto hit = scene::RaycastScene(ray, scene, meshes);
     if (!hit.has_value()) {
+        // Clicking empty space with a non-additive click clears the selection.
+        // Additive (shift/ctrl) clicks preserve it so users don't lose context.
+        if (!additive) {
+            bus.Publish(SelectionCleared{});
+        }
         return false;
     }
 

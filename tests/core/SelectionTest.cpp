@@ -15,6 +15,26 @@ TEST(SelectionTest, StartsEmpty) {
     EXPECT_FALSE(selection.Contains(42u));
 }
 
+TEST(SelectionTest, SelectionClearedEventEmptiesSelection) {
+    EventBus bus;
+    Selection selection(bus);
+
+    bus.Publish(ElementSelected{.expressId = 1, .additive = false});
+    bus.Publish(ElementSelected{.expressId = 2, .additive = true});
+    ASSERT_EQ(selection.Count(), 2u);
+
+    int changedCount = 0;
+    selection.SetOnChanged([&] { ++changedCount; });
+
+    bus.Publish(SelectionCleared{});
+    EXPECT_EQ(selection.Count(), 0u);
+    EXPECT_EQ(changedCount, 1);
+
+    // No-op clear must not fire changed again.
+    bus.Publish(SelectionCleared{});
+    EXPECT_EQ(changedCount, 1);
+}
+
 TEST(SelectionTest, NonAdditiveClickReplacesSelection) {
     EventBus bus;
     Selection selection(bus);
