@@ -124,9 +124,33 @@ TEST(PlanViewPanelTest, ActivateLevelSwitchesCameraToOrthographicTop) {
 
     ASSERT_TRUE(panel.ActivateLevel(0));
     EXPECT_TRUE(camera.IsOrthographic());
-    // Top view: forward should point along -Y.
+    // Top view: forward should point nearly along -Y (pitch is clamped just
+    // under π/2 to avoid the lookAt up-vector singularity).
     const glm::vec3 fwd = camera.GetForward();
-    EXPECT_NEAR(fwd.y, -1.0F, 1e-3F);
+    EXPECT_NEAR(fwd.y, -1.0F, 1e-2F);
+    EXPECT_NEAR(fwd.x, 0.0F, 1e-3F);  // yaw must be 0 so the plan isn't rotated
+}
+
+TEST(PlanViewPanelTest, ActivateLevelResetsInheritedYawSoPlanIsAxisAligned) {
+    // Simulate a Free-3D camera rotated arbitrarily before the user opens the
+    // plan view. Without an explicit yaw reset, SetAxisView(Top) would keep
+    // the previous yaw and the floor plan would appear rotated on screen.
+    Camera camera;
+    camera.SetPerspective(45.0F, 1.0F, 0.1F, 100.0F);
+    camera.Orbit(1.3F, 0.4F);  // arbitrary yaw + pitch
+
+    PlanViewPanel panel;
+    panel.SetCamera(&camera);
+    panel.SetSceneBounds({-5.0F, 0.0F, -3.0F}, {5.0F, 3.0F, 3.0F});
+    panel.SetLevels({{"Ground Floor", 0.0F}});
+
+    ASSERT_TRUE(panel.ActivateLevel(0));
+    // With yaw=0 the top-down forward must have no XZ component besides the
+    // tiny residual from pitch being clamped just under π/2.
+    const glm::vec3 fwd = camera.GetForward();
+    // With yaw=0, fwd.x must be ~0 (fwd.x = -cos(pitch)*sin(yaw)). The
+    // previous Orbit-induced yaw of 1.3 rad would have produced fwd.x ~ 0.07.
+    EXPECT_NEAR(fwd.x, 0.0F, 1e-3F);
 }
 
 }  // namespace

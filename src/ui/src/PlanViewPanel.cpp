@@ -5,6 +5,8 @@
 #include <renderer/Camera.h>
 #include <renderer/ClipPlaneManager.h>
 
+#include <glm/gtc/constants.hpp>
+
 #include <utility>
 
 namespace bimeup::ui {
@@ -79,7 +81,9 @@ void PlanViewPanel::ApplyCameraForPlan() {
 
     m_camera->SetOrbitTarget(center);
     m_camera->SetOrthographic(orthoHeight, aspect, 0.1F, 1000.0F);
-    m_camera->SetAxisView(renderer::AxisView::Top);
+    // Force yaw=0 so the plan is axis-aligned; SetAxisView(Top) would preserve
+    // whatever yaw was inherited from Free 3D, rotating the floor plan.
+    m_camera->SetYawPitch(0.0F, glm::half_pi<float>());
 }
 
 void PlanViewPanel::OnDraw() {

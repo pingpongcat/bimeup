@@ -459,6 +459,10 @@ int main(int argc, char* argv[]) {
         return std::make_pair(p, false);  // face snap
     };
 
+    // Forward-declared so the mouse-move orbit handler can auto-exit plan
+    // view; assigned after UIManager owns the panel.
+    bimeup::ui::PlanViewPanel* planViewPanel = nullptr;
+
     input.OnMouseButton([&](bimeup::platform::MouseButton btn, bool pressed) {
         // Right-click while a measurement is pending → cancel.
         if (btn == bimeup::platform::MouseButton::Right && pressed && measureModeActive &&
@@ -510,6 +514,9 @@ int main(int argc, char* argv[]) {
                 case bimeup::renderer::NavAction::Orbit:
                     camera.Orbit(static_cast<float>(delta.x) * 0.005F,
                                  static_cast<float>(delta.y) * 0.005F);
+                    if (planViewPanel != nullptr && planViewPanel->ActiveLevel() >= 0) {
+                        planViewPanel->Deactivate();
+                    }
                     break;
                 case bimeup::renderer::NavAction::Pan:
                     camera.Pan(glm::vec2(static_cast<float>(-delta.x) * 0.005F,
@@ -657,7 +664,7 @@ int main(int argc, char* argv[]) {
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
     auto* clipPlanesPanel = clipPlanesOwned.get();
-    auto* planViewPanel = planViewOwned.get();
+    planViewPanel = planViewOwned.get();
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
     clipPlanesPanel->SetManager(&clipPlaneManager);
