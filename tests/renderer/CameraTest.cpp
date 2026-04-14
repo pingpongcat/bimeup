@@ -118,6 +118,36 @@ TEST_F(CameraTest, ZoomChangesDistance) {
     EXPECT_LT(distAfter, distBefore);
 }
 
+TEST_F(CameraTest, ZoomInOrthographicShrinksHeight) {
+    m_camera.SetOrthographic(10.0f, 1.0f, 0.1f, 100.0f);
+    const float before = std::abs(m_camera.GetProjectionMatrix()[1][1]);
+
+    m_camera.Zoom(-1.0f);  // zoom in → smaller ortho height → larger |2/H|
+
+    const float after = std::abs(m_camera.GetProjectionMatrix()[1][1]);
+    EXPECT_GT(after, before);
+}
+
+TEST_F(CameraTest, ZoomOutOrthographicGrowsHeight) {
+    m_camera.SetOrthographic(10.0f, 1.0f, 0.1f, 100.0f);
+    const float before = std::abs(m_camera.GetProjectionMatrix()[1][1]);
+
+    m_camera.Zoom(1.0f);  // zoom out → larger ortho height → smaller |2/H|
+
+    const float after = std::abs(m_camera.GetProjectionMatrix()[1][1]);
+    EXPECT_LT(after, before);
+}
+
+TEST_F(CameraTest, ZoomInOrthographicStaysFiniteUnderFlood) {
+    m_camera.SetOrthographic(10.0f, 1.0f, 0.1f, 100.0f);
+    for (int i = 0; i < 100; ++i) {
+        m_camera.Zoom(-10.0f);
+    }
+    const float v = m_camera.GetProjectionMatrix()[1][1];
+    EXPECT_TRUE(std::isfinite(v));
+    EXPECT_NE(v, 0.0f);
+}
+
 TEST_F(CameraTest, ZoomClampsMinDistance) {
     m_camera.SetOrbitTarget(glm::vec3(0.0f));
 
