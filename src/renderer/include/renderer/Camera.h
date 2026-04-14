@@ -24,6 +24,10 @@ public:
 
     void SetPerspective(float fovDeg, float aspect, float near, float far);
     void SetOrthographic(float height, float aspect, float near, float far);
+
+    // Update the aspect ratio for whichever projection mode is active and
+    // rebuild the projection matrix. Used on window/framebuffer resize.
+    void SetAspect(float aspect);
     void ToggleProjection();
     void SetOrbitTarget(glm::vec3 target);
     void SetDistance(float distance);

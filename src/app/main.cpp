@@ -132,7 +132,8 @@ int main(int argc, char* argv[]) {
         GlfwGuard& operator=(const GlfwGuard&) = delete;
     };
     GlfwGuard glfwGuard;
-    bimeup::platform::Window window({.width = 1280, .height = 720, .title = "Bimeup"});
+    bimeup::platform::Window window(
+        {.width = 1280, .height = 720, .title = "Bimeup", .maximized = true});
     bimeup::platform::Input input(window);
 
     // Vulkan context
@@ -738,6 +739,26 @@ int main(int argc, char* argv[]) {
         vkCmdEndRenderPass(cmd);
     });
 
+    // Rebuild swapchain + dependent resources when the framebuffer size changes
+    // or the presentation engine returns OUT_OF_DATE/SUBOPTIMAL. Without this,
+    // maximizing the window would stretch the original 1280x720 image across
+    // the display (blurry UI + scene).
+    auto recreateSwapchain = [&] {
+        auto size = window.GetFramebufferSize();
+        // Wait out minimization (zero framebuffer size).
+        while (size.x == 0 || size.y == 0) {
+            glfwWaitEvents();
+            if (window.ShouldClose()) return;
+            size = window.GetFramebufferSize();
+        }
+        renderLoop.WaitIdle();
+        swapchain.Recreate(
+            surface,
+            VkExtent2D{static_cast<uint32_t>(size.x), static_cast<uint32_t>(size.y)});
+        renderLoop.RecreateForSwapchain();
+        camera.SetAspect(static_cast<float>(size.x) / static_cast<float>(size.y));
+    };
+
     // FPS tracking
     double lastFrameTime = glfwGetTime();
     float smoothedFps = 0.0F;
@@ -745,6 +766,19 @@ int main(int argc, char* argv[]) {
     // Main loop
     while (!window.ShouldClose()) {
         window.PollEvents();
+
+        // Detect resize / DPI change from the window manager before we try to
+        // acquire a swapchain image. (Some compositors don't report OUT_OF_DATE
+        // on maximize, so polling the fb size is the reliable trigger.)
+        {
+            auto fb = window.GetFramebufferSize();
+            VkExtent2D cur = swapchain.GetExtent();
+            if (fb.x > 0 && fb.y > 0 &&
+                (static_cast<uint32_t>(fb.x) != cur.width ||
+                 static_cast<uint32_t>(fb.y) != cur.height)) {
+                recreateSwapchain();
+            }
+        }
 
         double now = glfwGetTime();
         double dt = now - lastFrameTime;
@@ -871,6 +905,7 @@ int main(int argc, char* argv[]) {
         clipPlanesBuffer.Unmap();
 
         if (!renderLoop.BeginFrame()) {
+            recreateSwapchain();
             continue;
         }
 
@@ -907,7 +942,9 @@ int main(int argc, char* argv[]) {
 
         uiManager.EndFrame(cmd);
 
-        (void)renderLoop.EndFrame();
+        if (!renderLoop.EndFrame()) {
+            recreateSwapchain();
+        }
     }
 
     renderLoop.WaitIdle();

@@ -50,6 +50,12 @@ public:
     /// render pass must be rebuilt by the caller before the next BeginFrame().
     void SetSampleCount(VkSampleCountFlagBits samples);
 
+    /// Rebuild depth/MSAA color images and framebuffers to match the current
+    /// swapchain extent. Call after `Swapchain::Recreate(...)` on a resize. The
+    /// render pass handle is preserved (format/samples unchanged), so pipelines
+    /// bound to it stay valid.
+    void RecreateForSwapchain();
+
 private:
     void CreateCommandPool();
     void CreateCommandBuffers();

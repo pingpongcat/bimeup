@@ -181,6 +181,13 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
 }
 
+void RenderLoop::RecreateForSwapchain() {
+    WaitIdle();
+    CleanupFrameResources();
+    CreateDepthResources();
+    CreateFramebuffers();
+}
+
 void RenderLoop::CreateCommandPool() {
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;

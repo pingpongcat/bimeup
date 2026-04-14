@@ -14,6 +14,7 @@ struct WindowConfig {
     std::string title = "Bimeup";
     bool resizable = true;
     bool visible = true;
+    bool maximized = false;
 };
 
 class Window {

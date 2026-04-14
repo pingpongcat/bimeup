@@ -29,6 +29,12 @@ void Camera::SetOrthographic(float height, float aspect, float near, float far) 
     RebuildProjection();
 }
 
+void Camera::SetAspect(float aspect) {
+    m_perspAspect = aspect;
+    m_orthoAspect = aspect;
+    RebuildProjection();
+}
+
 void Camera::ToggleProjection() {
     if (m_projectionMode == ProjectionMode::Perspective) {
         float height = 2.0F * m_distance * std::tan(glm::radians(m_perspFovDeg) * 0.5F);

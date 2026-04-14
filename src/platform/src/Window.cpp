@@ -18,6 +18,7 @@ void Window::TerminateGlfw() {
 Window::Window(const WindowConfig& config) {
     glfwWindowHint(GLFW_RESIZABLE, config.resizable ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_VISIBLE, config.visible ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_MAXIMIZED, config.maximized ? GLFW_TRUE : GLFW_FALSE);
 
     m_window = glfwCreateWindow(config.width, config.height, config.title.c_str(), nullptr, nullptr);
     if (!m_window) {
