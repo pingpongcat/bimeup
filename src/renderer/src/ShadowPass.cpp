@@ -189,6 +189,66 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
                             &m_framebuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create shadow map framebuffer");
     }
+
+    // One-shot UNDEFINED → SHADER_READ_ONLY_OPTIMAL transition so the image has a
+    // valid sampled layout from the moment it's bound to a descriptor set. Without
+    // this, the main pass can sample the image before any shadow pass has ever run
+    // against it (disabled shadows, or the frame the shadow map is first created),
+    // which the validation layer flags as VUID-vkCmdDraw-None-09600.
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = m_device.GetGraphicsQueueFamily();
+    VkCommandPool pool = VK_NULL_HANDLE;
+    if (vkCreateCommandPool(m_device.GetDevice(), &poolInfo, nullptr, &pool) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow map init command pool");
+    }
+
+    VkCommandBufferAllocateInfo cbAlloc{};
+    cbAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.commandPool = pool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(m_device.GetDevice(), &cbAlloc, &cmd) != VK_SUCCESS) {
+        vkDestroyCommandPool(m_device.GetDevice(), pool, nullptr);
+        throw std::runtime_error("Failed to allocate shadow map init cmd buffer");
+    }
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_device.GetGraphicsQueue());
+
+    vkDestroyCommandPool(m_device.GetDevice(), pool, nullptr);
 }
 
 ShadowMap::~ShadowMap() {

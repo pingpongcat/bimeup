@@ -120,8 +120,18 @@ int main(int argc, char* argv[]) {
     bimeup::tools::Log::Init("bimeup");
     LOG_INFO("Bimeup v{} starting", BIMEUP_VERSION);
 
-    // Platform
-    bimeup::platform::Window::InitGlfw();
+    // Platform. GlfwGuard is declared first so it destructs LAST — after every
+    // Vulkan object below. Without this, glfwTerminate() (which on Wayland calls
+    // wl_display_disconnect) would run while the swapchain is still alive, and
+    // vkDestroySwapchainKHR would dereference the freed Wayland display
+    // (heap-use-after-free caught by ASan).
+    struct GlfwGuard {
+        GlfwGuard() { bimeup::platform::Window::InitGlfw(); }
+        ~GlfwGuard() { bimeup::platform::Window::TerminateGlfw(); }
+        GlfwGuard(const GlfwGuard&) = delete;
+        GlfwGuard& operator=(const GlfwGuard&) = delete;
+    };
+    GlfwGuard glfwGuard;
     bimeup::platform::Window window({.width = 1280, .height = 720, .title = "Bimeup"});
     bimeup::platform::Input input(window);
 
@@ -129,7 +139,12 @@ int main(int argc, char* argv[]) {
     uint32_t glfwExtCount = 0;
     const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
     std::span<const char* const> requiredExts(glfwExts, glfwExtCount);
-    bimeup::renderer::VulkanContext vulkanContext(true, requiredExts);
+#ifdef NDEBUG
+    constexpr bool kEnableValidation = false;
+#else
+    constexpr bool kEnableValidation = true;
+#endif
+    bimeup::renderer::VulkanContext vulkanContext(kEnableValidation, requiredExts);
 
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     if (glfwCreateWindowSurface(vulkanContext.GetInstance(), window.GetHandle(), nullptr,
@@ -900,9 +915,8 @@ int main(int argc, char* argv[]) {
     uiManager.ShutdownVulkanBackend();
 
     // Cleanup happens via destructors in reverse declaration order:
-    // renderLoop → swapchain → device → surfaceGuard (destroys surface) → vulkanContext.
-
-    bimeup::platform::Window::TerminateGlfw();
+    // renderLoop → swapchain → device → surfaceGuard (destroys surface) →
+    // vulkanContext → window → glfwGuard (terminates GLFW last).
 
     LOG_INFO("Bimeup shutting down");
     bimeup::tools::Log::Shutdown();

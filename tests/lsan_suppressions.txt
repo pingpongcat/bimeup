@@ -1,2 +1,0 @@
-leak:webifc::parsing::IfcLoader::ParseLines
-leak:webifc::manager::ModelManager

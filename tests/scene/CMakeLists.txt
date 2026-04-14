@@ -34,7 +34,7 @@ target_compile_definitions(test_scene_builder PRIVATE
     TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/ifc/data"
 )
 
-set(IFC_LSAN_SUPPRESSIONS "LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/lsan_suppressions.txt")
+set(IFC_LSAN_SUPPRESSIONS "LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/cmake/asan_suppressions.txt")
 
 gtest_discover_tests(test_scene_builder
     PROPERTIES ENVIRONMENT "${IFC_LSAN_SUPPRESSIONS}"

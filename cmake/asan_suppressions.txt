@@ -6,3 +6,5 @@ leak:libvulkan
 leak:libGLX
 leak:libEGL
 leak:asan_thread_start
+leak:webifc::parsing::IfcLoader::ParseLines
+leak:webifc::manager::ModelManager
