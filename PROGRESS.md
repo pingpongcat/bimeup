@@ -91,6 +91,11 @@
     - [x] 7.3e.3 Translate/rotate gizmo for active clip plane (`renderer::PlaneToTransform` / `TransformToPlane` + `ImGuizmo::Manipulate` in `ClipPlanesPanel`)
     - [x] 7.3e.4 `ViewManipulate` cube wired to `Camera` orientation (`Camera::SetYawPitch` + `renderer::YawPitchFromForward`, called after `uiManager.BeginFrame()` in `main.cpp`)
 - [x] 7.4 Plan view (`ui::PlanViewPanel` — Ground Floor / Roof switcher; creates horizontal clip plane at `elevation + cutAbove` and switches camera to top-down ortho framed to scene XZ; default sample swapped to `sample_house.ifc`)
+  - [x] 7.4a Honor viewport aspect so ortho frame isn't stretched
+  - [x] 7.4b Force yaw=0 on activate so plan isn't rotated; middle-mouse orbit auto-exits plan view
+  - [x] 7.4c `Camera::Zoom` scales `m_orthoHeight` so scroll-zoom works in ortho (plan view + any future ortho mode)
+  - [x] 7.4d Restore perspective on Deactivate; ImGuizmo ViewManipulate cube also auto-exits; ortho zoom rate doubled
+  - [x] 7.4e `core::SelectionCleared` event — non-additive click on empty space clears selection + PropertyPanel (additive miss preserves)
 - [ ] 7.5 Section view
 - [ ] 7.6 Element visibility by IFC type
 - [ ] 7.7 Element isolation
