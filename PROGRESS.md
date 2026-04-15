@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.9 — Fit-to-view
+## Current Task: 7.10 — First-person navigation
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -127,7 +127,7 @@
     - [x] 7.8d.2 PropertyPanel alpha slider — `SetOnAlphaChange` / `SetAlphaQuery` callbacks + enable checkbox and 0..1 slider. `TriggerAlphaChange` / `TriggerClearAlpha` mirror HierarchyPanel test hooks; query seeds current value on `SetElement`. 4 new unit tests.
     - [x] 7.8d.3 TypeVisibilityPanel alpha slider — per-row enable checkbox + 0..1 slider that forwards to `Scene::SetTypeAlphaOverride` / `ClearTypeAlphaOverride`. Direct scene read/write (no cache). 4 new unit tests.
     - [x] 7.8d.4 Renderer wiring — `MeshBuffer::SetVertexAlphaOverride` (new layered override: baseline → alpha → color-override; selection highlight now preserved across alpha edits; 4 new unit tests). `main.cpp` hash-gated `rebuildAlphaOverrides()` runs each frame: walks scene, reads `GetEffectiveAlpha` per mesh-bearing node, uploads per-vertex alpha pairs, and tracks `handlesWithAlphaOverride` so those meshes route into the transparent pass. PropertyPanel callbacks wired to `Scene::{Set,Clear,Get}ElementAlphaOverride`; TypeVisibilityPanel already writes directly to Scene, picked up by the per-frame rebuild.
-- [ ] 7.9 Fit-to-view
+- [x] 7.9 Fit-to-view — `FitCameraToBounds(camera, bounds)` in `main.cpp` + `Camera::Frame(min,max)` (N.1c). Driven by toolbar "Fit to View" (`Toolbar::SetOnFitToView`), toolbar "Frame Selected" (7.7d, falls back to fit-all on empty selection), Home key (frame-all), and Numpad . (frame-selected). Also called on model load.
 - [ ] 7.10 First-person navigation
 
 ## Stage R — Render Quality
