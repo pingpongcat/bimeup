@@ -1,11 +1,17 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "renderer/ClipPlane.h"
+#include "scene/SceneMesh.h"
 #include "scene/Slicing.h"
 
 using bimeup::renderer::ClipPlane;
+using bimeup::scene::SceneMesh;
+using bimeup::scene::Segment;
+using bimeup::scene::SliceSceneMesh;
 using bimeup::scene::SliceTriangle;
 using bimeup::scene::TriangleCut;
 
@@ -79,4 +85,101 @@ TEST(SliceTriangle, EdgeOnPlaneReturnsBothOnPlaneVertices) {
     const auto cut = SliceTriangle(YZero(), {0, 0, 0}, {1, 0, 0}, {0, 1, 0});
     EXPECT_EQ(cut.pointCount, 2);
     EXPECT_TRUE(HasPoints(cut, {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}));
+}
+
+namespace {
+
+// Unit cube [0,1]^3 as 8 vertices + 12 triangles.
+SceneMesh MakeUnitCubeMesh() {
+    SceneMesh mesh;
+    mesh.SetPositions({
+        {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},  // z=0 face verts 0..3
+        {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},  // z=1 face verts 4..7
+    });
+    mesh.SetIndices({
+        0, 2, 1, 0, 3, 2,  // z=0
+        4, 5, 6, 4, 6, 7,  // z=1
+        0, 1, 5, 0, 5, 4,  // y=0
+        2, 3, 7, 2, 7, 6,  // y=1
+        0, 4, 7, 0, 7, 3,  // x=0
+        1, 2, 6, 1, 6, 5,  // x=1
+    });
+    return mesh;
+}
+
+bool HasSegmentEndpoints(const std::vector<Segment>& segs,
+                         const glm::vec3& p,
+                         const glm::vec3& q,
+                         float eps = 1e-4F) {
+    return std::any_of(segs.begin(), segs.end(), [&](const Segment& s) {
+        return (NearEq(s.a, p, eps) && NearEq(s.b, q, eps)) ||
+               (NearEq(s.a, q, eps) && NearEq(s.b, p, eps));
+    });
+}
+
+}  // namespace
+
+TEST(SliceSceneMesh, EmptyMeshProducesNoSegments) {
+    SceneMesh mesh;
+    const auto segs = SliceSceneMesh(mesh, glm::mat4(1.0F), YZero());
+    EXPECT_TRUE(segs.empty());
+}
+
+TEST(SliceSceneMesh, AllAboveProducesNoSegments) {
+    const auto mesh = MakeUnitCubeMesh();
+    // Plane at y=-1 — cube is entirely above.
+    const auto plane =
+        ClipPlane::FromPointNormal({0, -1, 0}, {0, 1, 0});
+    const auto segs = SliceSceneMesh(mesh, glm::mat4(1.0F), plane);
+    EXPECT_TRUE(segs.empty());
+}
+
+TEST(SliceSceneMesh, UnitCubeAtYHalfProducesEightPerimeterSegments) {
+    const auto mesh = MakeUnitCubeMesh();
+    // Plane y=0.5 cuts the cube through the middle. Each of the 4 side faces
+    // is 2 triangles, and both triangles straddle the plane — 8 segments
+    // total (7.5e will stitch them into a unit square).
+    const auto plane =
+        ClipPlane::FromPointNormal({0, 0.5F, 0}, {0, 1, 0});
+    const auto segs = SliceSceneMesh(mesh, glm::mat4(1.0F), plane);
+
+    EXPECT_EQ(segs.size(), 8U);
+
+    // All endpoints lie exactly at y=0.5 and on the unit-square perimeter
+    // at y=0.5 (x or z pinned to 0 or 1).
+    auto onPerimeter = [](const glm::vec3& p) {
+        const bool atY = std::abs(p.y - 0.5F) <= 1e-4F;
+        const bool atXEdge = std::abs(p.x) <= 1e-4F || std::abs(p.x - 1.0F) <= 1e-4F;
+        const bool atZEdge = std::abs(p.z) <= 1e-4F || std::abs(p.z - 1.0F) <= 1e-4F;
+        return atY && (atXEdge || atZEdge);
+    };
+    for (const auto& s : segs) {
+        EXPECT_TRUE(onPerimeter(s.a)) << "a=" << s.a.x << "," << s.a.y << "," << s.a.z;
+        EXPECT_TRUE(onPerimeter(s.b)) << "b=" << s.b.x << "," << s.b.y << "," << s.b.z;
+    }
+
+    // Total segment length should equal the perimeter of the unit square = 4.
+    float totalLen = 0.0F;
+    for (const auto& s : segs) totalLen += glm::length(s.b - s.a);
+    EXPECT_NEAR(totalLen, 4.0F, 1e-3F);
+}
+
+TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {
+    const auto mesh = MakeUnitCubeMesh();
+    // Translate the cube to x=+10, then cut at y=0.5. All resulting segments
+    // must have x in [10, 11] (shifted perimeter).
+    const glm::mat4 xform = glm::translate(glm::mat4(1.0F), glm::vec3{10, 0, 0});
+    const auto plane =
+        ClipPlane::FromPointNormal({0, 0.5F, 0}, {0, 1, 0});
+    const auto segs = SliceSceneMesh(mesh, xform, plane);
+
+    EXPECT_EQ(segs.size(), 8U);
+    for (const auto& s : segs) {
+        EXPECT_GE(s.a.x, 10.0F - 1e-4F);
+        EXPECT_LE(s.a.x, 11.0F + 1e-4F);
+        EXPECT_GE(s.b.x, 10.0F - 1e-4F);
+        EXPECT_LE(s.b.x, 11.0F + 1e-4F);
+        EXPECT_NEAR(s.a.y, 0.5F, 1e-4F);
+        EXPECT_NEAR(s.b.y, 0.5F, 1e-4F);
+    }
 }

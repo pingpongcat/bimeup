@@ -1,5 +1,7 @@
 #include "scene/Slicing.h"
 
+#include "scene/SceneMesh.h"
+
 namespace bimeup::scene {
 
 namespace {
@@ -85,6 +87,35 @@ TriangleCut SliceTriangle(const renderer::ClipPlane& plane,
         cut.points = pts;
     }
     return cut;
+}
+
+std::vector<Segment> SliceSceneMesh(const SceneMesh& mesh,
+                                    const glm::mat4& worldTransform,
+                                    const renderer::ClipPlane& plane) {
+    std::vector<Segment> segments;
+    const auto& positions = mesh.GetPositions();
+    const auto& indices = mesh.GetIndices();
+    const size_t triCount = indices.size() / 3;
+    segments.reserve(triCount / 4);
+
+    for (size_t t = 0; t < triCount; ++t) {
+        const uint32_t ia = indices[3 * t + 0];
+        const uint32_t ib = indices[3 * t + 1];
+        const uint32_t ic = indices[3 * t + 2];
+        if (ia >= positions.size() || ib >= positions.size() ||
+            ic >= positions.size()) {
+            continue;
+        }
+        const glm::vec3 a = glm::vec3(worldTransform * glm::vec4(positions[ia], 1.0F));
+        const glm::vec3 b = glm::vec3(worldTransform * glm::vec4(positions[ib], 1.0F));
+        const glm::vec3 c = glm::vec3(worldTransform * glm::vec4(positions[ic], 1.0F));
+
+        const TriangleCut cut = SliceTriangle(plane, a, b, c);
+        if (cut.pointCount == 2) {
+            segments.push_back({cut.points[0], cut.points[1]});
+        }
+    }
+    return segments;
 }
 
 }  // namespace bimeup::scene
