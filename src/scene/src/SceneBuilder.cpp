@@ -60,7 +60,7 @@ void BuildHierarchy(Scene& scene,
                     std::vector<SceneMesh>& meshes,
                     const ifc::HierarchyNode& hNode,
                     NodeId parentId,
-                    const std::unordered_map<uint32_t, ifc::TriangulatedMesh>& meshMap) {
+                    const ifc::IfcGeometryExtractor& extractor) {
     SceneNode sNode;
     sNode.expressId = hNode.expressId;
     sNode.name = hNode.name;
@@ -68,28 +68,44 @@ void BuildHierarchy(Scene& scene,
     sNode.globalId = hNode.globalId;
     sNode.parent = parentId;
 
-    auto it = meshMap.find(hNode.expressId);
-    std::optional<SceneMesh> convertedMesh;
-    if (it != meshMap.end()) {
-        MeshHandle handle = static_cast<MeshHandle>(meshes.size());
-        convertedMesh = ConvertMesh(it->second);
-        sNode.bounds = AABB::FromVertices(convertedMesh->GetPositions());
-        sNode.mesh = handle;
-    }
+    // Extract sub-meshes up front so the element parent's AABB can aggregate
+    // their bounds (needed for frame-selected / visibility queries even though
+    // the parent itself carries no mesh).
+    auto subs = (hNode.expressId != 0) ? extractor.ExtractSubMeshes(hNode.expressId)
+                                       : std::vector<ifc::TriangulatedMesh>{};
 
-    NodeId nodeId = scene.AddNode(std::move(sNode));
+    NodeId elementId = scene.AddNode(std::move(sNode));
 
-    // Tag every triangle of this mesh with its owning NodeId so batching can
-    // carry per-triangle ownership through the merge step.
-    if (convertedMesh.has_value()) {
-        size_t triangleCount = convertedMesh->GetIndices().size() / 3;
-        std::vector<NodeId> owners(triangleCount, nodeId);
-        convertedMesh->SetTriangleOwners(std::move(owners));
-        meshes.push_back(std::move(*convertedMesh));
+    for (size_t i = 0; i < subs.size(); ++i) {
+        SceneMesh converted = ConvertMesh(subs[i]);
+
+        SceneNode childNode;
+        childNode.expressId = hNode.expressId;
+        childNode.ifcType = hNode.type;
+        childNode.globalId = hNode.globalId;
+        childNode.parent = elementId;
+        childNode.name = hNode.name + " [" + std::to_string(i) + "]";
+        childNode.bounds = AABB::FromVertices(converted.GetPositions());
+        childNode.mesh = static_cast<MeshHandle>(meshes.size());
+
+        NodeId childId = scene.AddNode(std::move(childNode));
+
+        // Tag every triangle of this sub-mesh with its owning child NodeId so
+        // batching (and later selection/highlight via triangle owners) can
+        // resolve per-element ownership through any merge.
+        size_t triangleCount = converted.GetIndices().size() / 3;
+        converted.SetTriangleOwners(std::vector<NodeId>(triangleCount, childId));
+        meshes.push_back(std::move(converted));
+
+        // Aggregate child bounds into the element parent so frame/zoom works
+        // from the parent even though it has no mesh of its own.
+        auto& parentRef = scene.GetNode(elementId);
+        parentRef.bounds = AABB::Merge(parentRef.bounds,
+                                       scene.GetNode(childId).bounds);
     }
 
     for (const auto& child : hNode.children) {
-        BuildHierarchy(scene, meshes, child, nodeId, meshMap);
+        BuildHierarchy(scene, meshes, child, elementId, extractor);
     }
 }
 
@@ -98,15 +114,7 @@ void BuildHierarchy(Scene& scene,
 BuildResult SceneBuilder::Build(ifc::IfcModel& model) {
     BuildResult result;
 
-    // Extract all geometry
     ifc::IfcGeometryExtractor extractor(model);
-    auto allMeshes = extractor.ExtractAll();
-
-    // Build lookup map: expressId → mesh
-    std::unordered_map<uint32_t, ifc::TriangulatedMesh> meshMap;
-    for (auto& [id, mesh] : allMeshes) {
-        meshMap.emplace(id, std::move(mesh));
-    }
 
     // Build scene from spatial hierarchy
     ifc::IfcHierarchy hierarchy(model);
@@ -114,7 +122,7 @@ BuildResult SceneBuilder::Build(ifc::IfcModel& model) {
 
     // Process root's children (Site, Building, etc.)
     // The root itself is the IfcProject — add it as the scene root
-    BuildHierarchy(result.scene, result.meshes, root, InvalidNodeId, meshMap);
+    BuildHierarchy(result.scene, result.meshes, root, InvalidNodeId, extractor);
 
     if (batchingEnabled_) {
         ApplyBatching(result, batchThreshold_);
@@ -130,9 +138,11 @@ namespace {
 struct BatchKey {
     std::string ifcType;
     uint32_t colorHash;
+    bool transparent;  // 7.8b: keep opaque/transparent in separate batches
 
     bool operator==(const BatchKey& other) const {
-        return ifcType == other.ifcType && colorHash == other.colorHash;
+        return ifcType == other.ifcType && colorHash == other.colorHash &&
+               transparent == other.transparent;
     }
 };
 
@@ -140,6 +150,7 @@ struct BatchKeyHash {
     size_t operator()(const BatchKey& k) const {
         size_t h = std::hash<std::string>{}(k.ifcType);
         h ^= std::hash<uint32_t>{}(k.colorHash) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<bool>{}(k.transparent) + 0x9e3779b9 + (h << 6) + (h >> 2);
         return h;
     }
 };
@@ -221,6 +232,7 @@ void SceneBuilder::ApplyBatching(BuildResult& result, size_t maxVertices) {
             key.colorHash = mesh.GetColors().empty()
                                 ? 0
                                 : QuantizeColor(mesh.GetColors()[0]);
+            key.transparent = mesh.IsTransparent();
             smallItems.push_back({nodeId, handle, key});
         }
     }

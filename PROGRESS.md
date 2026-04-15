@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.8b — SceneBuilder consumes per-placed-geom sub-meshes
+## Current Task: 7.8c — Renderer transparent pass (alpha-blend, depth-test on, write off, after opaque)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -120,7 +120,7 @@
   - [x] 7.7f HierarchyPanel: eye + isolate buttons render with `ImGuiCol_ButtonActive` bg when "on" (checkbox-like feedback); isolate toggles off on a second click via `Scene::ShowAll()` + `TypeVisibilityPanel::ReapplyToScene()` so disabled types stay hidden (1 new unit test).
 - [ ] 7.8 Element transparency override
   - [x] 7.8a `IfcGeometryExtractor::ExtractSubMeshes` — returns one `TriangulatedMesh` per IfcPlacedGeometry, preserving each piece's surface-style color (including alpha < 1 for glass panes) and transformation. Existing `ExtractMesh` untouched so downstream code is unaffected. 4 new unit tests; 44/44 ifc tests pass.
-  - [ ] 7.8b `SceneBuilder` consumes sub-meshes: one mesh-bearing SceneNode per (expressId, sub-mesh) under a shared element parent; batching keys include opacity bucket.
+  - [x] 7.8b `SceneBuilder` consumes sub-meshes: `BuildHierarchy` calls `IfcGeometryExtractor::ExtractSubMeshes(expressId)` and emits one mesh-bearing child SceneNode per sub-mesh under the element parent (parent keeps expressId + aggregated AABB but no mesh). `SceneMesh::IsTransparent()` (alpha<0.999) added as opacity bucket in the batching `BatchKey`, so opaque and translucent small meshes of the same type+color no longer merge. 2 new SceneBuilder tests + 1 new Batching test; 19/19 scene-builder+batching pass, 114/114 scene-module tests pass.
   - [ ] 7.8c Renderer transparent pass — alpha-blend pipeline, depth-test on, depth-write off, drawn after opaque.
   - [ ] 7.8d Per-element / per-type alpha override slider in PropertyPanel + TypeVisibilityPanel (forces alpha on top of IFC-native alpha).
 - [ ] 7.9 Fit-to-view

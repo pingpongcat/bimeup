@@ -35,6 +35,13 @@ public:
     [[nodiscard]] size_t GetVertexCount() const { return positions_.size(); }
     [[nodiscard]] size_t GetIndexCount() const { return indices_.size(); }
 
+    /// True if the first vertex color has alpha < 1 (uniform-colored meshes
+    /// only — mixed-alpha vertex buffers are not produced by the builder).
+    /// Used as an opacity bucket for batching and later alpha-blended pass.
+    [[nodiscard]] bool IsTransparent() const {
+        return !colors_.empty() && colors_[0].a < 0.999f;
+    }
+
     [[nodiscard]] std::vector<float> GetInterleavedVertices() const;
 
     /// Vertex stride in bytes: 3 + 3 + 4 = 10 floats = 40 bytes.

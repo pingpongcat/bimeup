@@ -227,6 +227,42 @@ TEST(BatchingTest, SingleMeshGroupNotMerged) {
     EXPECT_EQ(result.meshes.size(), 1u);
 }
 
+// 7.8b: opaque and translucent meshes sharing the same IFC type + RGB must NOT
+// merge into one batch, because a later stage draws them in separate passes
+// (opaque then alpha-blended). SceneMesh::IsTransparent() is the bucket key.
+TEST(BatchingTest, OpacityBucketSeparatesBatches) {
+    using namespace bimeup::scene;
+    BuildResult result;
+
+    for (int i = 0; i < 10; ++i) {
+        auto handle = static_cast<MeshHandle>(result.meshes.size());
+        result.meshes.push_back(MakeSmallMesh({0.5f, 0.5f, 0.5f, 1.0f}));
+        SceneNode node;
+        node.ifcType = "IfcWall";
+        node.mesh = handle;
+        result.scene.AddNode(std::move(node));
+    }
+    for (int i = 0; i < 10; ++i) {
+        auto handle = static_cast<MeshHandle>(result.meshes.size());
+        result.meshes.push_back(MakeSmallMesh({0.5f, 0.5f, 0.5f, 0.3f}));
+        SceneNode node;
+        node.ifcType = "IfcWall";
+        node.mesh = handle;
+        result.scene.AddNode(std::move(node));
+    }
+
+    SceneBuilder::ApplyBatching(result);
+
+    ASSERT_EQ(result.meshes.size(), 2u);
+    int transparentCount = 0;
+    int opaqueCount = 0;
+    for (const auto& m : result.meshes) {
+        if (m.IsTransparent()) ++transparentCount; else ++opaqueCount;
+    }
+    EXPECT_EQ(opaqueCount, 1);
+    EXPECT_EQ(transparentCount, 1);
+}
+
 TEST(BatchingTest, NodesWithoutMeshUnaffected) {
     using namespace bimeup::scene;
     BuildResult result;

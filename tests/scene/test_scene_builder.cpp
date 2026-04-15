@@ -4,6 +4,7 @@
 #include <scene/Scene.h>
 #include <scene/SceneMesh.h>
 #include <scene/SceneNode.h>
+#include <ifc/IfcGeometryExtractor.h>
 #include <ifc/IfcModel.h>
 
 #include <string>
@@ -91,6 +92,61 @@ TEST_F(SceneBuilderTest, HierarchyIsPreserved) {
         }
     }
     EXPECT_TRUE(hasChildren);
+}
+
+// 7.8b: each mesh-bearing SceneNode represents one IfcPlacedGeometry and sits
+// under a shared element parent that carries the IFC expressId but no mesh of
+// its own. That lets a single IFC element contribute several sub-meshes (e.g.
+// a window frame + translucent glass pane) while still resolving to one
+// selectable element.
+TEST_F(SceneBuilderTest, MeshBearingNodesHaveElementParentWithSameExpressId) {
+    bimeup::scene::SceneBuilder builder;
+    auto result = builder.Build(model_);
+
+    size_t checked = 0;
+    for (size_t i = 0; i < result.scene.GetNodeCount(); ++i) {
+        auto id = static_cast<bimeup::scene::NodeId>(i);
+        const auto& node = result.scene.GetNode(id);
+        if (!node.mesh.has_value()) continue;
+        if (node.expressId == 0) continue;
+        ASSERT_NE(node.parent, bimeup::scene::InvalidNodeId)
+            << "mesh-bearing node must have a parent";
+        const auto& parent = result.scene.GetNode(node.parent);
+        EXPECT_EQ(parent.expressId, node.expressId);
+        EXPECT_FALSE(parent.mesh.has_value())
+            << "element parent should not carry a mesh itself";
+        ++checked;
+    }
+    EXPECT_GT(checked, 0u);
+}
+
+TEST_F(SceneBuilderTest, SubMeshChildCountMatchesExtractSubMeshes) {
+    bimeup::scene::SceneBuilder builder;
+    auto result = builder.Build(model_);
+
+    bimeup::ifc::IfcGeometryExtractor extractor(model_);
+
+    size_t elementsChecked = 0;
+    for (size_t i = 0; i < result.scene.GetNodeCount(); ++i) {
+        auto id = static_cast<bimeup::scene::NodeId>(i);
+        const auto& node = result.scene.GetNode(id);
+        if (node.expressId == 0) continue;
+        if (node.mesh.has_value()) continue;  // only element parents
+
+        size_t meshChildren = 0;
+        for (auto childId : result.scene.GetChildren(id)) {
+            if (result.scene.GetNode(childId).mesh.has_value() &&
+                result.scene.GetNode(childId).expressId == node.expressId) {
+                ++meshChildren;
+            }
+        }
+        if (meshChildren == 0) continue;
+
+        auto subs = extractor.ExtractSubMeshes(node.expressId);
+        EXPECT_EQ(subs.size(), meshChildren) << "expressId=" << node.expressId;
+        ++elementsChecked;
+    }
+    EXPECT_GT(elementsChecked, 0u);
 }
 
 TEST_F(SceneBuilderTest, NodesHaveIfcMetadata) {
