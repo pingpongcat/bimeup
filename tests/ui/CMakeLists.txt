@@ -10,6 +10,7 @@ add_executable(ui_tests
     SelectionBridgeTest.cpp
     ThemeTest.cpp
     ToolbarTest.cpp
+    TypeVisibilityPanelTest.cpp
     UIManagerTest.cpp
     ViewportOverlayTest.cpp
 )

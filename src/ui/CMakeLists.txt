@@ -11,6 +11,7 @@ add_library(bimeup_ui STATIC
     src/SelectionBridge.cpp
     src/Theme.cpp
     src/Toolbar.cpp
+    src/TypeVisibilityPanel.cpp
     src/UIManager.cpp
     src/ViewportOverlay.cpp
 )

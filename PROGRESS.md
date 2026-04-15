@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.6 — Element visibility by IFC type
+## Current Task: 7.7 — Element isolation
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -108,8 +108,9 @@
   - [x] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp` (section-fill pipeline built next to shaded/wire, rebuilt on MSAA change; per-frame rebuild is hash-gated and skipped unless ≥1 plane has `enabled && sectionFill`; draws caps after scene, before UI, using main 4-binding descriptor set — shader reads only binding 0)
   - [x] 7.5k Per-element capping for batched IFC meshes (`BuildSectionCapVertices` now partitions batched-mesh triangles by `triangleOwners[t]`, slice→stitch→triangulate per owner, tint = `ownerVertexColor * plane.fillColor`). Open polylines fallback via new `scene::StitchSegmentsDetailed` (returns `StitchResult{closed, open}`) when no closed loop forms for an element. Attached-mesh path unchanged. 2 new unit tests for `StitchSegmentsDetailed` + 2 new tests for per-owner batched caps (per-element colour, invisible-owner skip); visual verification on `../sample.ifc` deferred to the user since this is a GUI change.
   - [x] 7.5j Stage gate — full `ctest --output-on-failure` (215/215 pass; disabled LSan for `test_core` binary since it contains Vulkan-touching Application + SceneUploaderVulkan tests whose graphics-driver leaks at process exit are environmental. Runtime ASan checks remain active across all targets.)
-- [ ] 7.6 Element visibility by IFC type
+- [x] 7.6 Element visibility by IFC type
   - [x] 7.6a `Scene::SetVisibilityByType` + `Scene::GetUniqueTypes` + `scene::DefaultHiddenTypes()` (IfcSpace, IfcOpeningElement, IfcGrid, IfcAnnotation) — 5 new unit tests, 124/124 scene tests pass
+  - [x] 7.6b `ui::TypeVisibilityPanel` — lists unique IFC types with checkboxes + Show/Hide all; `SetScene` seeds cache, `ApplyDefaults()` hides non-visual types on load, `Refresh()` rebuilds after scene mutation. 8 unit tests, 105/105 ui tests pass. Wired in `main.cpp` (panel constructed after scene build, `ApplyDefaults` called once). Visual verification deferred to the user — batching is type-keyed, so hiding a type hides its whole batched mesh via the existing `node.visible` check in the draw loop.
 - [ ] 7.7 Element isolation
 - [ ] 7.8 Element transparency override
 - [ ] 7.9 Fit-to-view
