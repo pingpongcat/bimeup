@@ -129,6 +129,15 @@ void ClipPlanesPanel::OnDraw() {
                 mgr.UpdatePlane(entry.id, eq);
             }
 
+            bool sectionFill = entry.plane.sectionFill;
+            if (ImGui::Checkbox("Section fill", &sectionFill)) {
+                mgr.SetSectionFill(entry.id, sectionFill);
+            }
+            glm::vec4 fillColor = entry.plane.fillColor;
+            if (ImGui::ColorEdit4("Fill color", &fillColor.x)) {
+                mgr.SetFillColor(entry.id, fillColor);
+            }
+
             if (ImGui::SmallButton("Remove")) {
                 toRemove = entry.id;
             }

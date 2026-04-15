@@ -98,7 +98,7 @@
   - [x] 7.4e `core::SelectionCleared` event — non-additive click on empty space clears selection + PropertyPanel (additive miss preserves)
 - [ ] 7.5 Section view (BRep approach — see `docs/section_cap_next_session.md`)
   - [x] 7.5a `ClipPlane` section fields (`sectionFill`, `fillColor`) + manager setters
-  - [ ] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
+  - [x] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
   - [ ] 7.5c `scene::SliceTriangle` — plane/triangle intersection math
   - [ ] 7.5d `scene::SliceSceneMesh` — walk mesh triangles, transform, collect segments
   - [ ] 7.5e `scene::StitchSegmentsToPolygons` — endpoint hash-grid stitch

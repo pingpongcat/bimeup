@@ -108,4 +108,41 @@ TEST(ClipPlanesPanelTest, PruneActiveIfMissingIsSafeWithoutManager) {
     EXPECT_EQ(*panel.ActivePlaneId(), 42U);
 }
 
+// 7.5b: the panel's "Section fill" checkbox + ColorEdit4 call SetSectionFill
+// and SetFillColor on the active plane. Verify that the wiring target (the
+// manager setters used from per-plane UI rows) edits exactly one plane and
+// leaves other planes and the panel's active-plane selection intact.
+TEST(ClipPlanesPanelTest, SectionFillEditsScopedToTargetPlane) {
+    ClipPlaneManager mgr;
+    const std::uint32_t a = mgr.AddPlane({1.0F, 0.0F, 0.0F, 0.0F});
+    const std::uint32_t b = mgr.AddPlane({0.0F, 1.0F, 0.0F, -2.0F});
+
+    ClipPlanesPanel panel;
+    panel.SetManager(&mgr);
+    panel.SetActivePlaneId(a);
+
+    ASSERT_TRUE(mgr.SetSectionFill(b, true));
+    ASSERT_TRUE(mgr.SetFillColor(b, {0.1F, 0.2F, 0.3F, 0.5F}));
+
+    // Plane a must not be touched.
+    const auto* pa = mgr.Find(a);
+    ASSERT_NE(pa, nullptr);
+    EXPECT_FALSE(pa->sectionFill);
+    EXPECT_FLOAT_EQ(pa->fillColor.r, 0.6F);
+    EXPECT_FLOAT_EQ(pa->fillColor.a, 1.0F);
+
+    const auto* pb = mgr.Find(b);
+    ASSERT_NE(pb, nullptr);
+    EXPECT_TRUE(pb->sectionFill);
+    EXPECT_FLOAT_EQ(pb->fillColor.r, 0.1F);
+    EXPECT_FLOAT_EQ(pb->fillColor.a, 0.5F);
+    // Equation preserved — section setters must not clobber the plane equation.
+    EXPECT_FLOAT_EQ(pb->equation.y, 1.0F);
+    EXPECT_FLOAT_EQ(pb->equation.w, -2.0F);
+
+    // Active-plane selection unaffected by unrelated plane edits.
+    ASSERT_TRUE(panel.ActivePlaneId().has_value());
+    EXPECT_EQ(*panel.ActivePlaneId(), a);
+}
+
 }  // namespace
