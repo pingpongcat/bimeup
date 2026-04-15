@@ -13,6 +13,7 @@ using bimeup::scene::SceneMesh;
 using bimeup::scene::Segment;
 using bimeup::scene::SliceSceneMesh;
 using bimeup::scene::SliceTriangle;
+using bimeup::scene::StitchSegments;
 using bimeup::scene::TriangleCut;
 
 namespace {
@@ -162,6 +163,128 @@ TEST(SliceSceneMesh, UnitCubeAtYHalfProducesEightPerimeterSegments) {
     float totalLen = 0.0F;
     for (const auto& s : segs) totalLen += glm::length(s.b - s.a);
     EXPECT_NEAR(totalLen, 4.0F, 1e-3F);
+}
+
+namespace {
+
+// Sum of edge lengths around a polygon, including the implicit closing edge.
+float PolygonPerimeter(const std::vector<glm::vec3>& poly) {
+    float len = 0.0F;
+    if (poly.size() < 2) return len;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        const auto& p = poly[i];
+        const auto& q = poly[(i + 1) % poly.size()];
+        len += glm::length(q - p);
+    }
+    return len;
+}
+
+bool PolygonContains(const std::vector<glm::vec3>& poly,
+                     const glm::vec3& p,
+                     float eps = 1e-3F) {
+    return std::any_of(poly.begin(), poly.end(),
+                       [&](const glm::vec3& v) { return NearEq(v, p, eps); });
+}
+
+}  // namespace
+
+TEST(StitchSegments, EmptyInputProducesNoPolygons) {
+    std::vector<Segment> segs;
+    const auto polys = StitchSegments(segs);
+    EXPECT_TRUE(polys.empty());
+}
+
+TEST(StitchSegments, FourSegmentsOfUnitSquareProduceOneQuadPolygon) {
+    // Counter-clockwise unit square in the xz-plane at y=0.
+    const std::vector<Segment> segs = {
+        {{0, 0, 0}, {1, 0, 0}},
+        {{1, 0, 0}, {1, 0, 1}},
+        {{1, 0, 1}, {0, 0, 1}},
+        {{0, 0, 1}, {0, 0, 0}},
+    };
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 1U);
+    EXPECT_EQ(polys[0].size(), 4U);
+    EXPECT_NEAR(PolygonPerimeter(polys[0]), 4.0F, 1e-3F);
+    EXPECT_TRUE(PolygonContains(polys[0], {0, 0, 0}));
+    EXPECT_TRUE(PolygonContains(polys[0], {1, 0, 0}));
+    EXPECT_TRUE(PolygonContains(polys[0], {1, 0, 1}));
+    EXPECT_TRUE(PolygonContains(polys[0], {0, 0, 1}));
+}
+
+TEST(StitchSegments, ShuffledAndFlippedSegmentsStillStitchSquare) {
+    // Same square, but each segment is in arbitrary order/direction.
+    const std::vector<Segment> segs = {
+        {{1, 0, 1}, {1, 0, 0}},  // flipped
+        {{0, 0, 0}, {0, 0, 1}},  // flipped
+        {{0, 0, 0}, {1, 0, 0}},
+        {{0, 0, 1}, {1, 0, 1}},  // flipped
+    };
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 1U);
+    EXPECT_EQ(polys[0].size(), 4U);
+    EXPECT_NEAR(PolygonPerimeter(polys[0]), 4.0F, 1e-3F);
+}
+
+TEST(StitchSegments, TwoDisjointSquaresProduceTwoPolygons) {
+    const std::vector<Segment> segs = {
+        // Square 1 at origin.
+        {{0, 0, 0}, {1, 0, 0}},
+        {{1, 0, 0}, {1, 0, 1}},
+        {{1, 0, 1}, {0, 0, 1}},
+        {{0, 0, 1}, {0, 0, 0}},
+        // Square 2 shifted to x=10.
+        {{10, 0, 0}, {11, 0, 0}},
+        {{11, 0, 0}, {11, 0, 1}},
+        {{11, 0, 1}, {10, 0, 1}},
+        {{10, 0, 1}, {10, 0, 0}},
+    };
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 2U);
+    EXPECT_EQ(polys[0].size(), 4U);
+    EXPECT_EQ(polys[1].size(), 4U);
+    EXPECT_NEAR(PolygonPerimeter(polys[0]), 4.0F, 1e-3F);
+    EXPECT_NEAR(PolygonPerimeter(polys[1]), 4.0F, 1e-3F);
+}
+
+TEST(StitchSegments, OpenPolylineIsDropped) {
+    // Three connected segments that don't close back to the start.
+    const std::vector<Segment> segs = {
+        {{0, 0, 0}, {1, 0, 0}},
+        {{1, 0, 0}, {1, 0, 1}},
+        {{1, 0, 1}, {0, 0, 1}},
+    };
+    const auto polys = StitchSegments(segs);
+    EXPECT_TRUE(polys.empty());
+}
+
+TEST(StitchSegments, EpsilonSnapsNearlyMatchingEndpoints) {
+    // Endpoints differ by 1e-5, well under the default epsilon (1e-4).
+    const std::vector<Segment> segs = {
+        {{0, 0, 0}, {1, 0, 0}},
+        {{1.000005F, 0, 0}, {1, 0, 1}},
+        {{1, 0, 1.000005F}, {0, 0, 1}},
+        {{0, 0, 1}, {0.000005F, 0, 0}},
+    };
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 1U);
+    EXPECT_EQ(polys[0].size(), 4U);
+}
+
+TEST(StitchSegments, CubeSliceStitchesIntoSingleClosedLoop) {
+    // The 8 segments produced by SliceSceneMesh on a unit cube at y=0.5 stitch
+    // into one closed loop. Each side face contributes two segments meeting at
+    // a midpoint along the face diagonal, so the loop has 8 vertices (4 cube
+    // corners + 4 edge-midpoints) and perimeter == 4.
+    const auto mesh = MakeUnitCubeMesh();
+    const auto plane = ClipPlane::FromPointNormal({0, 0.5F, 0}, {0, 1, 0});
+    const auto segs = SliceSceneMesh(mesh, glm::mat4(1.0F), plane);
+    ASSERT_EQ(segs.size(), 8U);
+
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 1U);
+    EXPECT_EQ(polys[0].size(), 8U);
+    EXPECT_NEAR(PolygonPerimeter(polys[0]), 4.0F, 1e-3F);
 }
 
 TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {

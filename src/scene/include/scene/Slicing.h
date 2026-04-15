@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -32,5 +33,13 @@ TriangleCut SliceTriangle(const renderer::ClipPlane& plane,
 std::vector<Segment> SliceSceneMesh(const SceneMesh& mesh,
                                     const glm::mat4& worldTransform,
                                     const renderer::ClipPlane& plane);
+
+/// Stitch coplanar segments into closed polygons. Endpoints within `epsilon`
+/// are treated as the same point (snapped via a quantised grid). Each output
+/// polygon is the ordered list of unique vertices around a closed loop (the
+/// closing edge from last back to first is implicit). Open polylines (gaps in
+/// the input) are discarded.
+std::vector<std::vector<glm::vec3>> StitchSegments(
+    std::span<const Segment> segments, float epsilon = 1e-4F);
 
 }  // namespace bimeup::scene

@@ -1,5 +1,9 @@
 #include "scene/Slicing.h"
 
+#include <cmath>
+#include <cstdint>
+#include <unordered_map>
+
 #include "scene/SceneMesh.h"
 
 namespace bimeup::scene {
@@ -116,6 +120,110 @@ std::vector<Segment> SliceSceneMesh(const SceneMesh& mesh,
         }
     }
     return segments;
+}
+
+namespace {
+
+struct GridKey {
+    std::int64_t x;
+    std::int64_t y;
+    std::int64_t z;
+    bool operator==(const GridKey& o) const {
+        return x == o.x && y == o.y && z == o.z;
+    }
+};
+
+struct GridKeyHash {
+    std::size_t operator()(const GridKey& k) const noexcept {
+        // FNV-ish mixing of three int64s.
+        std::size_t h = std::hash<std::int64_t>{}(k.x);
+        h ^= std::hash<std::int64_t>{}(k.y) + 0x9e3779b97f4a7c15ULL +
+             (h << 6) + (h >> 2);
+        h ^= std::hash<std::int64_t>{}(k.z) + 0x9e3779b97f4a7c15ULL +
+             (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+GridKey Quantise(const glm::vec3& p, float epsilon) {
+    const float inv = 1.0F / epsilon;
+    return GridKey{static_cast<std::int64_t>(std::llround(p.x * inv)),
+                   static_cast<std::int64_t>(std::llround(p.y * inv)),
+                   static_cast<std::int64_t>(std::llround(p.z * inv))};
+}
+
+}  // namespace
+
+std::vector<std::vector<glm::vec3>> StitchSegments(
+    std::span<const Segment> segments, float epsilon) {
+    std::vector<std::vector<glm::vec3>> polygons;
+    if (segments.empty()) return polygons;
+
+    // Build adjacency: for each quantised endpoint, list (segmentIndex, isB)
+    // — isB means this endpoint is the segment's B end (so its "other" end is A).
+    struct EndpointRef {
+        std::size_t segIndex;
+        bool isB;
+    };
+    std::unordered_map<GridKey, std::vector<EndpointRef>, GridKeyHash> grid;
+    grid.reserve(segments.size() * 2);
+
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        grid[Quantise(segments[i].a, epsilon)].push_back({i, false});
+        grid[Quantise(segments[i].b, epsilon)].push_back({i, true});
+    }
+
+    std::vector<bool> used(segments.size(), false);
+
+    for (std::size_t start = 0; start < segments.size(); ++start) {
+        if (used[start]) continue;
+
+        std::vector<glm::vec3> poly;
+        poly.push_back(segments[start].a);
+
+        const GridKey startKey = Quantise(segments[start].a, epsilon);
+        std::size_t current = start;
+        bool currentIsB = false;  // current endpoint we're walking from is .b
+        used[current] = true;
+        glm::vec3 currentEnd = segments[current].b;
+
+        bool closed = false;
+        while (true) {
+            const GridKey endKey = Quantise(currentEnd, epsilon);
+            if (endKey == startKey) {
+                closed = true;
+                break;
+            }
+            poly.push_back(currentEnd);
+
+            // Find an unused neighbour segment sharing this endpoint.
+            auto it = grid.find(endKey);
+            if (it == grid.end()) break;
+            std::size_t next = segments.size();
+            bool nextOtherIsB = false;
+            for (const auto& ref : it->second) {
+                if (ref.segIndex == current) continue;
+                if (used[ref.segIndex]) continue;
+                next = ref.segIndex;
+                // ref.isB tells which end matched; the "other" end becomes
+                // the new walking endpoint.
+                nextOtherIsB = !ref.isB;
+                break;
+            }
+            if (next == segments.size()) break;
+
+            used[next] = true;
+            current = next;
+            currentIsB = nextOtherIsB;
+            currentEnd = currentIsB ? segments[next].b : segments[next].a;
+        }
+
+        if (closed && poly.size() >= 3) {
+            polygons.push_back(std::move(poly));
+        }
+    }
+
+    return polygons;
 }
 
 }  // namespace bimeup::scene

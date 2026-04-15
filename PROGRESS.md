@@ -101,7 +101,7 @@
   - [x] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
   - [x] 7.5c `scene::SliceTriangle` — plane/triangle intersection math (`scene/Slicing.{h,cpp}`; 8 unit tests covering all-front/back, coplanar, 2-1 splits, vertex-on-plane straddle/no-straddle, edge-on-plane)
   - [x] 7.5d `scene::SliceSceneMesh` — walk mesh triangles, transform, collect segments
-  - [ ] 7.5e `scene::StitchSegmentsToPolygons` — endpoint hash-grid stitch
+  - [x] 7.5e `scene::StitchSegments` — endpoint hash-grid stitch into closed polygons (`scene/Slicing.{h,cpp}`; 7 unit tests covering empty input, square stitch, shuffled+flipped, two disjoint loops, open polyline drop, epsilon snap, cube slice → 8-vert closed loop)
   - [ ] 7.5f `scene::TriangulatePlanarPolygon` — ear-clipping (consider `external/earcut.hpp`)
   - [ ] 7.5g `renderer::SectionCapGeometry` — per-scene cap vertex buffer + dirty tracking
   - [ ] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline`
