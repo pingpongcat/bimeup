@@ -113,10 +113,6 @@ void AppendBatchedCaps(const renderer::ClipPlane& plane,
         }
     }
 
-    std::fprintf(stderr,
-                 "[section-cap] batched mesh: %zu unique owners with segments\n",
-                 perOwnerSegs.size());
-
     for (auto& [owner, segs] : perOwnerSegs) {
         if (segs.empty()) continue;
         const auto colorIt = perOwnerColor.find(owner);
