@@ -790,6 +790,24 @@ int main(int argc, char* argv[]) {
                  renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
     });
     toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
+    toolbar->SetOnFrameSelected([&] {
+        bimeup::scene::AABB selBounds;
+        for (auto expressId : selection.Ids()) {
+            auto it = expressIdToNodes.find(expressId);
+            if (it == expressIdToNodes.end()) continue;
+            for (auto nodeId : it->second) {
+                const auto& node = sceneResult->scene.GetNode(nodeId);
+                if (node.bounds.IsValid()) {
+                    selBounds = bimeup::scene::AABB::Merge(selBounds, node.bounds);
+                }
+            }
+        }
+        if (selBounds.IsValid()) {
+            FitCameraToBounds(camera, selBounds);
+        } else {
+            fitToViewRequested = true;
+        }
+    });
     toolbar->SetOnOpenFile([] { LOG_INFO("Toolbar: Open File (not implemented yet)"); });
     toolbar->SetOnMeasureModeChanged([&](bool active) {
         measureModeActive = active;

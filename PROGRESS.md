@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.7 — Element isolation
+## Current Task: 7.8 — Element transparency override
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -111,7 +111,11 @@
 - [x] 7.6 Element visibility by IFC type
   - [x] 7.6a `Scene::SetVisibilityByType` + `Scene::GetUniqueTypes` + `scene::DefaultHiddenTypes()` (IfcSpace, IfcOpeningElement, IfcGrid, IfcAnnotation) — 5 new unit tests, 124/124 scene tests pass
   - [x] 7.6b `ui::TypeVisibilityPanel` — lists unique IFC types with checkboxes + Show/Hide all; `SetScene` seeds cache, `ApplyDefaults()` hides non-visual types on load, `Refresh()` rebuilds after scene mutation. 8 unit tests, 105/105 ui tests pass. Wired in `main.cpp` (panel constructed after scene build, `ApplyDefaults` called once). Visual verification deferred to the user — batching is type-keyed, so hiding a type hides its whole batched mesh via the existing `node.visible` check in the draw loop.
-- [ ] 7.7 Element isolation
+- [x] 7.7 Element isolation
+  - [x] 7.7a `Scene::IsolateByExpressId` + `Scene::ShowAll` + `Scene::FindByExpressId` (5 new unit tests; mesh-bearing nodes only, non-mesh ancestors untouched)
+  - [x] 7.7b `ui::HierarchyPanel` subscribes to `ElementSelected`/`SelectionCleared`; selected rows get `ImGuiTreeNodeFlags_Selected`; ancestors of selection auto-expand via `SetNextItemOpen`. 5 new unit tests.
+  - [x] 7.7c Per-row eye (`o`/`-`) + isolate (`I`) buttons in the hierarchy tree. Panel exposes `NodeCallback` wiring + `VisibilityQuery`; main.cpp drives Scene: toggle flips visibility for every mesh-bearing descendant, isolate calls `IsolateByExpressId` over the subtree, query reports "any descendant mesh visible". 3 new unit tests.
+  - [x] 7.7d Toolbar "Frame Selected" button next to "Fit to View" (wired to `Camera::Frame` over selection AABB, falls back to fit-all when selection is empty). 2 new unit tests.
 - [ ] 7.8 Element transparency override
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation

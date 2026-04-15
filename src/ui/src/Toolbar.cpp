@@ -20,6 +20,10 @@ void Toolbar::SetOnFitToView(FitToViewCallback callback) {
     m_onFitToView = std::move(callback);
 }
 
+void Toolbar::SetOnFrameSelected(FrameSelectedCallback callback) {
+    m_onFrameSelected = std::move(callback);
+}
+
 void Toolbar::SetOnMeasureModeChanged(MeasureModeCallback callback) {
     m_onMeasureModeChanged = std::move(callback);
 }
@@ -51,6 +55,12 @@ void Toolbar::TriggerRenderMode(renderer::RenderMode mode) {
 void Toolbar::TriggerFitToView() {
     if (m_onFitToView) {
         m_onFitToView();
+    }
+}
+
+void Toolbar::TriggerFrameSelected() {
+    if (m_onFrameSelected) {
+        m_onFrameSelected();
     }
 }
 
@@ -90,6 +100,10 @@ void Toolbar::OnDraw() {
 
         if (ImGui::Button("Fit to View")) {
             TriggerFitToView();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Frame Selected")) {
+            TriggerFrameSelected();
         }
 
         ImGui::SameLine();

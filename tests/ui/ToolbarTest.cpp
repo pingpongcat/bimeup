@@ -77,6 +77,20 @@ TEST(ToolbarTest, TriggerFitToViewNoCallbackIsNoop) {
     SUCCEED();
 }
 
+TEST(ToolbarTest, TriggerFrameSelectedInvokesCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    toolbar.SetOnFrameSelected([&] { ++calls; });
+    toolbar.TriggerFrameSelected();
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(ToolbarTest, TriggerFrameSelectedNoCallbackIsNoop) {
+    Toolbar toolbar;
+    toolbar.TriggerFrameSelected();
+    SUCCEED();
+}
+
 TEST(ToolbarTest, MeasureModeDefaultsOff) {
     Toolbar toolbar;
     EXPECT_FALSE(toolbar.IsMeasureModeActive());

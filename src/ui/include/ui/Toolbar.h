@@ -12,6 +12,7 @@ public:
     using OpenFileCallback = std::function<void()>;
     using RenderModeCallback = std::function<void(renderer::RenderMode)>;
     using FitToViewCallback = std::function<void()>;
+    using FrameSelectedCallback = std::function<void()>;
     using MeasureModeCallback = std::function<void(bool active)>;
 
     Toolbar() = default;
@@ -22,6 +23,7 @@ public:
     void SetOnOpenFile(OpenFileCallback callback);
     void SetOnRenderModeChanged(RenderModeCallback callback);
     void SetOnFitToView(FitToViewCallback callback);
+    void SetOnFrameSelected(FrameSelectedCallback callback);
     void SetOnMeasureModeChanged(MeasureModeCallback callback);
 
     [[nodiscard]] renderer::RenderMode GetRenderMode() const;
@@ -32,6 +34,7 @@ public:
     void TriggerOpenFile();
     void TriggerRenderMode(renderer::RenderMode mode);
     void TriggerFitToView();
+    void TriggerFrameSelected();
     void TriggerMeasureMode(bool active);
 
 private:
@@ -40,6 +43,7 @@ private:
     OpenFileCallback m_onOpenFile;
     RenderModeCallback m_onRenderModeChanged;
     FitToViewCallback m_onFitToView;
+    FrameSelectedCallback m_onFrameSelected;
     MeasureModeCallback m_onMeasureModeChanged;
 };
 
