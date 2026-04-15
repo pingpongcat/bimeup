@@ -13,6 +13,8 @@ struct ClipPlane {
     // the "front" side (kept by the clip) when that expression is positive.
     glm::vec4 equation{0.0F, 1.0F, 0.0F, 0.0F};
     bool enabled{true};
+    bool sectionFill{false};
+    glm::vec4 fillColor{0.6F, 0.6F, 0.6F, 1.0F};
 
     static ClipPlane FromPointNormal(const glm::vec3& point, const glm::vec3& normal);
 };

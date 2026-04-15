@@ -47,6 +47,20 @@ bool ClipPlaneManager::UpdatePlane(std::uint32_t id, const glm::vec4& equation) 
     return true;
 }
 
+bool ClipPlaneManager::SetSectionFill(std::uint32_t id, bool sectionFill) {
+    auto it = FindEntry(entries_, id);
+    if (it == entries_.end()) return false;
+    it->plane.sectionFill = sectionFill;
+    return true;
+}
+
+bool ClipPlaneManager::SetFillColor(std::uint32_t id, const glm::vec4& color) {
+    auto it = FindEntry(entries_, id);
+    if (it == entries_.end()) return false;
+    it->plane.fillColor = color;
+    return true;
+}
+
 bool ClipPlaneManager::Contains(std::uint32_t id) const {
     return FindEntry(entries_, id) != entries_.end();
 }

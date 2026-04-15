@@ -116,6 +116,38 @@ TEST(ClipPlaneManagerTest, UpdatePlaneUnknownIdReturnsFalse) {
     EXPECT_FALSE(mgr.UpdatePlane(99U, {1.0F, 0.0F, 0.0F, 0.0F}));
 }
 
+TEST(ClipPlaneManagerTest, SetSectionFillTogglesFlag) {
+    ClipPlaneManager mgr;
+    const std::uint32_t id = mgr.AddPlane({1.0F, 0.0F, 0.0F, 0.0F});
+    ASSERT_FALSE(mgr.Find(id)->sectionFill);
+    EXPECT_TRUE(mgr.SetSectionFill(id, true));
+    EXPECT_TRUE(mgr.Find(id)->sectionFill);
+    EXPECT_TRUE(mgr.SetSectionFill(id, false));
+    EXPECT_FALSE(mgr.Find(id)->sectionFill);
+}
+
+TEST(ClipPlaneManagerTest, SetSectionFillUnknownIdReturnsFalse) {
+    ClipPlaneManager mgr;
+    EXPECT_FALSE(mgr.SetSectionFill(42U, true));
+}
+
+TEST(ClipPlaneManagerTest, SetFillColorReplacesColor) {
+    ClipPlaneManager mgr;
+    const std::uint32_t id = mgr.AddPlane({1.0F, 0.0F, 0.0F, 0.0F});
+    EXPECT_TRUE(mgr.SetFillColor(id, {0.1F, 0.2F, 0.3F, 0.4F}));
+    const ClipPlane* p = mgr.Find(id);
+    ASSERT_NE(p, nullptr);
+    EXPECT_FLOAT_EQ(p->fillColor.r, 0.1F);
+    EXPECT_FLOAT_EQ(p->fillColor.g, 0.2F);
+    EXPECT_FLOAT_EQ(p->fillColor.b, 0.3F);
+    EXPECT_FLOAT_EQ(p->fillColor.a, 0.4F);
+}
+
+TEST(ClipPlaneManagerTest, SetFillColorUnknownIdReturnsFalse) {
+    ClipPlaneManager mgr;
+    EXPECT_FALSE(mgr.SetFillColor(99U, {0.0F, 0.0F, 0.0F, 1.0F}));
+}
+
 // --- PackClipPlanes: builds the std140 UBO the shader reads from. -------------
 
 TEST(ClipPlanesUboTest, SizeMatchesStd140Layout) {

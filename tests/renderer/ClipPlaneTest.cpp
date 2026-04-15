@@ -114,6 +114,31 @@ TEST(ClipPlaneTest, TransformToPlane_RoundTripDiagonal) {
     EXPECT_NEAR(back.equation.w, original.equation.w, 1e-5f);
 }
 
+TEST(ClipPlaneTest, SectionFieldsDefaults) {
+    ClipPlane p{};
+    EXPECT_FALSE(p.sectionFill);
+    EXPECT_FLOAT_EQ(p.fillColor.r, 0.6F);
+    EXPECT_FLOAT_EQ(p.fillColor.g, 0.6F);
+    EXPECT_FLOAT_EQ(p.fillColor.b, 0.6F);
+    EXPECT_FLOAT_EQ(p.fillColor.a, 1.0F);
+}
+
+TEST(ClipPlaneTest, TransformToPlane_ResetsSectionFieldsToDefaults) {
+    // TransformToPlane reconstructs a plane purely from the gizmo's transform.
+    // It must not invent stale section fields — it returns defaults, and the
+    // caller is responsible for re-applying any per-plane section state.
+    ClipPlane original{{0.0F, 0.0F, 1.0F, -2.5F}, true};
+    original.sectionFill = true;
+    original.fillColor = glm::vec4{1.0F, 0.0F, 0.0F, 0.5F};
+    glm::mat4 m = PlaneToTransform(original);
+    ClipPlane back = TransformToPlane(m);
+    EXPECT_FALSE(back.sectionFill);
+    EXPECT_FLOAT_EQ(back.fillColor.r, 0.6F);
+    EXPECT_FLOAT_EQ(back.fillColor.g, 0.6F);
+    EXPECT_FLOAT_EQ(back.fillColor.b, 0.6F);
+    EXPECT_FLOAT_EQ(back.fillColor.a, 1.0F);
+}
+
 TEST(ClipPlaneTest, TransformToPlane_TranslationOffNormalPreservesNormalAndDistance) {
     // Build a plane, then slide the transform's translation along a tangent of the plane.
     // The resulting plane must have the same normal and same signed-distance-to-origin.

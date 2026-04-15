@@ -24,6 +24,8 @@ public:
     bool RemovePlane(std::uint32_t id);
     bool SetEnabled(std::uint32_t id, bool enabled);
     bool UpdatePlane(std::uint32_t id, const glm::vec4& equation);
+    bool SetSectionFill(std::uint32_t id, bool sectionFill);
+    bool SetFillColor(std::uint32_t id, const glm::vec4& color);
 
     std::size_t Count() const { return entries_.size(); }
     bool Contains(std::uint32_t id) const;

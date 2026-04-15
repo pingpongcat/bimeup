@@ -96,7 +96,17 @@
   - [x] 7.4c `Camera::Zoom` scales `m_orthoHeight` so scroll-zoom works in ortho (plan view + any future ortho mode)
   - [x] 7.4d Restore perspective on Deactivate; ImGuizmo ViewManipulate cube also auto-exits; ortho zoom rate doubled
   - [x] 7.4e `core::SelectionCleared` event — non-additive click on empty space clears selection + PropertyPanel (additive miss preserves)
-- [ ] 7.5 Section view
+- [ ] 7.5 Section view (BRep approach — see `docs/section_cap_next_session.md`)
+  - [x] 7.5a `ClipPlane` section fields (`sectionFill`, `fillColor`) + manager setters
+  - [ ] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
+  - [ ] 7.5c `scene::SliceTriangle` — plane/triangle intersection math
+  - [ ] 7.5d `scene::SliceSceneMesh` — walk mesh triangles, transform, collect segments
+  - [ ] 7.5e `scene::StitchSegmentsToPolygons` — endpoint hash-grid stitch
+  - [ ] 7.5f `scene::TriangulatePlanarPolygon` — ear-clipping (consider `external/earcut.hpp`)
+  - [ ] 7.5g `renderer::SectionCapGeometry` — per-scene cap vertex buffer + dirty tracking
+  - [ ] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline`
+  - [ ] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp`
+  - [ ] 7.5j Stage gate — full `ctest --output-on-failure`
 - [ ] 7.6 Element visibility by IFC type
 - [ ] 7.7 Element isolation
 - [ ] 7.8 Element transparency override
