@@ -26,6 +26,13 @@ public:
     std::optional<TriangulatedMesh> ExtractMesh(uint32_t expressId) const;
     std::vector<std::pair<uint32_t, TriangulatedMesh>> ExtractAll() const;
 
+    /// Extract one `TriangulatedMesh` per IfcPlacedGeometry belonging to the
+    /// element. Each sub-mesh keeps its own surface-style color (including
+    /// alpha < 1 for translucent materials like glass panes) and its own
+    /// transformation. Returns an empty vector if the element has no geometry
+    /// or the id is unknown.
+    std::vector<TriangulatedMesh> ExtractSubMeshes(uint32_t expressId) const;
+
 private:
     IfcModel& model_;
 };
