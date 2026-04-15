@@ -102,7 +102,7 @@
   - [x] 7.5c `scene::SliceTriangle` — plane/triangle intersection math (`scene/Slicing.{h,cpp}`; 8 unit tests covering all-front/back, coplanar, 2-1 splits, vertex-on-plane straddle/no-straddle, edge-on-plane)
   - [x] 7.5d `scene::SliceSceneMesh` — walk mesh triangles, transform, collect segments
   - [x] 7.5e `scene::StitchSegments` — endpoint hash-grid stitch into closed polygons (`scene/Slicing.{h,cpp}`; 7 unit tests covering empty input, square stitch, shuffled+flipped, two disjoint loops, open polyline drop, epsilon snap, cube slice → 8-vert closed loop)
-  - [ ] 7.5f `scene::TriangulatePlanarPolygon` — ear-clipping (consider `external/earcut.hpp`)
+  - [x] 7.5f `scene::TriangulatePolygon` — ear-clipping (project to dominant 2D plane, CCW-normalize, O(n²) ear-clip; `scene/Slicing.{h,cpp}`; 6 unit tests covering degenerate input, CCW/CW squares, concave L-shape, oblique plane, vertex-preservation)
   - [ ] 7.5g `renderer::SectionCapGeometry` — per-scene cap vertex buffer + dirty tracking
   - [ ] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline`
   - [ ] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp`

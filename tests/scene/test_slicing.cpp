@@ -15,6 +15,7 @@ using bimeup::scene::SliceSceneMesh;
 using bimeup::scene::SliceTriangle;
 using bimeup::scene::StitchSegments;
 using bimeup::scene::TriangleCut;
+using bimeup::scene::TriangulatePolygon;
 
 namespace {
 
@@ -285,6 +286,93 @@ TEST(StitchSegments, CubeSliceStitchesIntoSingleClosedLoop) {
     ASSERT_EQ(polys.size(), 1U);
     EXPECT_EQ(polys[0].size(), 8U);
     EXPECT_NEAR(PolygonPerimeter(polys[0]), 4.0F, 1e-3F);
+}
+
+namespace {
+
+// Approximate unsigned area of a 3D planar polygon via fan triangulation.
+float PolygonArea3D(const std::vector<glm::vec3>& poly) {
+    if (poly.size() < 3) return 0.0F;
+    glm::vec3 sum(0.0F);
+    for (size_t i = 1; i + 1 < poly.size(); ++i) {
+        sum += glm::cross(poly[i] - poly[0], poly[i + 1] - poly[0]);
+    }
+    return 0.5F * glm::length(sum);
+}
+
+float TrianglesArea(const std::vector<glm::vec3>& tris) {
+    float total = 0.0F;
+    for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+        total += 0.5F * glm::length(
+                            glm::cross(tris[i + 1] - tris[i], tris[i + 2] - tris[i]));
+    }
+    return total;
+}
+
+}  // namespace
+
+TEST(TriangulatePolygon, DegeneratePolygonsProduceNoTriangles) {
+    EXPECT_TRUE(TriangulatePolygon({}, {0, 1, 0}).empty());
+    EXPECT_TRUE(TriangulatePolygon({{0, 0, 0}}, {0, 1, 0}).empty());
+    EXPECT_TRUE(TriangulatePolygon({{0, 0, 0}, {1, 0, 0}}, {0, 1, 0}).empty());
+}
+
+TEST(TriangulatePolygon, UnitSquareProducesTwoTriangles) {
+    // CCW unit square at y=0.
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    ASSERT_EQ(tris.size(), 6U);  // 2 triangles
+    EXPECT_NEAR(TrianglesArea(tris), 1.0F, 1e-4F);
+}
+
+TEST(TriangulatePolygon, ClockwiseInputStillProducesTrianglesCoveringArea) {
+    // CW input — implementation should detect and handle either winding.
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {0, 0, 1}, {1, 0, 1}, {1, 0, 0},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    ASSERT_EQ(tris.size(), 6U);
+    EXPECT_NEAR(TrianglesArea(tris), 1.0F, 1e-4F);
+}
+
+TEST(TriangulatePolygon, ConcaveLShapeProducesFourTriangles) {
+    // L-shape with 6 vertices in xz-plane, CCW:
+    //   (0,0)-(2,0)-(2,1)-(1,1)-(1,2)-(0,2). Area = 3.
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {2, 0, 0}, {2, 0, 1}, {1, 0, 1}, {1, 0, 2}, {0, 0, 2},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    ASSERT_EQ(tris.size(), 12U);  // n-2 = 4 triangles
+    EXPECT_NEAR(TrianglesArea(tris), 3.0F, 1e-4F);
+    EXPECT_NEAR(PolygonArea3D(poly), 3.0F, 1e-4F);
+}
+
+TEST(TriangulatePolygon, OutputCoversInputAreaForArbitraryPlane) {
+    // Triangle spanning an oblique plane (normal roughly (1,1,1)).
+    const std::vector<glm::vec3> poly = {
+        {1, 0, 0}, {0, 1, 0}, {0, 0, 1},
+    };
+    const glm::vec3 normal = glm::normalize(glm::vec3{1, 1, 1});
+    const auto tris = TriangulatePolygon(poly, normal);
+    ASSERT_EQ(tris.size(), 3U);  // one triangle
+    EXPECT_NEAR(TrianglesArea(tris), PolygonArea3D(poly), 1e-4F);
+}
+
+TEST(TriangulatePolygon, UsesOriginalVerticesInOutput) {
+    // Each output vertex should equal one of the input vertices (bit-for-bit,
+    // since we re-index — no interpolation happens in ear-clipping).
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    for (const auto& v : tris) {
+        const bool found = std::any_of(poly.begin(), poly.end(),
+                                       [&](const glm::vec3& p) { return NearEq(v, p); });
+        EXPECT_TRUE(found) << "output vertex (" << v.x << "," << v.y << "," << v.z
+                           << ") not in input polygon";
+    }
 }
 
 TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {

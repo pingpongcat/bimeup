@@ -226,4 +226,115 @@ std::vector<std::vector<glm::vec3>> StitchSegments(
     return polygons;
 }
 
+namespace {
+
+// Project a 3D point onto 2D by dropping the axis with the largest
+// |normal| component. Returns (u, v) and the index of the dropped axis.
+int DominantAxis(const glm::vec3& n) {
+    const glm::vec3 a = glm::abs(n);
+    if (a.x >= a.y && a.x >= a.z) return 0;
+    if (a.y >= a.z) return 1;
+    return 2;
+}
+
+glm::vec2 Project(const glm::vec3& p, int drop) {
+    switch (drop) {
+        case 0: return {p.y, p.z};
+        case 1: return {p.x, p.z};
+        default: return {p.x, p.y};
+    }
+}
+
+float SignedArea2D(const std::vector<glm::vec2>& p) {
+    float s = 0.0F;
+    const std::size_t n = p.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& a = p[i];
+        const auto& b = p[(i + 1) % n];
+        s += a.x * b.y - b.x * a.y;
+    }
+    return 0.5F * s;
+}
+
+float Cross2D(const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+bool PointInTriangle(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b,
+                     const glm::vec2& c) {
+    const float d1 = Cross2D(p, a, b);
+    const float d2 = Cross2D(p, b, c);
+    const float d3 = Cross2D(p, c, a);
+    const bool hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    const bool hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(hasNeg && hasPos);
+}
+
+}  // namespace
+
+std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
+                                          const glm::vec3& planeNormal) {
+    std::vector<glm::vec3> result;
+    const std::size_t n = polygon.size();
+    if (n < 3) return result;
+
+    const int drop = DominantAxis(planeNormal);
+
+    std::vector<glm::vec2> verts2d;
+    verts2d.reserve(n);
+    for (const auto& p : polygon) verts2d.push_back(Project(p, drop));
+
+    // Index list of remaining (unclipped) polygon vertices. Ensure CCW ordering
+    // by reversing if signed area is negative — ear test below assumes CCW.
+    std::vector<std::size_t> idx;
+    idx.reserve(n);
+    if (SignedArea2D(verts2d) >= 0.0F) {
+        for (std::size_t i = 0; i < n; ++i) idx.push_back(i);
+    } else {
+        for (std::size_t i = 0; i < n; ++i) idx.push_back(n - 1 - i);
+    }
+
+    result.reserve(3 * (n - 2));
+
+    // Standard O(n^2) ear-clipping.
+    std::size_t guard = 0;
+    const std::size_t maxIters = n * n + 8;
+    while (idx.size() >= 3 && guard++ < maxIters) {
+        const std::size_t m = idx.size();
+        bool earFound = false;
+        for (std::size_t i = 0; i < m; ++i) {
+            const std::size_t iPrev = idx[(i + m - 1) % m];
+            const std::size_t iCur = idx[i];
+            const std::size_t iNext = idx[(i + 1) % m];
+            const glm::vec2& a = verts2d[iPrev];
+            const glm::vec2& b = verts2d[iCur];
+            const glm::vec2& c = verts2d[iNext];
+
+            // Must be a convex corner (CCW turn).
+            if (Cross2D(a, b, c) <= 0.0F) continue;
+
+            // No other polygon vertex may lie inside triangle abc.
+            bool contains = false;
+            for (std::size_t j = 0; j < m; ++j) {
+                if (j == (i + m - 1) % m || j == i || j == (i + 1) % m) continue;
+                if (PointInTriangle(verts2d[idx[j]], a, b, c)) {
+                    contains = true;
+                    break;
+                }
+            }
+            if (contains) continue;
+
+            result.push_back(polygon[iPrev]);
+            result.push_back(polygon[iCur]);
+            result.push_back(polygon[iNext]);
+            idx.erase(idx.begin() + static_cast<std::ptrdiff_t>(i));
+            earFound = true;
+            break;
+        }
+        if (!earFound) break;  // non-simple polygon; bail rather than spin.
+    }
+
+    return result;
+}
+
 }  // namespace bimeup::scene

@@ -42,4 +42,13 @@ std::vector<Segment> SliceSceneMesh(const SceneMesh& mesh,
 std::vector<std::vector<glm::vec3>> StitchSegments(
     std::span<const Segment> segments, float epsilon = 1e-4F);
 
+/// Ear-clip a planar polygon into triangles. The polygon is projected to the
+/// 2D plane dominant to `planeNormal` (the axis with the largest normal
+/// component is dropped). Winding is detected from the 2D signed area, so
+/// either CW or CCW input works. Returns a flat vector of triangle vertices
+/// (size is a multiple of 3); output vertices are the input's original 3D
+/// positions. Degenerate input (< 3 verts) returns empty.
+std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
+                                          const glm::vec3& planeNormal);
+
 }  // namespace bimeup::scene
