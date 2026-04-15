@@ -125,6 +125,7 @@
   - [ ] 7.8d Per-element / per-type alpha override slider in PropertyPanel + TypeVisibilityPanel (forces alpha on top of IFC-native alpha).
     - [x] 7.8d.1 Scene alpha override API — `SetElementAlphaOverride(expressId,alpha)` / `SetTypeAlphaOverride(ifcType,alpha)` / `GetEffectiveAlpha(NodeId)` (element override > type override > nullopt), clamped to [0,1]. 7 new unit tests.
     - [x] 7.8d.2 PropertyPanel alpha slider — `SetOnAlphaChange` / `SetAlphaQuery` callbacks + enable checkbox and 0..1 slider. `TriggerAlphaChange` / `TriggerClearAlpha` mirror HierarchyPanel test hooks; query seeds current value on `SetElement`. 4 new unit tests.
+    - [x] 7.8d.3 TypeVisibilityPanel alpha slider — per-row enable checkbox + 0..1 slider that forwards to `Scene::SetTypeAlphaOverride` / `ClearTypeAlphaOverride`. Direct scene read/write (no cache). 4 new unit tests.
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation
 

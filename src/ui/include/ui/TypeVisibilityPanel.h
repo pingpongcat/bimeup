@@ -2,6 +2,7 @@
 
 #include <ui/Panel.h>
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,14 @@ public:
     /// Re-push the cached type visibility flags down to the scene. Call after
     /// scene-side mutations like `Scene::ShowAll()` so disabled types stay hidden.
     void ReapplyToScene();
+
+    // ----- 7.8d Per-type alpha override -------------------------------
+    /// Forwards to `Scene::SetTypeAlphaOverride`. No-op when no scene is bound.
+    void SetTypeAlphaOverride(const std::string& ifcType, float alpha);
+    void ClearTypeAlphaOverride(const std::string& ifcType);
+    /// Returns the current override for `ifcType` from the bound scene,
+    /// or `std::nullopt` when no scene is bound or no override is set.
+    [[nodiscard]] std::optional<float> GetTypeAlphaOverride(const std::string& ifcType) const;
 
 private:
     scene::Scene* m_scene = nullptr;
