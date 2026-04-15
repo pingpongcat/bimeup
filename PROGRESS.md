@@ -109,6 +109,7 @@
   - [x] 7.5k Per-element capping for batched IFC meshes (`BuildSectionCapVertices` now partitions batched-mesh triangles by `triangleOwners[t]`, slice→stitch→triangulate per owner, tint = `ownerVertexColor * plane.fillColor`). Open polylines fallback via new `scene::StitchSegmentsDetailed` (returns `StitchResult{closed, open}`) when no closed loop forms for an element. Attached-mesh path unchanged. 2 new unit tests for `StitchSegmentsDetailed` + 2 new tests for per-owner batched caps (per-element colour, invisible-owner skip); visual verification on `../sample.ifc` deferred to the user since this is a GUI change.
   - [x] 7.5j Stage gate — full `ctest --output-on-failure` (215/215 pass; disabled LSan for `test_core` binary since it contains Vulkan-touching Application + SceneUploaderVulkan tests whose graphics-driver leaks at process exit are environmental. Runtime ASan checks remain active across all targets.)
 - [ ] 7.6 Element visibility by IFC type
+  - [x] 7.6a `Scene::SetVisibilityByType` + `Scene::GetUniqueTypes` + `scene::DefaultHiddenTypes()` (IfcSpace, IfcOpeningElement, IfcGrid, IfcAnnotation) — 5 new unit tests, 124/124 scene tests pass
 - [ ] 7.7 Element isolation
 - [ ] 7.8 Element transparency override
 - [ ] 7.9 Fit-to-view

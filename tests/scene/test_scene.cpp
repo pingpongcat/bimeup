@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <scene/Scene.h>
 
+#include <algorithm>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 using namespace bimeup::scene;
@@ -180,6 +182,78 @@ TEST(SceneTest, FindByType) {
 
     auto doors = scene.FindByType("IfcDoor");
     EXPECT_EQ(doors.size(), 0);
+}
+
+TEST(SceneTest, SetVisibilityByTypeHidesOnlyMatchingNodes) {
+    Scene scene;
+
+    SceneNode wall1;
+    wall1.ifcType = "IfcWall";
+    NodeId wall1Id = scene.AddNode(std::move(wall1));
+
+    SceneNode slab;
+    slab.ifcType = "IfcSlab";
+    NodeId slabId = scene.AddNode(std::move(slab));
+
+    SceneNode wall2;
+    wall2.ifcType = "IfcWall";
+    NodeId wall2Id = scene.AddNode(std::move(wall2));
+
+    size_t affected = scene.SetVisibilityByType("IfcWall", false);
+    EXPECT_EQ(affected, 2u);
+    EXPECT_FALSE(scene.GetNode(wall1Id).visible);
+    EXPECT_FALSE(scene.GetNode(wall2Id).visible);
+    EXPECT_TRUE(scene.GetNode(slabId).visible);
+
+    affected = scene.SetVisibilityByType("IfcWall", true);
+    EXPECT_EQ(affected, 2u);
+    EXPECT_TRUE(scene.GetNode(wall1Id).visible);
+    EXPECT_TRUE(scene.GetNode(wall2Id).visible);
+}
+
+TEST(SceneTest, SetVisibilityByTypeUnknownTypeAffectsNothing) {
+    Scene scene;
+    SceneNode wall;
+    wall.ifcType = "IfcWall";
+    NodeId wallId = scene.AddNode(std::move(wall));
+
+    size_t affected = scene.SetVisibilityByType("IfcDoor", false);
+    EXPECT_EQ(affected, 0u);
+    EXPECT_TRUE(scene.GetNode(wallId).visible);
+}
+
+TEST(SceneTest, GetUniqueTypesReturnsSortedUniqueList) {
+    Scene scene;
+
+    SceneNode a; a.ifcType = "IfcWall"; scene.AddNode(std::move(a));
+    SceneNode b; b.ifcType = "IfcSlab"; scene.AddNode(std::move(b));
+    SceneNode c; c.ifcType = "IfcWall"; scene.AddNode(std::move(c));
+    SceneNode d; d.ifcType = "IfcDoor"; scene.AddNode(std::move(d));
+
+    auto types = scene.GetUniqueTypes();
+    ASSERT_EQ(types.size(), 3u);
+    EXPECT_EQ(types[0], "IfcDoor");
+    EXPECT_EQ(types[1], "IfcSlab");
+    EXPECT_EQ(types[2], "IfcWall");
+}
+
+TEST(SceneTest, GetUniqueTypesSkipsEmptyType) {
+    Scene scene;
+    SceneNode a; scene.AddNode(std::move(a));  // empty ifcType
+    SceneNode b; b.ifcType = "IfcWall"; scene.AddNode(std::move(b));
+
+    auto types = scene.GetUniqueTypes();
+    ASSERT_EQ(types.size(), 1u);
+    EXPECT_EQ(types[0], "IfcWall");
+}
+
+TEST(SceneTest, DefaultHiddenTypesContainsNonVisualTypes) {
+    const auto& defaults = DefaultHiddenTypes();
+    auto has = [&](const std::string& s) {
+        return std::find(defaults.begin(), defaults.end(), s) != defaults.end();
+    };
+    EXPECT_TRUE(has("IfcSpace"));
+    EXPECT_TRUE(has("IfcOpeningElement"));
 }
 
 TEST(SceneTest, MultipleChildrenOrdering) {

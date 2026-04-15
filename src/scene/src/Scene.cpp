@@ -1,5 +1,8 @@
 #include <scene/Scene.h>
 
+#include <algorithm>
+#include <set>
+
 namespace bimeup::scene {
 
 NodeId Scene::AddNode(SceneNode node) {
@@ -69,6 +72,37 @@ std::vector<NodeId> Scene::GetSelected() const {
         }
     }
     return selected;
+}
+
+size_t Scene::SetVisibilityByType(const std::string& ifcType, bool visible) {
+    size_t affected = 0;
+    for (auto& node : nodes_) {
+        if (node.ifcType == ifcType) {
+            node.visible = visible;
+            ++affected;
+        }
+    }
+    return affected;
+}
+
+std::vector<std::string> Scene::GetUniqueTypes() const {
+    std::set<std::string> unique;
+    for (const auto& node : nodes_) {
+        if (!node.ifcType.empty()) {
+            unique.insert(node.ifcType);
+        }
+    }
+    return {unique.begin(), unique.end()};
+}
+
+const std::vector<std::string>& DefaultHiddenTypes() {
+    static const std::vector<std::string> types = {
+        "IfcSpace",
+        "IfcOpeningElement",
+        "IfcGrid",
+        "IfcAnnotation",
+    };
+    return types;
 }
 
 std::vector<NodeId> Scene::FindByType(const std::string& ifcType) const {
