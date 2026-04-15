@@ -20,6 +20,7 @@
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
+#include <renderer/SectionFillPipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/ShadowPass.h>
 #include <renderer/Swapchain.h>
@@ -31,6 +32,7 @@
 #include <scene/Scene.h>
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
+#include <scene/SectionCapGeometry.h>
 #include <tools/Log.h>
 #include <ui/ClipPlanesPanel.h>
 #include <ui/PlanViewPanel.h>
@@ -187,6 +189,10 @@ int main(int argc, char* argv[]) {
                                               shaderDir + "/shadow.vert.spv");
     bimeup::renderer::Shader shadowFragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                               shaderDir + "/shadow.frag.spv");
+    bimeup::renderer::Shader sectionFillVertShader(device, bimeup::renderer::ShaderStage::Vertex,
+                                                   shaderDir + "/section_fill.vert.spv");
+    bimeup::renderer::Shader sectionFillFragShader(device, bimeup::renderer::ShaderStage::Fragment,
+                                                   shaderDir + "/section_fill.frag.spv");
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     //                 + clip planes UBO (fragment)
@@ -311,6 +317,19 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<bimeup::renderer::Pipeline> shadedPipeline;
     std::unique_ptr<bimeup::renderer::Pipeline> wireframePipeline;
     buildPipelines(shadedPipeline, wireframePipeline);
+
+    // Section-fill pipeline draws pre-triangulated cap geometry over the scene.
+    // Reuses the main descriptor set layout — only binding 0 (camera UBO) is
+    // referenced by section_fill.vert; unused bindings are harmless.
+    std::unique_ptr<bimeup::renderer::SectionFillPipeline> sectionFillPipeline;
+    auto buildSectionFillPipeline = [&] {
+        sectionFillPipeline = std::make_unique<bimeup::renderer::SectionFillPipeline>(
+            device, sectionFillVertShader, sectionFillFragShader,
+            renderLoop.GetRenderPass(), dsLayout.GetLayout(), renderLoop.GetSampleCount());
+    };
+    buildSectionFillPipeline();
+
+    bimeup::scene::SectionCapGeometry sectionCapGeometry(device);
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
     VkPushConstantRange shadowPushRange{};
@@ -837,6 +856,7 @@ int main(int argc, char* argv[]) {
                 renderLoop.SetSampleCount(desired);
                 currentSamples = desired;
                 buildPipelines(shadedPipeline, wireframePipeline);
+                buildSectionFillPipeline();
                 initImGui();
                 // Reflect the clamped value back to the panel so the UI doesn't
                 // claim e.g. 8x when the device only supports 4x.
@@ -971,6 +991,31 @@ int main(int argc, char* argv[]) {
             vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(glm::mat4), &transform);
             meshBuffer.Draw(cmd, handle);
+        }
+
+        // Section-fill caps: only rebuild/draw when at least one plane is
+        // active with sectionFill enabled. Rebuild is hash-gated, so it's a
+        // no-op when nothing has changed.
+        {
+            bool anySection = false;
+            for (const auto& entry : clipPlaneManager.Planes()) {
+                if (entry.plane.enabled && entry.plane.sectionFill) {
+                    anySection = true;
+                    break;
+                }
+            }
+            if (anySection) {
+                sectionCapGeometry.Rebuild(sceneResult->scene, sceneResult->meshes,
+                                           clipPlaneManager);
+                if (!sectionCapGeometry.IsEmpty()) {
+                    sectionFillPipeline->Bind(cmd);
+                    descriptorSet.Bind(cmd, sectionFillPipeline->GetLayout());
+                    VkBuffer vb = sectionCapGeometry.GetVertexBuffer();
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+                    vkCmdDraw(cmd, sectionCapGeometry.GetVertexCount(), 1, 0, 0);
+                }
+            }
         }
 
         uiManager.EndFrame(cmd);

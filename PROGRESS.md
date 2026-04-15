@@ -105,7 +105,7 @@
   - [x] 7.5f `scene::TriangulatePolygon` — ear-clipping (project to dominant 2D plane, CCW-normalize, O(n²) ear-clip; `scene/Slicing.{h,cpp}`; 6 unit tests covering degenerate input, CCW/CW squares, concave L-shape, oblique plane, vertex-preservation)
   - [x] 7.5g `scene::SectionCapGeometry` — per-scene cap vertex buffer + dirty tracking (`BuildSectionCapVertices` walks planes × visible mesh-bearing nodes, slice → stitch → triangulate → tinted vertex list; class wraps `renderer::Buffer` with hash-based no-op `Rebuild` + `MarkDirty`; in scene/ namespace because scene → renderer dep direction forbids a Scene-aware class inside renderer/. 8 unit tests.)
   - [x] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline` (flat-color pipeline: position+color vertex input, depth-test LEQUAL/write-off, CULL_NONE, no stencil, single camera UBO set; 4 Vulkan integration tests for shader-SPIR-V presence, construction, MSAA 4×, RAII)
-  - [ ] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp`
+  - [x] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp` (section-fill pipeline built next to shaded/wire, rebuilt on MSAA change; per-frame rebuild is hash-gated and skipped unless ≥1 plane has `enabled && sectionFill`; draws caps after scene, before UI, using main 4-binding descriptor set — shader reads only binding 0)
   - [ ] 7.5j Stage gate — full `ctest --output-on-failure`
 - [ ] 7.6 Element visibility by IFC type
 - [ ] 7.7 Element isolation
