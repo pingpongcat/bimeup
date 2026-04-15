@@ -74,6 +74,31 @@ std::vector<NodeId> Scene::GetSelected() const {
     return selected;
 }
 
+size_t Scene::IsolateByExpressId(const std::unordered_set<std::uint32_t>& expressIds) {
+    size_t changed = 0;
+    for (auto& node : nodes_) {
+        if (!node.mesh.has_value()) {
+            continue;
+        }
+        const bool keep = expressIds.count(node.expressId) > 0;
+        if (node.visible != keep) {
+            node.visible = keep;
+            ++changed;
+        }
+    }
+    return changed;
+}
+
+size_t Scene::IsolateByExpressId(std::initializer_list<std::uint32_t> expressIds) {
+    return IsolateByExpressId(std::unordered_set<std::uint32_t>(expressIds));
+}
+
+void Scene::ShowAll() {
+    for (auto& node : nodes_) {
+        node.visible = true;
+    }
+}
+
 size_t Scene::SetVisibilityByType(const std::string& ifcType, bool visible) {
     size_t affected = 0;
     for (auto& node : nodes_) {

@@ -247,6 +247,90 @@ TEST(SceneTest, GetUniqueTypesSkipsEmptyType) {
     EXPECT_EQ(types[0], "IfcWall");
 }
 
+TEST(SceneTest, IsolateByExpressIdHidesNonMatchingMeshNodes) {
+    Scene scene;
+
+    SceneNode wall1;
+    wall1.ifcType = "IfcWall";
+    wall1.expressId = 101;
+    wall1.mesh = MeshHandle{0};
+    NodeId wall1Id = scene.AddNode(std::move(wall1));
+
+    SceneNode wall2;
+    wall2.ifcType = "IfcWall";
+    wall2.expressId = 102;
+    wall2.mesh = MeshHandle{0};
+    NodeId wall2Id = scene.AddNode(std::move(wall2));
+
+    SceneNode slab;
+    slab.ifcType = "IfcSlab";
+    slab.expressId = 103;
+    slab.mesh = MeshHandle{0};
+    NodeId slabId = scene.AddNode(std::move(slab));
+
+    size_t changed = scene.IsolateByExpressId({101, 103});
+    EXPECT_EQ(changed, 1u);  // only wall2 flipped
+    EXPECT_TRUE(scene.GetNode(wall1Id).visible);
+    EXPECT_FALSE(scene.GetNode(wall2Id).visible);
+    EXPECT_TRUE(scene.GetNode(slabId).visible);
+}
+
+TEST(SceneTest, IsolateByExpressIdReshowsPreviouslyHidden) {
+    Scene scene;
+    SceneNode wall;
+    wall.expressId = 101;
+    wall.mesh = MeshHandle{0};
+    wall.visible = false;  // type-hidden before
+    NodeId wallId = scene.AddNode(std::move(wall));
+
+    size_t changed = scene.IsolateByExpressId({101});
+    EXPECT_EQ(changed, 1u);
+    EXPECT_TRUE(scene.GetNode(wallId).visible);
+}
+
+TEST(SceneTest, IsolateByExpressIdLeavesNonMeshNodesUntouched) {
+    Scene scene;
+
+    SceneNode storey;  // no mesh, no expressId match
+    storey.ifcType = "IfcBuildingStorey";
+    NodeId storeyId = scene.AddNode(std::move(storey));
+
+    SceneNode wall;
+    wall.expressId = 101;
+    wall.parent = storeyId;
+    wall.mesh = MeshHandle{0};
+    NodeId wallId = scene.AddNode(std::move(wall));
+
+    scene.IsolateByExpressId({999});  // nothing matches
+    EXPECT_TRUE(scene.GetNode(storeyId).visible);   // ancestor preserved
+    EXPECT_FALSE(scene.GetNode(wallId).visible);     // hidden
+}
+
+TEST(SceneTest, IsolateByExpressIdEmptySetHidesAllMeshes) {
+    Scene scene;
+    SceneNode a; a.expressId = 1; a.mesh = MeshHandle{0};
+    NodeId aId = scene.AddNode(std::move(a));
+    SceneNode b; b.expressId = 2; b.mesh = MeshHandle{0};
+    NodeId bId = scene.AddNode(std::move(b));
+
+    size_t changed = scene.IsolateByExpressId({});
+    EXPECT_EQ(changed, 2u);
+    EXPECT_FALSE(scene.GetNode(aId).visible);
+    EXPECT_FALSE(scene.GetNode(bId).visible);
+}
+
+TEST(SceneTest, ShowAllRestoresVisibility) {
+    Scene scene;
+    SceneNode a; a.expressId = 1; a.mesh = MeshHandle{0};
+    NodeId aId = scene.AddNode(std::move(a));
+    SceneNode b; b.expressId = 2; b.mesh = MeshHandle{0}; b.visible = false;
+    NodeId bId = scene.AddNode(std::move(b));
+
+    scene.ShowAll();
+    EXPECT_TRUE(scene.GetNode(aId).visible);
+    EXPECT_TRUE(scene.GetNode(bId).visible);
+}
+
 TEST(SceneTest, DefaultHiddenTypesContainsNonVisualTypes) {
     const auto& defaults = DefaultHiddenTypes();
     auto has = [&](const std::string& s) {
