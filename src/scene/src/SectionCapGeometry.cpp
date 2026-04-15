@@ -1,6 +1,7 @@
 #include "scene/SectionCapGeometry.h"
 
 #include <functional>
+#include <unordered_map>
 
 #include <renderer/Buffer.h>
 #include <renderer/ClipPlane.h>
@@ -46,6 +47,99 @@ std::size_t ComputeStateHash(const Scene& scene,
 
 }  // namespace
 
+namespace {
+
+void AppendAttachedCaps(const renderer::ClipPlane& plane,
+                       const glm::vec3& normal,
+                       const SceneMesh& mesh,
+                       const glm::mat4& transform,
+                       std::vector<SectionVertex>& out) {
+    const auto segments = SliceSceneMesh(mesh, transform, plane);
+    if (segments.empty()) return;
+    const auto loops = StitchSegments(segments);
+    for (const auto& loop : loops) {
+        const auto tris = TriangulatePolygon(loop, normal);
+        out.reserve(out.size() + tris.size());
+        for (const auto& v : tris) {
+            out.push_back({v, plane.fillColor});
+        }
+    }
+}
+
+// Batched mesh: positions are already world-space, `triangleOwners[t]` names
+// the scene node that each triangle belongs to. Slice+stitch per-owner so
+// each element's cross-section is a self-contained loop — otherwise segments
+// from different elements get tangled in the hash-grid walk and most caps
+// drop. Per-owner slices are also often non-watertight (IFC meshes aren't
+// guaranteed closed), so we fall back to the open polylines from
+// `StitchSegmentsDetailed` when no closed loop forms.
+void AppendBatchedCaps(const renderer::ClipPlane& plane,
+                       const glm::vec3& normal,
+                       const SceneMesh& mesh,
+                       const Scene& scene,
+                       std::vector<SectionVertex>& out) {
+    const auto& owners = mesh.GetTriangleOwners();
+    const auto& indices = mesh.GetIndices();
+    const auto& positions = mesh.GetPositions();
+    const auto& colors = mesh.GetColors();
+    if (owners.empty() || indices.size() < owners.size() * 3) return;
+
+    std::unordered_map<NodeId, std::vector<Segment>> perOwnerSegs;
+    std::unordered_map<NodeId, glm::vec4> perOwnerColor;
+
+    for (std::size_t t = 0; t < owners.size(); ++t) {
+        const NodeId owner = owners[t];
+        if (owner == InvalidNodeId) continue;
+        if (owner >= scene.GetNodeCount()) continue;
+        if (!scene.GetNode(owner).visible) continue;
+
+        const std::uint32_t ia = indices[3 * t + 0];
+        const std::uint32_t ib = indices[3 * t + 1];
+        const std::uint32_t ic = indices[3 * t + 2];
+        if (ia >= positions.size() || ib >= positions.size() ||
+            ic >= positions.size()) {
+            continue;
+        }
+
+        const TriangleCut cut = SliceTriangle(plane, positions[ia], positions[ib],
+                                              positions[ic]);
+        if (cut.pointCount == 2) {
+            perOwnerSegs[owner].push_back({cut.points[0], cut.points[1]});
+        }
+
+        if (ia < colors.size() &&
+            perOwnerColor.find(owner) == perOwnerColor.end()) {
+            perOwnerColor[owner] = colors[ia];
+        }
+    }
+
+    for (auto& [owner, segs] : perOwnerSegs) {
+        if (segs.empty()) continue;
+        const auto colorIt = perOwnerColor.find(owner);
+        const glm::vec4 ownerColor =
+            colorIt != perOwnerColor.end() ? colorIt->second : glm::vec4(1.0F);
+        // Tint = elementColor * planeFillColor (RGB), plane alpha. Preserves
+        // per-element identity while honouring the plane's overall fill.
+        const glm::vec4 tint(ownerColor.r * plane.fillColor.r,
+                             ownerColor.g * plane.fillColor.g,
+                             ownerColor.b * plane.fillColor.b,
+                             plane.fillColor.a);
+
+        const StitchResult stitched = StitchSegmentsDetailed(segs);
+        auto emit = [&](const std::vector<glm::vec3>& loop) {
+            const auto tris = TriangulatePolygon(loop, normal);
+            out.reserve(out.size() + tris.size());
+            for (const auto& v : tris) out.push_back({v, tint});
+        };
+        for (const auto& loop : stitched.closed) emit(loop);
+        if (stitched.closed.empty()) {
+            for (const auto& poly : stitched.open) emit(poly);
+        }
+    }
+}
+
+}  // namespace
+
 std::vector<SectionVertex> BuildSectionCapVertices(
     const Scene& scene,
     std::span<const SceneMesh> meshes,
@@ -58,6 +152,10 @@ std::vector<SectionVertex> BuildSectionCapVertices(
 
         const glm::vec3 normal(plane.equation.x, plane.equation.y, plane.equation.z);
 
+        // A single batched mesh is typically referenced by one node (the batch
+        // root); guard against multi-reference scenes so we don't double-cap.
+        std::vector<bool> batchedSeen(meshes.size(), false);
+
         for (std::size_t i = 0; i < scene.GetNodeCount(); ++i) {
             const auto& node = scene.GetNode(static_cast<NodeId>(i));
             if (!node.visible || !node.mesh.has_value()) continue;
@@ -65,16 +163,12 @@ std::vector<SectionVertex> BuildSectionCapVertices(
             if (handle >= meshes.size()) continue;
             const SceneMesh& mesh = meshes[handle];
 
-            auto segments = SliceSceneMesh(mesh, node.transform, plane);
-            if (segments.empty()) continue;
-
-            auto loops = StitchSegments(segments);
-            for (const auto& loop : loops) {
-                auto tris = TriangulatePolygon(loop, normal);
-                out.reserve(out.size() + tris.size());
-                for (const auto& v : tris) {
-                    out.push_back({v, plane.fillColor});
-                }
+            if (!mesh.GetTriangleOwners().empty()) {
+                if (batchedSeen[handle]) continue;
+                batchedSeen[handle] = true;
+                AppendBatchedCaps(plane, normal, mesh, scene, out);
+            } else {
+                AppendAttachedCaps(plane, normal, mesh, node.transform, out);
             }
         }
     }

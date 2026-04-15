@@ -42,6 +42,17 @@ std::vector<Segment> SliceSceneMesh(const SceneMesh& mesh,
 std::vector<std::vector<glm::vec3>> StitchSegments(
     std::span<const Segment> segments, float epsilon = 1e-4F);
 
+/// Like `StitchSegments`, but also returns polylines that failed to close.
+/// Open polylines are the leftover "walks" where greedy stitching ran into an
+/// endpoint with no unused neighbour — needed as a fallback for real IFC
+/// meshes where per-element slices often don't form watertight loops.
+struct StitchResult {
+    std::vector<std::vector<glm::vec3>> closed;
+    std::vector<std::vector<glm::vec3>> open;
+};
+StitchResult StitchSegmentsDetailed(std::span<const Segment> segments,
+                                    float epsilon = 1e-4F);
+
 /// Ear-clip a planar polygon into triangles. The polygon is projected to the
 /// 2D plane dominant to `planeNormal` (the axis with the largest normal
 /// component is dropped). Winding is detected from the 2D signed area, so

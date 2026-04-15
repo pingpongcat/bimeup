@@ -13,7 +13,9 @@ using bimeup::scene::SceneMesh;
 using bimeup::scene::Segment;
 using bimeup::scene::SliceSceneMesh;
 using bimeup::scene::SliceTriangle;
+using bimeup::scene::StitchResult;
 using bimeup::scene::StitchSegments;
+using bimeup::scene::StitchSegmentsDetailed;
 using bimeup::scene::TriangleCut;
 using bimeup::scene::TriangulatePolygon;
 
@@ -393,4 +395,33 @@ TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {
         EXPECT_NEAR(s.a.y, 0.5F, 1e-4F);
         EXPECT_NEAR(s.b.y, 0.5F, 1e-4F);
     }
+}
+
+TEST(StitchSegmentsDetailed, SeparatesClosedAndOpenPolylines) {
+    // Closed unit square + a disjoint 3-segment open polyline.
+    const std::vector<Segment> segs = {
+        {{0, 0, 0}, {1, 0, 0}},
+        {{1, 0, 0}, {1, 0, 1}},
+        {{1, 0, 1}, {0, 0, 1}},
+        {{0, 0, 1}, {0, 0, 0}},
+        {{5, 0, 0}, {6, 0, 0}},
+        {{6, 0, 0}, {6, 0, 1}},
+        {{6, 0, 1}, {5, 0, 1}},
+    };
+    const StitchResult result = StitchSegmentsDetailed(segs);
+    ASSERT_EQ(result.closed.size(), 1U);
+    EXPECT_EQ(result.closed[0].size(), 4U);
+    ASSERT_EQ(result.open.size(), 1U);
+    // Open polyline collects 4 unique vertices along its path.
+    EXPECT_EQ(result.open[0].size(), 4U);
+}
+
+TEST(StitchSegmentsDetailed, LegacyWrapperReturnsOnlyClosed) {
+    const std::vector<Segment> segs = {
+        {{5, 0, 0}, {6, 0, 0}},
+        {{6, 0, 0}, {6, 0, 1}},
+        {{6, 0, 1}, {5, 0, 1}},
+    };
+    EXPECT_TRUE(StitchSegments(segs).empty());
+    EXPECT_EQ(StitchSegmentsDetailed(segs).open.size(), 1U);
 }

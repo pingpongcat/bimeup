@@ -154,10 +154,10 @@ GridKey Quantise(const glm::vec3& p, float epsilon) {
 
 }  // namespace
 
-std::vector<std::vector<glm::vec3>> StitchSegments(
-    std::span<const Segment> segments, float epsilon) {
-    std::vector<std::vector<glm::vec3>> polygons;
-    if (segments.empty()) return polygons;
+StitchResult StitchSegmentsDetailed(std::span<const Segment> segments,
+                                    float epsilon) {
+    StitchResult result;
+    if (segments.empty()) return result;
 
     // Build adjacency: for each quantised endpoint, list (segmentIndex, isB)
     // — isB means this endpoint is the segment's B end (so its "other" end is A).
@@ -190,7 +190,7 @@ std::vector<std::vector<glm::vec3>> StitchSegments(
         bool closed = false;
         while (true) {
             const GridKey endKey = Quantise(currentEnd, epsilon);
-            if (endKey == startKey) {
+            if (endKey == startKey && poly.size() >= 2) {
                 closed = true;
                 break;
             }
@@ -219,11 +219,18 @@ std::vector<std::vector<glm::vec3>> StitchSegments(
         }
 
         if (closed && poly.size() >= 3) {
-            polygons.push_back(std::move(poly));
+            result.closed.push_back(std::move(poly));
+        } else if (poly.size() >= 3) {
+            result.open.push_back(std::move(poly));
         }
     }
 
-    return polygons;
+    return result;
+}
+
+std::vector<std::vector<glm::vec3>> StitchSegments(
+    std::span<const Segment> segments, float epsilon) {
+    return StitchSegmentsDetailed(segments, epsilon).closed;
 }
 
 namespace {

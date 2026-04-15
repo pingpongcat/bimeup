@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <renderer/ClipPlane.h>
@@ -13,6 +16,7 @@
 using bimeup::renderer::ClipPlaneManager;
 using bimeup::scene::BuildSectionCapVertices;
 using bimeup::scene::MeshHandle;
+using bimeup::scene::NodeId;
 using bimeup::scene::Scene;
 using bimeup::scene::SceneMesh;
 using bimeup::scene::SceneNode;
@@ -55,6 +59,51 @@ Scene MakeSceneWithCubeNode(MeshHandle handle, const glm::mat4& transform = glm:
     node.mesh = handle;
     scene.AddNode(std::move(node));
     return scene;
+}
+
+SceneMesh MakeTwoCubeBatchedMesh(NodeId ownerA, NodeId ownerB,
+                                 const glm::vec4& colorA,
+                                 const glm::vec4& colorB) {
+    // Two unit cubes in world-space: A centered at (-1.5, 0, 0), B at (1.5, 0, 0).
+    // Plane y=0 slices both cross-sections horizontally.
+    SceneMesh mesh;
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec4> colors;
+    std::vector<std::uint32_t> indices;
+    std::vector<NodeId> owners;
+
+    auto addCube = [&](float cx, NodeId owner, const glm::vec4& color) {
+        const std::uint32_t base = static_cast<std::uint32_t>(positions.size());
+        positions.push_back({cx - 0.5F, -0.5F, -0.5F});
+        positions.push_back({cx + 0.5F, -0.5F, -0.5F});
+        positions.push_back({cx + 0.5F,  0.5F, -0.5F});
+        positions.push_back({cx - 0.5F,  0.5F, -0.5F});
+        positions.push_back({cx - 0.5F, -0.5F,  0.5F});
+        positions.push_back({cx + 0.5F, -0.5F,  0.5F});
+        positions.push_back({cx + 0.5F,  0.5F,  0.5F});
+        positions.push_back({cx - 0.5F,  0.5F,  0.5F});
+        for (int i = 0; i < 8; ++i) colors.push_back(color);
+
+        const std::array<std::uint32_t, 36> idx = {
+            0, 2, 1, 0, 3, 2,  // -Z
+            4, 5, 6, 4, 6, 7,  // +Z
+            0, 1, 5, 0, 5, 4,  // -Y
+            3, 7, 6, 3, 6, 2,  // +Y
+            0, 4, 7, 0, 7, 3,  // -X
+            1, 2, 6, 1, 6, 5,  // +X
+        };
+        for (auto i : idx) indices.push_back(base + i);
+        for (int t = 0; t < 12; ++t) owners.push_back(owner);
+    };
+
+    addCube(-1.5F, ownerA, colorA);
+    addCube( 1.5F, ownerB, colorB);
+
+    mesh.SetPositions(std::move(positions));
+    mesh.SetColors(std::move(colors));
+    mesh.SetIndices(std::move(indices));
+    mesh.SetTriangleOwners(std::move(owners));
+    return mesh;
 }
 
 }  // namespace
@@ -168,6 +217,71 @@ TEST(SectionCapGeometryBuild, DisabledPlaneSkipped) {
 
     const auto verts = BuildSectionCapVertices(scene, {&cube, 1}, manager);
     EXPECT_TRUE(verts.empty());
+}
+
+TEST(SectionCapGeometryBuild, BatchedMeshCapsEachOwnerWithItsColor) {
+    Scene scene;
+    const NodeId idA = scene.AddNode(SceneNode{});
+    const NodeId idB = scene.AddNode(SceneNode{});
+    const glm::vec4 colorA(1.0F, 0.0F, 0.0F, 1.0F);
+    const glm::vec4 colorB(0.0F, 1.0F, 0.0F, 1.0F);
+    const SceneMesh mesh = MakeTwoCubeBatchedMesh(idA, idB, colorA, colorB);
+    SceneNode batchRoot;
+    batchRoot.mesh = 0U;
+    scene.AddNode(std::move(batchRoot));
+
+    ClipPlaneManager manager;
+    const auto id = manager.AddPlane(glm::vec4(0.0F, 1.0F, 0.0F, 0.0F));
+    manager.SetSectionFill(id, true);
+    // White fill lets us read element colour straight out of the tint.
+    manager.SetFillColor(id, glm::vec4(1.0F, 1.0F, 1.0F, 1.0F));
+
+    const auto verts = BuildSectionCapVertices(scene, {&mesh, 1}, manager);
+    ASSERT_FALSE(verts.empty());
+    EXPECT_EQ(verts.size() % 3u, 0u);
+
+    bool sawRed = false;
+    bool sawGreen = false;
+    bool capOnLeft = false;
+    bool capOnRight = false;
+    for (const auto& v : verts) {
+        EXPECT_NEAR(v.position.y, 0.0F, 1e-4F);
+        if (v.color.r > 0.5F && v.color.g < 0.1F) sawRed = true;
+        if (v.color.g > 0.5F && v.color.r < 0.1F) sawGreen = true;
+        if (v.position.x < -0.9F) capOnLeft = true;
+        if (v.position.x >  0.9F) capOnRight = true;
+    }
+    EXPECT_TRUE(sawRed);
+    EXPECT_TRUE(sawGreen);
+    EXPECT_TRUE(capOnLeft);
+    EXPECT_TRUE(capOnRight);
+}
+
+TEST(SectionCapGeometryBuild, BatchedMeshSkipsInvisibleOwner) {
+    Scene scene;
+    const NodeId idA = scene.AddNode(SceneNode{});
+    const NodeId idB = scene.AddNode(SceneNode{});
+    scene.GetNode(idB).visible = false;
+    const SceneMesh mesh = MakeTwoCubeBatchedMesh(
+        idA, idB,
+        glm::vec4(1.0F, 0.0F, 0.0F, 1.0F),
+        glm::vec4(0.0F, 1.0F, 0.0F, 1.0F));
+    SceneNode batchRoot;
+    batchRoot.mesh = 0U;
+    scene.AddNode(std::move(batchRoot));
+
+    ClipPlaneManager manager;
+    const auto id = manager.AddPlane(glm::vec4(0.0F, 1.0F, 0.0F, 0.0F));
+    manager.SetSectionFill(id, true);
+    manager.SetFillColor(id, glm::vec4(1.0F, 1.0F, 1.0F, 1.0F));
+
+    const auto verts = BuildSectionCapVertices(scene, {&mesh, 1}, manager);
+    ASSERT_FALSE(verts.empty());
+    for (const auto& v : verts) {
+        // Element B (green) must be absent; only element A (red) contributes.
+        EXPECT_LT(v.color.g, 0.5F);
+        EXPECT_LT(v.position.x, 0.0F);  // all caps on the left cube
+    }
 }
 
 TEST(SectionCapGeometryBuild, MultipleSectionPlanesEachContribute) {
