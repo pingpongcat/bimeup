@@ -142,6 +142,14 @@ bool HierarchyPanel::IsTypeHidden(const ifc::HierarchyNode& node) const {
     return !m_typeVisibilityQuery(node.type);
 }
 
+void HierarchyPanel::SetIsolationQuery(VisibilityQuery q) {
+    m_isolationQuery = std::move(q);
+}
+
+bool HierarchyPanel::IsIsolationActive(const ifc::HierarchyNode& node) const {
+    return m_isolationQuery ? m_isolationQuery(node) : false;
+}
+
 void HierarchyPanel::TriggerToggleVisibility(const ifc::HierarchyNode& node) {
     if (m_onToggleVisibility) {
         m_onToggleVisibility(node);
@@ -247,19 +255,27 @@ void HierarchyPanel::DrawRowIcons(const ifc::HierarchyNode& node) {
     ImGui::SameLine(rightEdge - kIconCol);
 
     const bool visible = m_visibilityQuery ? m_visibilityQuery(node) : true;
-    const char* eyeLabel = visible ? "o" : "-";
-    if (ImGui::SmallButton(eyeLabel)) {
+    const bool isolated = IsIsolationActive(node);
+    const ImVec4 activeCol = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+
+    // Eye: highlighted bg when currently hidden (shows toggled-off state).
+    if (!visible) ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
+    if (ImGui::SmallButton(visible ? "o" : "-")) {
         TriggerToggleVisibility(node);
     }
+    if (!visible) ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(visible ? "Hide" : "Show");
     }
+
     ImGui::SameLine();
+    if (isolated) ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
     if (ImGui::SmallButton("I")) {
         TriggerIsolate(node);
     }
+    if (isolated) ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Isolate");
+        ImGui::SetTooltip(isolated ? "Un-isolate (show all)" : "Isolate");
     }
     ImGui::PopID();
 }

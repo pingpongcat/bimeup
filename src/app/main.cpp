@@ -762,11 +762,29 @@ int main(int argc, char* argv[]) {
                     }
                 }
             });
+        // Active isolation root expressId (if any). Clicking Isolate again on
+        // the same row turns isolation back off (ShowAll).
+        static std::optional<std::uint32_t> s_isolationRoot;
+        s_isolationRoot.reset();
+
         hierarchyPanel->SetOnIsolate(
-            [&scene, collectExpressIds](const bimeup::ifc::HierarchyNode& n) {
-                auto ids = collectExpressIds(n);
-                std::unordered_set<std::uint32_t> keep(ids.begin(), ids.end());
-                scene.IsolateByExpressId(keep);
+            [&scene, collectExpressIds, typeVisibilityPanel](
+                const bimeup::ifc::HierarchyNode& n) {
+                if (s_isolationRoot.has_value() && *s_isolationRoot == n.expressId) {
+                    scene.ShowAll();
+                    s_isolationRoot.reset();
+                    // Re-apply Types-panel hidden list so IfcSpace etc. stay hidden.
+                    typeVisibilityPanel->ReapplyToScene();
+                } else {
+                    auto ids = collectExpressIds(n);
+                    std::unordered_set<std::uint32_t> keep(ids.begin(), ids.end());
+                    scene.IsolateByExpressId(keep);
+                    s_isolationRoot = n.expressId;
+                }
+            });
+        hierarchyPanel->SetIsolationQuery(
+            [](const bimeup::ifc::HierarchyNode& n) {
+                return s_isolationRoot.has_value() && *s_isolationRoot == n.expressId;
             });
         hierarchyPanel->SetTypeVisibilityQuery(
             [typeVisibilityPanel](const std::string& ifcType) {

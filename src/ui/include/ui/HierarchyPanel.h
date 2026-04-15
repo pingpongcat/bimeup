@@ -51,6 +51,12 @@ public:
     void SetTypeVisibilityQuery(TypeVisibilityQuery q);
     [[nodiscard]] bool IsTypeHidden(const ifc::HierarchyNode& node) const;
 
+    /// Optional query reporting whether this node is the currently-active
+    /// isolation root. Used only for visual feedback on the Isolate button —
+    /// the panel has no isolation state of its own; the host owns it.
+    void SetIsolationQuery(VisibilityQuery q);
+    [[nodiscard]] bool IsIsolationActive(const ifc::HierarchyNode& node) const;
+
     // Test-friendly triggers (same code path the UI icons use).
     void TriggerToggleVisibility(const ifc::HierarchyNode& node);
     void TriggerIsolate(const ifc::HierarchyNode& node);
@@ -66,6 +72,7 @@ private:
     NodeCallback m_onToggleVisibility;
     NodeCallback m_onIsolate;
     VisibilityQuery m_visibilityQuery;
+    VisibilityQuery m_isolationQuery;
     TypeVisibilityQuery m_typeVisibilityQuery;
 
     void DrawNode(const ifc::HierarchyNode& node);

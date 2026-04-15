@@ -36,6 +36,10 @@ public:
     [[nodiscard]] bool IsTypeVisible(const std::string& ifcType) const;
     void SetTypeVisible(const std::string& ifcType, bool visible);
 
+    /// Re-push the cached type visibility flags down to the scene. Call after
+    /// scene-side mutations like `Scene::ShowAll()` so disabled types stay hidden.
+    void ReapplyToScene();
+
 private:
     scene::Scene* m_scene = nullptr;
     std::vector<std::string> m_types;

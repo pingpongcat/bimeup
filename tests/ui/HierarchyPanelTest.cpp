@@ -198,6 +198,22 @@ TEST(HierarchyPanelTest, TriggerIsolateFiresCallbackWithNode) {
     EXPECT_EQ(captured, 42u);
 }
 
+TEST(HierarchyPanelTest, IsolationQueryReportsActiveRoot) {
+    HierarchyNode root = MakeNode("IfcProject", "P"); root.expressId = 1;
+    HierarchyNode wall = MakeNode("IfcWall", "W"); wall.expressId = 42;
+    root.children.push_back(wall);
+
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    EXPECT_FALSE(panel.IsIsolationActive(root.children[0]));
+
+    std::uint32_t active = 42;
+    panel.SetIsolationQuery(
+        [&](const HierarchyNode& n) { return n.expressId == active; });
+    EXPECT_TRUE(panel.IsIsolationActive(root.children[0]));
+    EXPECT_FALSE(panel.IsIsolationActive(root));
+}
+
 TEST(HierarchyPanelTest, IsTypeHiddenHonoursQuery) {
     HierarchyNode root = MakeNode("IfcProject", "P"); root.expressId = 1;
     HierarchyNode space = MakeNode("IfcSpace", "S"); space.expressId = 10;

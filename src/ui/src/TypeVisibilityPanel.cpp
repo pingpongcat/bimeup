@@ -54,6 +54,13 @@ void TypeVisibilityPanel::SetTypeVisible(const std::string& ifcType, bool visibl
     }
 }
 
+void TypeVisibilityPanel::ReapplyToScene() {
+    if (m_scene == nullptr) return;
+    for (const auto& [ifcType, visible] : m_visible) {
+        m_scene->SetVisibilityByType(ifcType, visible);
+    }
+}
+
 void TypeVisibilityPanel::OnDraw() {
     if (!ImGui::Begin(GetName())) {
         ImGui::End();
