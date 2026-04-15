@@ -124,6 +124,7 @@
   - [x] 7.8c Renderer transparent pass — `PipelineConfig::alphaBlendEnable` (straight alpha-over: `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`) + new PipelineTest for blend+depth-write-off; `main.cpp` builds `transparentPipeline` next to shaded/wire (rebuilt on MSAA change), splits draw calls by `SceneMesh::IsTransparent()`, draws opaque → section caps → transparent → UI. Wireframe mode still goes through the wire pipeline for everything.
   - [ ] 7.8d Per-element / per-type alpha override slider in PropertyPanel + TypeVisibilityPanel (forces alpha on top of IFC-native alpha).
     - [x] 7.8d.1 Scene alpha override API — `SetElementAlphaOverride(expressId,alpha)` / `SetTypeAlphaOverride(ifcType,alpha)` / `GetEffectiveAlpha(NodeId)` (element override > type override > nullopt), clamped to [0,1]. 7 new unit tests.
+    - [x] 7.8d.2 PropertyPanel alpha slider — `SetOnAlphaChange` / `SetAlphaQuery` callbacks + enable checkbox and 0..1 slider. `TriggerAlphaChange` / `TriggerClearAlpha` mirror HierarchyPanel test hooks; query seeds current value on `SetElement`. 4 new unit tests.
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation
 
