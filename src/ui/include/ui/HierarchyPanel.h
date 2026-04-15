@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <unordered_set>
 
 namespace bimeup::core {
@@ -37,6 +38,16 @@ public:
     [[nodiscard]] bool IsSelected(std::uint32_t expressId) const;
     [[nodiscard]] bool IsAncestorOfSelection(std::uint32_t expressId) const;
 
+    using NodeCallback = std::function<void(const ifc::HierarchyNode& node)>;
+    using VisibilityQuery = std::function<bool(const ifc::HierarchyNode& node)>;
+    void SetOnToggleVisibility(NodeCallback cb);
+    void SetOnIsolate(NodeCallback cb);
+    void SetVisibilityQuery(VisibilityQuery q);
+
+    // Test-friendly triggers (same code path the UI icons use).
+    void TriggerToggleVisibility(const ifc::HierarchyNode& node);
+    void TriggerIsolate(const ifc::HierarchyNode& node);
+
 private:
     const ifc::HierarchyNode* m_root = nullptr;
     core::EventBus* m_bus = nullptr;
@@ -45,7 +56,12 @@ private:
     std::unordered_set<std::uint32_t> m_selectedIds;
     std::unordered_set<std::uint32_t> m_ancestorIds;
 
+    NodeCallback m_onToggleVisibility;
+    NodeCallback m_onIsolate;
+    VisibilityQuery m_visibilityQuery;
+
     void DrawNode(const ifc::HierarchyNode& node);
+    void DrawRowIcons(const ifc::HierarchyNode& node);
     void UnsubscribeFromBus();
     void HandleSelected(std::uint32_t expressId, bool additive);
     void HandleCleared();

@@ -56,10 +56,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -714,6 +716,60 @@ int main(int argc, char* argv[]) {
     toolbar->SetRenderMode(renderMode);
 
     hierarchyPanel->SetRoot(&hierarchy->GetRoot());
+
+    {
+        auto collectExpressIds = [](const bimeup::ifc::HierarchyNode& root) {
+            std::vector<std::uint32_t> ids;
+            std::function<void(const bimeup::ifc::HierarchyNode&)> walk =
+                [&](const bimeup::ifc::HierarchyNode& n) {
+                    ids.push_back(n.expressId);
+                    for (const auto& c : n.children) walk(c);
+                };
+            walk(root);
+            return ids;
+        };
+        auto& scene = sceneResult->scene;
+        hierarchyPanel->SetVisibilityQuery(
+            [&scene, collectExpressIds](const bimeup::ifc::HierarchyNode& n) {
+                for (auto id : collectExpressIds(n)) {
+                    for (auto nodeId : scene.FindByExpressId(id)) {
+                        const auto& sn = scene.GetNode(nodeId);
+                        if (sn.mesh.has_value() && sn.visible) return true;
+                    }
+                }
+                return false;
+            });
+        hierarchyPanel->SetOnToggleVisibility(
+            [&scene, collectExpressIds](const bimeup::ifc::HierarchyNode& n) {
+                auto ids = collectExpressIds(n);
+                bool currentlyVisible = false;
+                for (auto id : ids) {
+                    for (auto nodeId : scene.FindByExpressId(id)) {
+                        const auto& sn = scene.GetNode(nodeId);
+                        if (sn.mesh.has_value() && sn.visible) {
+                            currentlyVisible = true;
+                            break;
+                        }
+                    }
+                    if (currentlyVisible) break;
+                }
+                const bool next = !currentlyVisible;
+                for (auto id : ids) {
+                    for (auto nodeId : scene.FindByExpressId(id)) {
+                        if (scene.GetNode(nodeId).mesh.has_value()) {
+                            scene.SetVisibility(nodeId, next);
+                        }
+                    }
+                }
+            });
+        hierarchyPanel->SetOnIsolate(
+            [&scene, collectExpressIds](const bimeup::ifc::HierarchyNode& n) {
+                auto ids = collectExpressIds(n);
+                std::unordered_set<std::uint32_t> keep(ids.begin(), ids.end());
+                scene.IsolateByExpressId(keep);
+            });
+    }
+
     auto selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
         eventBus, *propertyPanel,
         [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });

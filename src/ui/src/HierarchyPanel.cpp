@@ -121,6 +121,30 @@ bool HierarchyPanel::IsAncestorOfSelection(std::uint32_t expressId) const {
     return m_ancestorIds.count(expressId) > 0;
 }
 
+void HierarchyPanel::SetOnToggleVisibility(NodeCallback cb) {
+    m_onToggleVisibility = std::move(cb);
+}
+
+void HierarchyPanel::SetOnIsolate(NodeCallback cb) {
+    m_onIsolate = std::move(cb);
+}
+
+void HierarchyPanel::SetVisibilityQuery(VisibilityQuery q) {
+    m_visibilityQuery = std::move(q);
+}
+
+void HierarchyPanel::TriggerToggleVisibility(const ifc::HierarchyNode& node) {
+    if (m_onToggleVisibility) {
+        m_onToggleVisibility(node);
+    }
+}
+
+void HierarchyPanel::TriggerIsolate(const ifc::HierarchyNode& node) {
+    if (m_onIsolate) {
+        m_onIsolate(node);
+    }
+}
+
 void HierarchyPanel::Select(std::uint32_t expressId, bool additive) {
     if (m_bus != nullptr) {
         m_bus->Publish(core::ElementSelected{expressId, additive});
@@ -169,7 +193,8 @@ void HierarchyPanel::DrawNode(const ifc::HierarchyNode& node) {
     const std::string label = FormatLabel(node);
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                               ImGuiTreeNodeFlags_SpanAvailWidth;
+                               ImGuiTreeNodeFlags_SpanAvailWidth |
+                               ImGuiTreeNodeFlags_AllowOverlap;
     if (IsSelected(node.expressId)) {
         flags |= ImGuiTreeNodeFlags_Selected;
     }
@@ -182,18 +207,44 @@ void HierarchyPanel::DrawNode(const ifc::HierarchyNode& node) {
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
             Select(node.expressId, ImGui::GetIO().KeyCtrl);
         }
+        DrawRowIcons(node);
         return;
     }
     const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         Select(node.expressId, ImGui::GetIO().KeyCtrl);
     }
+    DrawRowIcons(node);
     if (open) {
         for (const auto& child : node.children) {
             DrawNode(child);
         }
         ImGui::TreePop();
     }
+}
+
+void HierarchyPanel::DrawRowIcons(const ifc::HierarchyNode& node) {
+    ImGui::PushID(static_cast<int>(node.expressId));
+    constexpr float kIconCol = 44.0F;  // reserved width for "eye + I"
+    const float rightEdge = ImGui::GetWindowContentRegionMax().x;
+    ImGui::SameLine(rightEdge - kIconCol);
+
+    const bool visible = m_visibilityQuery ? m_visibilityQuery(node) : true;
+    const char* eyeLabel = visible ? "o" : "-";
+    if (ImGui::SmallButton(eyeLabel)) {
+        TriggerToggleVisibility(node);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(visible ? "Hide" : "Show");
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("I")) {
+        TriggerIsolate(node);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Isolate");
+    }
+    ImGui::PopID();
 }
 
 }  // namespace bimeup::ui

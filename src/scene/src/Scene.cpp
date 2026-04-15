@@ -140,4 +140,14 @@ std::vector<NodeId> Scene::FindByType(const std::string& ifcType) const {
     return result;
 }
 
+std::vector<NodeId> Scene::FindByExpressId(std::uint32_t expressId) const {
+    std::vector<NodeId> result;
+    for (const auto& node : nodes_) {
+        if (node.expressId == expressId) {
+            result.push_back(node.id);
+        }
+    }
+    return result;
+}
+
 } // namespace bimeup::scene

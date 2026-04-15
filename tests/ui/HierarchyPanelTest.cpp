@@ -163,6 +163,52 @@ TEST(HierarchyPanelTest, SelectionClearedResetsState) {
     EXPECT_FALSE(panel.IsAncestorOfSelection(1));
 }
 
+TEST(HierarchyPanelTest, TriggerToggleVisibilityFiresCallbackWithNode) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode wall = MakeNode("IfcWall", "W");
+    wall.expressId = 42;
+    root.children.push_back(wall);
+
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+
+    std::uint32_t captured = 0;
+    panel.SetOnToggleVisibility(
+        [&](const HierarchyNode& n) { captured = n.expressId; });
+
+    panel.TriggerToggleVisibility(root.children[0]);
+    EXPECT_EQ(captured, 42u);
+}
+
+TEST(HierarchyPanelTest, TriggerIsolateFiresCallbackWithNode) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode wall = MakeNode("IfcWall", "W");
+    wall.expressId = 42;
+    root.children.push_back(wall);
+
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+
+    std::uint32_t captured = 0;
+    panel.SetOnIsolate([&](const HierarchyNode& n) { captured = n.expressId; });
+
+    panel.TriggerIsolate(root.children[0]);
+    EXPECT_EQ(captured, 42u);
+}
+
+TEST(HierarchyPanelTest, TriggersAreNoOpWithoutCallback) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    // Must not crash when no callback wired.
+    panel.TriggerToggleVisibility(root);
+    panel.TriggerIsolate(root);
+    SUCCEED();
+}
+
 TEST(HierarchyPanelTest, SetRootNullClearsState) {
     HierarchyNode root = MakeNode("IfcProject", "Project");
     HierarchyPanel panel;

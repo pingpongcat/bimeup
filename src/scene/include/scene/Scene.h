@@ -34,6 +34,8 @@ public:
     void SetSelected(NodeId id, bool selected);
     std::vector<NodeId> GetSelected() const;
     std::vector<NodeId> FindByType(const std::string& ifcType) const;
+    /// Scene nodes whose expressId equals @p expressId (typically 0 or 1 match).
+    std::vector<NodeId> FindByExpressId(std::uint32_t expressId) const;
     /// Sorted, de-duplicated list of non-empty ifcType values present in the scene.
     std::vector<std::string> GetUniqueTypes() const;
 
