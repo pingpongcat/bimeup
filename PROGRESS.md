@@ -99,7 +99,7 @@
 - [ ] 7.5 Section view (BRep approach — see `docs/section_cap_next_session.md`)
   - [x] 7.5a `ClipPlane` section fields (`sectionFill`, `fillColor`) + manager setters
   - [x] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
-  - [ ] 7.5c `scene::SliceTriangle` — plane/triangle intersection math
+  - [x] 7.5c `scene::SliceTriangle` — plane/triangle intersection math (`scene/Slicing.{h,cpp}`; 8 unit tests covering all-front/back, coplanar, 2-1 splits, vertex-on-plane straddle/no-straddle, edge-on-plane)
   - [ ] 7.5d `scene::SliceSceneMesh` — walk mesh triangles, transform, collect segments
   - [ ] 7.5e `scene::StitchSegmentsToPolygons` — endpoint hash-grid stitch
   - [ ] 7.5f `scene::TriangulatePlanarPolygon` — ear-clipping (consider `external/earcut.hpp`)
