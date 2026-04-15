@@ -169,6 +169,23 @@ TEST_F(PipelineTest, NullRenderPassThrows) {
         std::runtime_error);
 }
 
+TEST_F(PipelineTest, CreateWithAlphaBlendEnabled) {
+    // Transparent pass: alpha blending on, depth test on, depth write off.
+    // Validation layers would flag any misconfigured blend state.
+    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
+    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
+
+    PipelineConfig config{};
+    config.renderPass = m_renderPass;
+    config.alphaBlendEnable = true;
+    config.depthTestEnable = true;
+    config.depthWriteEnable = false;
+
+    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
+
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+}
+
 TEST_F(PipelineTest, DestructorCleansUp) {
     Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
     Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());

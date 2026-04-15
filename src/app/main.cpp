@@ -304,22 +304,36 @@ int main(int argc, char* argv[]) {
     pipelineConfig.cullMode = VK_CULL_MODE_NONE;
 
     auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
-                              std::unique_ptr<bimeup::renderer::Pipeline>& wire) {
+                              std::unique_ptr<bimeup::renderer::Pipeline>& wire,
+                              std::unique_ptr<bimeup::renderer::Pipeline>& transparent) {
         pipelineConfig.renderPass = renderLoop.GetRenderPass();
         pipelineConfig.rasterizationSamples = renderLoop.GetSampleCount();
         pipelineConfig.polygonMode =
             bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
+        pipelineConfig.alphaBlendEnable = false;
+        pipelineConfig.depthWriteEnable = true;
         shaded = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
                                                               pipelineConfig);
         pipelineConfig.polygonMode =
             bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Wireframe);
         wire = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
                                                             pipelineConfig);
+        // Transparent pass: alpha blend on, depth test on, depth write off.
+        // Drawn after opaque so blended fragments composite against the opaque layer.
+        pipelineConfig.polygonMode =
+            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
+        pipelineConfig.alphaBlendEnable = true;
+        pipelineConfig.depthWriteEnable = false;
+        transparent = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
+                                                                   pipelineConfig);
+        pipelineConfig.alphaBlendEnable = false;
+        pipelineConfig.depthWriteEnable = true;
     };
 
     std::unique_ptr<bimeup::renderer::Pipeline> shadedPipeline;
     std::unique_ptr<bimeup::renderer::Pipeline> wireframePipeline;
-    buildPipelines(shadedPipeline, wireframePipeline);
+    std::unique_ptr<bimeup::renderer::Pipeline> transparentPipeline;
+    buildPipelines(shadedPipeline, wireframePipeline, transparentPipeline);
 
     // Section-fill pipeline draws pre-triangulated cap geometry over the scene.
     // Reuses the main descriptor set layout — only binding 0 (camera UBO) is
@@ -961,7 +975,7 @@ int main(int argc, char* argv[]) {
                 uiManager.ShutdownVulkanBackend();
                 renderLoop.SetSampleCount(desired);
                 currentSamples = desired;
-                buildPipelines(shadedPipeline, wireframePipeline);
+                buildPipelines(shadedPipeline, wireframePipeline, transparentPipeline);
                 buildSectionFillPipeline();
                 initImGui();
                 // Reflect the clamped value back to the panel so the UI doesn't
@@ -1085,16 +1099,21 @@ int main(int argc, char* argv[]) {
         scissor.extent = extent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        auto& activePipeline = (renderMode == bimeup::renderer::RenderMode::Shaded)
-                                    ? *shadedPipeline
-                                    : *wireframePipeline;
-        activePipeline.Bind(cmd);
-        descriptorSet.Bind(cmd, activePipeline.GetLayout());
+        const bool shaded = renderMode == bimeup::renderer::RenderMode::Shaded;
+        auto& opaquePipeline = shaded ? *shadedPipeline : *wireframePipeline;
+        opaquePipeline.Bind(cmd);
+        descriptorSet.Bind(cmd, opaquePipeline.GetLayout());
 
         meshBuffer.Bind(cmd);
 
+        // Pass 1: opaque. In wireframe mode, everything goes through the wire
+        // pipeline (line rasterization has no meaningful alpha bucket).
         for (const auto& [handle, transform] : drawCalls) {
-            vkCmdPushConstants(cmd, activePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+            if (shaded && handle < sceneResult->meshes.size() &&
+                sceneResult->meshes[handle].IsTransparent()) {
+                continue;
+            }
+            vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(glm::mat4), &transform);
             meshBuffer.Draw(cmd, handle);
         }
@@ -1121,6 +1140,24 @@ int main(int argc, char* argv[]) {
                     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
                     vkCmdDraw(cmd, sectionCapGeometry.GetVertexCount(), 1, 0, 0);
                 }
+            }
+        }
+
+        // Pass 2: transparent (shaded mode only). Depth-test on, write off — so
+        // blended fragments respect opaque depth but don't occlude each other.
+        // No back-to-front sort yet; acceptable for glass panes that rarely overlap.
+        if (shaded) {
+            transparentPipeline->Bind(cmd);
+            descriptorSet.Bind(cmd, transparentPipeline->GetLayout());
+            meshBuffer.Bind(cmd);
+            for (const auto& [handle, transform] : drawCalls) {
+                if (handle >= sceneResult->meshes.size() ||
+                    !sceneResult->meshes[handle].IsTransparent()) {
+                    continue;
+                }
+                vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
+                meshBuffer.Draw(cmd, handle);
             }
         }
 
