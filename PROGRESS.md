@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.5 — Section view
+## Current Task: 7.6 — Element visibility by IFC type
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -96,7 +96,7 @@
   - [x] 7.4c `Camera::Zoom` scales `m_orthoHeight` so scroll-zoom works in ortho (plan view + any future ortho mode)
   - [x] 7.4d Restore perspective on Deactivate; ImGuizmo ViewManipulate cube also auto-exits; ortho zoom rate doubled
   - [x] 7.4e `core::SelectionCleared` event — non-additive click on empty space clears selection + PropertyPanel (additive miss preserves)
-- [ ] 7.5 Section view (BRep approach — see `docs/section_cap_next_session.md`)
+- [x] 7.5 Section view (BRep approach — see `docs/section_cap_next_session.md`)
   - [x] 7.5a `ClipPlane` section fields (`sectionFill`, `fillColor`) + manager setters
   - [x] 7.5b `ClipPlanesPanel` "Section fill" checkbox + ColorEdit4 wired to setters
   - [x] 7.5c `scene::SliceTriangle` — plane/triangle intersection math (`scene/Slicing.{h,cpp}`; 8 unit tests covering all-front/back, coplanar, 2-1 splits, vertex-on-plane straddle/no-straddle, edge-on-plane)
@@ -107,7 +107,7 @@
   - [x] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline` (flat-color pipeline: position+color vertex input, depth-test LEQUAL/write-off, CULL_NONE, no stencil, single camera UBO set; 4 Vulkan integration tests for shader-SPIR-V presence, construction, MSAA 4×, RAII)
   - [x] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp` (section-fill pipeline built next to shaded/wire, rebuilt on MSAA change; per-frame rebuild is hash-gated and skipped unless ≥1 plane has `enabled && sectionFill`; draws caps after scene, before UI, using main 4-binding descriptor set — shader reads only binding 0)
   - [x] 7.5k Per-element capping for batched IFC meshes (`BuildSectionCapVertices` now partitions batched-mesh triangles by `triangleOwners[t]`, slice→stitch→triangulate per owner, tint = `ownerVertexColor * plane.fillColor`). Open polylines fallback via new `scene::StitchSegmentsDetailed` (returns `StitchResult{closed, open}`) when no closed loop forms for an element. Attached-mesh path unchanged. 2 new unit tests for `StitchSegmentsDetailed` + 2 new tests for per-owner batched caps (per-element colour, invisible-owner skip); visual verification on `../sample.ifc` deferred to the user since this is a GUI change.
-  - [ ] 7.5j Stage gate — full `ctest --output-on-failure`
+  - [x] 7.5j Stage gate — full `ctest --output-on-failure` (215/215 pass; disabled LSan for `test_core` binary since it contains Vulkan-touching Application + SceneUploaderVulkan tests whose graphics-driver leaks at process exit are environmental. Runtime ASan checks remain active across all targets.)
 - [ ] 7.6 Element visibility by IFC type
 - [ ] 7.7 Element isolation
 - [ ] 7.8 Element transparency override

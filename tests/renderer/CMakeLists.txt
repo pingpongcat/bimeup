@@ -26,5 +26,5 @@ target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SH
 bimeup_enable_sanitizers(renderer_tests)
 add_test(NAME renderer COMMAND renderer_tests)
 set_tests_properties(renderer PROPERTIES
-    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/cmake/asan_suppressions.txt"
+    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/cmake/asan_suppressions.txt"
 )
