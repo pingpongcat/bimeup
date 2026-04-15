@@ -454,6 +454,44 @@ int main(int argc, char* argv[]) {
         meshBuffer.SetVertexColorOverride(verts, kHighlightColor);
     });
 
+    // 7.8d.4 — Per-vertex alpha override pipeline. Walks all mesh-bearing
+    // nodes, reads each one's effective alpha (element override > type
+    // override > none) from the scene, and uploads the union as a per-vertex
+    // alpha override on the MeshBuffer. `handlesWithAlphaOverride` lets the
+    // draw loop route forced-transparent meshes into the transparent pass.
+    // Rebuild is hash-gated so we only re-upload when something actually changed.
+    std::unordered_set<bimeup::renderer::MeshHandle> handlesWithAlphaOverride;
+    std::size_t alphaOverrideHash = 0;
+    auto rebuildAlphaOverrides = [&] {
+        std::size_t hash = 0;
+        std::vector<std::tuple<bimeup::scene::NodeId, float>> perNode;
+        for (size_t i = 0; i < sceneResult->scene.GetNodeCount(); ++i) {
+            auto nodeId = static_cast<bimeup::scene::NodeId>(i);
+            const auto& node = sceneResult->scene.GetNode(nodeId);
+            if (!node.mesh.has_value()) continue;
+            auto eff = sceneResult->scene.GetEffectiveAlpha(nodeId);
+            if (!eff.has_value()) continue;
+            perNode.emplace_back(nodeId, *eff);
+            // FNV-1a-ish hash mixing nodeId and quantized alpha (0..1000).
+            auto q = static_cast<uint32_t>(*eff * 1000.0F);
+            hash ^= std::hash<uint32_t>{}(nodeId) + 0x9E3779B9 + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<uint32_t>{}(q) + 0x9E3779B9 + (hash << 6) + (hash >> 2);
+        }
+        if (hash == alphaOverrideHash) return;
+        alphaOverrideHash = hash;
+
+        std::vector<std::pair<uint32_t, float>> pairs;
+        handlesWithAlphaOverride.clear();
+        for (const auto& [nodeId, alpha] : perNode) {
+            auto vit = nodeVertexIndices.find(nodeId);
+            if (vit == nodeVertexIndices.end()) continue;
+            for (auto v : vit->second) pairs.emplace_back(v, alpha);
+            const auto& node = sceneResult->scene.GetNode(nodeId);
+            if (node.mesh.has_value()) handlesWithAlphaOverride.insert(*node.mesh);
+        }
+        meshBuffer.SetVertexAlphaOverride(pairs);
+    };
+
     auto hierarchy = std::make_unique<bimeup::ifc::IfcHierarchy>(ifcModel);
 
     // Input: orbit camera with mouse
@@ -810,6 +848,19 @@ int main(int argc, char* argv[]) {
         eventBus, *propertyPanel,
         [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
 
+    propertyPanel->SetAlphaQuery([&](uint32_t expressId) -> std::optional<float> {
+        return sceneResult->scene.GetElementAlphaOverride(expressId);
+    });
+    propertyPanel->SetOnAlphaChange(
+        [&](uint32_t expressId, std::optional<float> alpha) {
+            if (alpha.has_value()) {
+                sceneResult->scene.SetElementAlphaOverride(expressId, *alpha);
+            } else {
+                sceneResult->scene.ClearElementAlphaOverride(expressId);
+            }
+            rebuildAlphaOverrides();
+        });
+
     uiManager.AddPanel(std::move(toolbarOwned));
     uiManager.AddPanel(std::move(hierarchyOwned));
     uiManager.AddPanel(std::move(propertyOwned));
@@ -1077,6 +1128,10 @@ int main(int argc, char* argv[]) {
         *clipMapped = clipPlanesUbo;
         clipPlanesBuffer.Unmap();
 
+        // 7.8d.4 — hash-gated rebuild picks up TypeVisibilityPanel slider edits
+        // (the panel writes straight to scene; no callback for mutation events).
+        rebuildAlphaOverrides();
+
         if (!renderLoop.BeginFrame()) {
             recreateSwapchain();
             continue;
@@ -1108,9 +1163,13 @@ int main(int argc, char* argv[]) {
 
         // Pass 1: opaque. In wireframe mode, everything goes through the wire
         // pipeline (line rasterization has no meaningful alpha bucket).
+        auto needsTransparentPass = [&](bimeup::renderer::MeshHandle h) {
+            if (h < sceneResult->meshes.size() &&
+                sceneResult->meshes[h].IsTransparent()) return true;
+            return handlesWithAlphaOverride.count(h) > 0;
+        };
         for (const auto& [handle, transform] : drawCalls) {
-            if (shaded && handle < sceneResult->meshes.size() &&
-                sceneResult->meshes[handle].IsTransparent()) {
+            if (shaded && needsTransparentPass(handle)) {
                 continue;
             }
             vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
@@ -1151,8 +1210,7 @@ int main(int argc, char* argv[]) {
             descriptorSet.Bind(cmd, transparentPipeline->GetLayout());
             meshBuffer.Bind(cmd);
             for (const auto& [handle, transform] : drawCalls) {
-                if (handle >= sceneResult->meshes.size() ||
-                    !sceneResult->meshes[handle].IsTransparent()) {
+                if (!needsTransparentPass(handle)) {
                     continue;
                 }
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),

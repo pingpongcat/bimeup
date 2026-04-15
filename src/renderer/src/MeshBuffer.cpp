@@ -3,6 +3,8 @@
 #include <renderer/Buffer.h>
 #include <renderer/Device.h>
 
+#include <algorithm>
+
 namespace bimeup::renderer {
 
 MeshBuffer::MeshBuffer(const Device& device) : m_device(device) {}
@@ -33,22 +35,46 @@ MeshHandle MeshBuffer::Upload(const MeshData& data) {
 }
 
 void MeshBuffer::SetVertexColorOverride(const std::vector<uint32_t>& indices, glm::vec4 color) {
-    if (m_vertices.size() != m_baselineColors.size()) {
-        return;
-    }
-    for (size_t i = 0; i < m_vertices.size(); ++i) {
-        m_vertices[i].color = m_baselineColors[i];
-    }
-    for (uint32_t idx : indices) {
-        if (idx < m_vertices.size()) {
-            m_vertices[idx].color = color;
-        }
-    }
-    // The old vertex buffer may still be in-flight on the GPU. Wait for idle
-    // before RebuildGpuBuffers swaps the unique_ptr and frees it.
+    m_colorOverrideIndices = indices;
+    m_colorOverrideColor = color;
+    RecomputeVertexColors();
     vkDeviceWaitIdle(m_device.GetDevice());
     m_dirty = true;
     RebuildGpuBuffers();
+}
+
+void MeshBuffer::SetVertexAlphaOverride(const std::vector<std::pair<uint32_t, float>>& alphas) {
+    m_alphaOverrides.clear();
+    m_alphaOverrides.reserve(alphas.size());
+    for (const auto& [idx, a] : alphas) {
+        m_alphaOverrides[idx] = std::clamp(a, 0.0F, 1.0F);
+    }
+    RecomputeVertexColors();
+    vkDeviceWaitIdle(m_device.GetDevice());
+    m_dirty = true;
+    RebuildGpuBuffers();
+}
+
+void MeshBuffer::RecomputeVertexColors() {
+    if (m_vertices.size() != m_baselineColors.size()) {
+        return;
+    }
+    // Layer 1: baseline.
+    for (size_t i = 0; i < m_vertices.size(); ++i) {
+        m_vertices[i].color = m_baselineColors[i];
+    }
+    // Layer 2: alpha override (preserves RGB, replaces alpha).
+    for (const auto& [idx, a] : m_alphaOverrides) {
+        if (idx < m_vertices.size()) {
+            m_vertices[idx].color.a = a;
+        }
+    }
+    // Layer 3: color override (full RGBA replacement, last-wins).
+    for (uint32_t idx : m_colorOverrideIndices) {
+        if (idx < m_vertices.size()) {
+            m_vertices[idx].color = m_colorOverrideColor;
+        }
+    }
 }
 
 void MeshBuffer::Remove(MeshHandle handle) {

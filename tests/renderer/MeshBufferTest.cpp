@@ -147,3 +147,68 @@ TEST_F(MeshBufferTest, MeshCountTracksUploadAndRemove) {
     m_meshBuffer->Remove(h1);
     EXPECT_EQ(m_meshBuffer->MeshCount(), 1);
 }
+
+// ----- 7.8d.4 Per-vertex alpha override -----------------------------------
+
+TEST_F(MeshBufferTest, SetVertexAlphaOverridePreservesBaselineRGB) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    m_meshBuffer->Upload(MakeTriangle());
+
+    m_meshBuffer->SetVertexAlphaOverride({{0, 0.25F}, {1, 0.5F}});
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    // RGB unchanged from baseline.
+    EXPECT_EQ(glm::vec3(verts[0].color), glm::vec3(1.0F, 0.0F, 0.0F));
+    EXPECT_EQ(glm::vec3(verts[1].color), glm::vec3(0.0F, 1.0F, 0.0F));
+    EXPECT_EQ(glm::vec3(verts[2].color), glm::vec3(0.0F, 0.0F, 1.0F));
+    // Alpha replaced for listed indices; baseline 1.0 for the rest.
+    EXPECT_FLOAT_EQ(verts[0].color.a, 0.25F);
+    EXPECT_FLOAT_EQ(verts[1].color.a, 0.5F);
+    EXPECT_FLOAT_EQ(verts[2].color.a, 1.0F);
+}
+
+TEST_F(MeshBufferTest, SetVertexAlphaOverrideEmptyRestoresBaselineAlpha) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    m_meshBuffer->Upload(MakeTriangle());
+
+    m_meshBuffer->SetVertexAlphaOverride({{0, 0.1F}, {2, 0.2F}});
+    m_meshBuffer->SetVertexAlphaOverride({});
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    EXPECT_FLOAT_EQ(verts[0].color.a, 1.0F);
+    EXPECT_FLOAT_EQ(verts[1].color.a, 1.0F);
+    EXPECT_FLOAT_EQ(verts[2].color.a, 1.0F);
+}
+
+TEST_F(MeshBufferTest, ColorOverrideWinsOverAlphaOverrideForSameIndex) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    m_meshBuffer->Upload(MakeTriangle());
+
+    m_meshBuffer->SetVertexAlphaOverride({{0, 0.3F}, {1, 0.3F}, {2, 0.3F}});
+    glm::vec4 tint(1.0F, 1.0F, 0.0F, 1.0F);
+    m_meshBuffer->SetVertexColorOverride({1}, tint);
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    // Vertex 1 replaced wholesale by color override.
+    EXPECT_EQ(verts[1].color, tint);
+    // Vertices 0 and 2 still show alpha override on baseline RGB.
+    EXPECT_EQ(glm::vec3(verts[0].color), glm::vec3(1.0F, 0.0F, 0.0F));
+    EXPECT_FLOAT_EQ(verts[0].color.a, 0.3F);
+    EXPECT_EQ(glm::vec3(verts[2].color), glm::vec3(0.0F, 0.0F, 1.0F));
+    EXPECT_FLOAT_EQ(verts[2].color.a, 0.3F);
+}
+
+TEST_F(MeshBufferTest, SetVertexAlphaOverrideAfterColorOverrideClearsColorLayerAlpha) {
+    // Layer order: baseline → alpha override → color override (full RGBA replace).
+    // Setting alpha after color should recompute from baseline — color override stays.
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    m_meshBuffer->Upload(MakeTriangle());
+
+    glm::vec4 tint(1.0F, 1.0F, 0.0F, 1.0F);
+    m_meshBuffer->SetVertexColorOverride({0}, tint);
+    m_meshBuffer->SetVertexAlphaOverride({{2, 0.5F}});
+
+    const auto& verts = m_meshBuffer->GetVerticesForTesting();
+    EXPECT_EQ(verts[0].color, tint) << "color override layer preserved";
+    EXPECT_FLOAT_EQ(verts[2].color.a, 0.5F);
+}

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.8d.4 — Renderer wiring: apply alpha overrides to draw path
+## Current Task: 7.9 — Fit-to-view
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -118,15 +118,15 @@
   - [x] 7.7d Toolbar "Frame Selected" button next to "Fit to View" (wired to `Camera::Frame` over selection AABB, falls back to fit-all when selection is empty). 2 new unit tests.
   - [x] 7.7e HierarchyPanel: `SetTypeVisibilityQuery` dims rows whose IFC type is hidden in the Types panel and suppresses their eye/isolate icons (1 new unit test).
   - [x] 7.7f HierarchyPanel: eye + isolate buttons render with `ImGuiCol_ButtonActive` bg when "on" (checkbox-like feedback); isolate toggles off on a second click via `Scene::ShowAll()` + `TypeVisibilityPanel::ReapplyToScene()` so disabled types stay hidden (1 new unit test).
-- [ ] 7.8 Element transparency override
+- [x] 7.8 Element transparency override
   - [x] 7.8a `IfcGeometryExtractor::ExtractSubMeshes` — returns one `TriangulatedMesh` per IfcPlacedGeometry, preserving each piece's surface-style color (including alpha < 1 for glass panes) and transformation. Existing `ExtractMesh` untouched so downstream code is unaffected. 4 new unit tests; 44/44 ifc tests pass.
   - [x] 7.8b `SceneBuilder` consumes sub-meshes: `BuildHierarchy` calls `IfcGeometryExtractor::ExtractSubMeshes(expressId)` and emits one mesh-bearing child SceneNode per sub-mesh under the element parent (parent keeps expressId + aggregated AABB but no mesh). `SceneMesh::IsTransparent()` (alpha<0.999) added as opacity bucket in the batching `BatchKey`, so opaque and translucent small meshes of the same type+color no longer merge. 2 new SceneBuilder tests + 1 new Batching test; 19/19 scene-builder+batching pass, 114/114 scene-module tests pass.
   - [x] 7.8c Renderer transparent pass — `PipelineConfig::alphaBlendEnable` (straight alpha-over: `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`) + new PipelineTest for blend+depth-write-off; `main.cpp` builds `transparentPipeline` next to shaded/wire (rebuilt on MSAA change), splits draw calls by `SceneMesh::IsTransparent()`, draws opaque → section caps → transparent → UI. Wireframe mode still goes through the wire pipeline for everything.
-  - [ ] 7.8d Per-element / per-type alpha override slider in PropertyPanel + TypeVisibilityPanel (forces alpha on top of IFC-native alpha).
+  - [x] 7.8d Per-element / per-type alpha override slider in PropertyPanel + TypeVisibilityPanel (forces alpha on top of IFC-native alpha).
     - [x] 7.8d.1 Scene alpha override API — `SetElementAlphaOverride(expressId,alpha)` / `SetTypeAlphaOverride(ifcType,alpha)` / `GetEffectiveAlpha(NodeId)` (element override > type override > nullopt), clamped to [0,1]. 7 new unit tests.
     - [x] 7.8d.2 PropertyPanel alpha slider — `SetOnAlphaChange` / `SetAlphaQuery` callbacks + enable checkbox and 0..1 slider. `TriggerAlphaChange` / `TriggerClearAlpha` mirror HierarchyPanel test hooks; query seeds current value on `SetElement`. 4 new unit tests.
     - [x] 7.8d.3 TypeVisibilityPanel alpha slider — per-row enable checkbox + 0..1 slider that forwards to `Scene::SetTypeAlphaOverride` / `ClearTypeAlphaOverride`. Direct scene read/write (no cache). 4 new unit tests.
-    - [ ] 7.8d.4 Renderer wiring — in `main.cpp`, walk scene on override change: compute per-mesh effective alpha (via `Scene::GetEffectiveAlpha` over triangle owners), re-upload vertex alphas (needs new `MeshBuffer::SetVertexAlphaOverride` that preserves baseline RGB), and route meshes with any-vertex alpha<1 into the transparent pass. Also wire `PropertyPanel::SetAlphaQuery`/`SetOnAlphaChange` callbacks to `Scene`.
+    - [x] 7.8d.4 Renderer wiring — `MeshBuffer::SetVertexAlphaOverride` (new layered override: baseline → alpha → color-override; selection highlight now preserved across alpha edits; 4 new unit tests). `main.cpp` hash-gated `rebuildAlphaOverrides()` runs each frame: walks scene, reads `GetEffectiveAlpha` per mesh-bearing node, uploads per-vertex alpha pairs, and tracks `handlesWithAlphaOverride` so those meshes route into the transparent pass. PropertyPanel callbacks wired to `Scene::{Set,Clear,Get}ElementAlphaOverride`; TypeVisibilityPanel already writes directly to Scene, picked up by the per-frame rebuild.
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation
 
