@@ -113,6 +113,10 @@ void AppendBatchedCaps(const renderer::ClipPlane& plane,
         }
     }
 
+    std::fprintf(stderr,
+                 "[section-cap] batched mesh: %zu unique owners with segments\n",
+                 perOwnerSegs.size());
+
     for (auto& [owner, segs] : perOwnerSegs) {
         if (segs.empty()) continue;
         const auto colorIt = perOwnerColor.find(owner);
@@ -152,24 +156,26 @@ std::vector<SectionVertex> BuildSectionCapVertices(
 
         const glm::vec3 normal(plane.equation.x, plane.equation.y, plane.equation.z);
 
-        // A single batched mesh is typically referenced by one node (the batch
-        // root); guard against multi-reference scenes so we don't double-cap.
-        std::vector<bool> batchedSeen(meshes.size(), false);
+        // Batched path: iterate meshes directly. `triangleOwners` is the
+        // authoritative per-triangle owner map and independent of whether a
+        // scene node's `mesh` handle still correctly points here (SceneBuilder
+        // batching can leave stale handles on non-batch-root nodes).
+        for (const SceneMesh& mesh : meshes) {
+            if (mesh.GetTriangleOwners().empty()) continue;
+            AppendBatchedCaps(plane, normal, mesh, scene, out);
+        }
 
+        // Attached path (test-only in practice): meshes with no triangle
+        // owners. Position data is local, so slicing needs the referencing
+        // node's transform. Skip meshes already handled by the batched path.
         for (std::size_t i = 0; i < scene.GetNodeCount(); ++i) {
             const auto& node = scene.GetNode(static_cast<NodeId>(i));
             if (!node.visible || !node.mesh.has_value()) continue;
             const MeshHandle handle = node.mesh.value();
             if (handle >= meshes.size()) continue;
             const SceneMesh& mesh = meshes[handle];
-
-            if (!mesh.GetTriangleOwners().empty()) {
-                if (batchedSeen[handle]) continue;
-                batchedSeen[handle] = true;
-                AppendBatchedCaps(plane, normal, mesh, scene, out);
-            } else {
-                AppendAttachedCaps(plane, normal, mesh, node.transform, out);
-            }
+            if (!mesh.GetTriangleOwners().empty()) continue;
+            AppendAttachedCaps(plane, normal, mesh, node.transform, out);
         }
     }
 
