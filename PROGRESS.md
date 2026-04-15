@@ -104,7 +104,7 @@
   - [x] 7.5e `scene::StitchSegments` — endpoint hash-grid stitch into closed polygons (`scene/Slicing.{h,cpp}`; 7 unit tests covering empty input, square stitch, shuffled+flipped, two disjoint loops, open polyline drop, epsilon snap, cube slice → 8-vert closed loop)
   - [x] 7.5f `scene::TriangulatePolygon` — ear-clipping (project to dominant 2D plane, CCW-normalize, O(n²) ear-clip; `scene/Slicing.{h,cpp}`; 6 unit tests covering degenerate input, CCW/CW squares, concave L-shape, oblique plane, vertex-preservation)
   - [x] 7.5g `scene::SectionCapGeometry` — per-scene cap vertex buffer + dirty tracking (`BuildSectionCapVertices` walks planes × visible mesh-bearing nodes, slice → stitch → triangulate → tinted vertex list; class wraps `renderer::Buffer` with hash-based no-op `Rebuild` + `MarkDirty`; in scene/ namespace because scene → renderer dep direction forbids a Scene-aware class inside renderer/. 8 unit tests.)
-  - [ ] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline`
+  - [x] 7.5h `section_fill.{vert,frag}` shaders + `renderer::SectionFillPipeline` (flat-color pipeline: position+color vertex input, depth-test LEQUAL/write-off, CULL_NONE, no stencil, single camera UBO set; 4 Vulkan integration tests for shader-SPIR-V presence, construction, MSAA 4×, RAII)
   - [ ] 7.5i Wire `SectionCapGeometry` + `SectionFillPipeline` into `main.cpp`
   - [ ] 7.5j Stage gate — full `ctest --output-on-failure`
 - [ ] 7.6 Element visibility by IFC type
