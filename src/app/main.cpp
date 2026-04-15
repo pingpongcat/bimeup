@@ -822,6 +822,10 @@ int main(int argc, char* argv[]) {
     while (!window.ShouldClose()) {
         window.PollEvents();
 
+        // Rebuild the per-frame draw list so type-visibility toggles (and any
+        // other runtime visibility changes) take effect immediately.
+        drawCalls = CollectDrawCalls(sceneResult->scene);
+
         // Detect resize / DPI change from the window manager before we try to
         // acquire a swapchain image. (Some compositors don't report OUT_OF_DATE
         // on maximize, so polling the fb size is the reliable trigger.)
