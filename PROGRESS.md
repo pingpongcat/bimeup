@@ -116,6 +116,8 @@
   - [x] 7.7b `ui::HierarchyPanel` subscribes to `ElementSelected`/`SelectionCleared`; selected rows get `ImGuiTreeNodeFlags_Selected`; ancestors of selection auto-expand via `SetNextItemOpen`. 5 new unit tests.
   - [x] 7.7c Per-row eye (`o`/`-`) + isolate (`I`) buttons in the hierarchy tree. Panel exposes `NodeCallback` wiring + `VisibilityQuery`; main.cpp drives Scene: toggle flips visibility for every mesh-bearing descendant, isolate calls `IsolateByExpressId` over the subtree, query reports "any descendant mesh visible". 3 new unit tests.
   - [x] 7.7d Toolbar "Frame Selected" button next to "Fit to View" (wired to `Camera::Frame` over selection AABB, falls back to fit-all when selection is empty). 2 new unit tests.
+  - [x] 7.7e HierarchyPanel: `SetTypeVisibilityQuery` dims rows whose IFC type is hidden in the Types panel and suppresses their eye/isolate icons (1 new unit test).
+  - [x] 7.7f HierarchyPanel: eye + isolate buttons render with `ImGuiCol_ButtonActive` bg when "on" (checkbox-like feedback); isolate toggles off on a second click via `Scene::ShowAll()` + `TypeVisibilityPanel::ReapplyToScene()` so disabled types stay hidden (1 new unit test).
 - [ ] 7.8 Element transparency override
 - [ ] 7.9 Fit-to-view
 - [ ] 7.10 First-person navigation
