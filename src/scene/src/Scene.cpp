@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <set>
 
+namespace {
+float ClampUnit(float v) {
+    return std::clamp(v, 0.0f, 1.0f);
+}
+}  // namespace
+
 namespace bimeup::scene {
 
 NodeId Scene::AddNode(SceneNode node) {
@@ -148,6 +154,46 @@ std::vector<NodeId> Scene::FindByExpressId(std::uint32_t expressId) const {
         }
     }
     return result;
+}
+
+void Scene::SetElementAlphaOverride(std::uint32_t expressId, float alpha) {
+    elementAlphaOverrides_[expressId] = ClampUnit(alpha);
+}
+
+void Scene::ClearElementAlphaOverride(std::uint32_t expressId) {
+    elementAlphaOverrides_.erase(expressId);
+}
+
+std::optional<float> Scene::GetElementAlphaOverride(std::uint32_t expressId) const {
+    auto it = elementAlphaOverrides_.find(expressId);
+    if (it == elementAlphaOverrides_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void Scene::SetTypeAlphaOverride(const std::string& ifcType, float alpha) {
+    typeAlphaOverrides_[ifcType] = ClampUnit(alpha);
+}
+
+void Scene::ClearTypeAlphaOverride(const std::string& ifcType) {
+    typeAlphaOverrides_.erase(ifcType);
+}
+
+std::optional<float> Scene::GetTypeAlphaOverride(const std::string& ifcType) const {
+    auto it = typeAlphaOverrides_.find(ifcType);
+    if (it == typeAlphaOverrides_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::optional<float> Scene::GetEffectiveAlpha(NodeId id) const {
+    const auto& node = GetNode(id);
+    if (auto elem = GetElementAlphaOverride(node.expressId); elem.has_value()) {
+        return elem;
+    }
+    return GetTypeAlphaOverride(node.ifcType);
 }
 
 } // namespace bimeup::scene

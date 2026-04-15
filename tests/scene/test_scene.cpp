@@ -386,3 +386,101 @@ TEST(SceneTest, NodeTransformIsPreserved) {
     EXPECT_EQ(n.transform[3][1], 2.0f);
     EXPECT_EQ(n.transform[3][2], 3.0f);
 }
+
+// ----- 7.8d Alpha overrides -----------------------------------------------
+
+namespace {
+NodeId AddMeshNode(Scene& scene, std::uint32_t expressId, const std::string& ifcType) {
+    SceneNode n;
+    n.expressId = expressId;
+    n.ifcType = ifcType;
+    n.mesh = MeshHandle{0};
+    return scene.AddNode(std::move(n));
+}
+}  // namespace
+
+TEST(SceneAlphaOverrideTest, ElementOverrideRoundTrip) {
+    Scene scene;
+    NodeId id = AddMeshNode(scene, 101, "IfcWall");
+
+    EXPECT_FALSE(scene.GetElementAlphaOverride(101).has_value());
+    EXPECT_FALSE(scene.GetEffectiveAlpha(id).has_value());
+
+    scene.SetElementAlphaOverride(101, 0.3f);
+    ASSERT_TRUE(scene.GetElementAlphaOverride(101).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetElementAlphaOverride(101), 0.3f);
+    ASSERT_TRUE(scene.GetEffectiveAlpha(id).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(id), 0.3f);
+}
+
+TEST(SceneAlphaOverrideTest, ElementOverrideClampedToUnitRange) {
+    Scene scene;
+    AddMeshNode(scene, 7, "IfcSlab");
+
+    scene.SetElementAlphaOverride(7, -1.5f);
+    EXPECT_FLOAT_EQ(*scene.GetElementAlphaOverride(7), 0.0f);
+
+    scene.SetElementAlphaOverride(7, 42.0f);
+    EXPECT_FLOAT_EQ(*scene.GetElementAlphaOverride(7), 1.0f);
+}
+
+TEST(SceneAlphaOverrideTest, ClearElementOverride) {
+    Scene scene;
+    AddMeshNode(scene, 9, "IfcWall");
+
+    scene.SetElementAlphaOverride(9, 0.25f);
+    scene.ClearElementAlphaOverride(9);
+    EXPECT_FALSE(scene.GetElementAlphaOverride(9).has_value());
+}
+
+TEST(SceneAlphaOverrideTest, TypeOverrideAppliesToAllMatchingNodes) {
+    Scene scene;
+    NodeId wall1 = AddMeshNode(scene, 1, "IfcWall");
+    NodeId wall2 = AddMeshNode(scene, 2, "IfcWall");
+    NodeId slab  = AddMeshNode(scene, 3, "IfcSlab");
+
+    scene.SetTypeAlphaOverride("IfcWall", 0.5f);
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.5f);
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
+
+    ASSERT_TRUE(scene.GetEffectiveAlpha(wall1).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(wall1), 0.5f);
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(wall2), 0.5f);
+    EXPECT_FALSE(scene.GetEffectiveAlpha(slab).has_value());
+}
+
+TEST(SceneAlphaOverrideTest, ElementOverrideWinsOverTypeOverride) {
+    Scene scene;
+    NodeId id = AddMeshNode(scene, 11, "IfcWall");
+
+    scene.SetTypeAlphaOverride("IfcWall", 0.5f);
+    scene.SetElementAlphaOverride(11, 0.1f);
+
+    ASSERT_TRUE(scene.GetEffectiveAlpha(id).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(id), 0.1f);
+}
+
+TEST(SceneAlphaOverrideTest, ClearTypeOverrideFallsBackToElementThenNone) {
+    Scene scene;
+    NodeId id = AddMeshNode(scene, 12, "IfcWall");
+
+    scene.SetTypeAlphaOverride("IfcWall", 0.6f);
+    scene.ClearTypeAlphaOverride("IfcWall");
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FALSE(scene.GetEffectiveAlpha(id).has_value());
+
+    scene.SetElementAlphaOverride(12, 0.2f);
+    scene.SetTypeAlphaOverride("IfcWall", 0.6f);
+    scene.ClearTypeAlphaOverride("IfcWall");
+    ASSERT_TRUE(scene.GetEffectiveAlpha(id).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(id), 0.2f);
+}
+
+TEST(SceneAlphaOverrideTest, TypeOverrideClampedToUnitRange) {
+    Scene scene;
+    scene.SetTypeAlphaOverride("IfcWall", 2.5f);
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 1.0f);
+    scene.SetTypeAlphaOverride("IfcWall", -0.1f);
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.0f);
+}

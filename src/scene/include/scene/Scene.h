@@ -3,8 +3,10 @@
 #include "SceneNode.h"
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -39,9 +41,27 @@ public:
     /// Sorted, de-duplicated list of non-empty ifcType values present in the scene.
     std::vector<std::string> GetUniqueTypes() const;
 
+    /// Per-element alpha override, keyed by IFC expressId. Value is clamped to
+    /// [0,1]. Forces transparency on top of any IFC-native alpha. Element
+    /// override wins over any type-level override for the same node.
+    void SetElementAlphaOverride(std::uint32_t expressId, float alpha);
+    void ClearElementAlphaOverride(std::uint32_t expressId);
+    [[nodiscard]] std::optional<float> GetElementAlphaOverride(std::uint32_t expressId) const;
+
+    /// Per-type alpha override, keyed by ifcType. Value is clamped to [0,1].
+    void SetTypeAlphaOverride(const std::string& ifcType, float alpha);
+    void ClearTypeAlphaOverride(const std::string& ifcType);
+    [[nodiscard]] std::optional<float> GetTypeAlphaOverride(const std::string& ifcType) const;
+
+    /// Effective override for @p id: element override > type override > none.
+    /// Returns nullopt if neither override is set for this node.
+    [[nodiscard]] std::optional<float> GetEffectiveAlpha(NodeId id) const;
+
 private:
     std::vector<SceneNode> nodes_;
     NodeId nextId_ = 0;
+    std::unordered_map<std::uint32_t, float> elementAlphaOverrides_;
+    std::unordered_map<std::string, float> typeAlphaOverrides_;
 };
 
 /// IFC types that represent non-visual concepts (spatial volumes, openings, grids)
