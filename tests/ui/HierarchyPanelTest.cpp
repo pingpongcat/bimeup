@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <core/EventBus.h>
+#include <core/Events.h>
 #include <ifc/IfcHierarchy.h>
 #include <ui/HierarchyPanel.h>
 
@@ -64,6 +66,101 @@ TEST(HierarchyPanelTest, DepthOfBranchingTree) {
     panel.SetRoot(&root);
     EXPECT_EQ(panel.GetDepth(), 3u);
     EXPECT_EQ(panel.GetNodeCount(), 4u);
+}
+
+TEST(HierarchyPanelTest, ElementSelectedMarksRowAsSelected) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode wall = MakeNode("IfcWall", "W");
+    wall.expressId = 42;
+    root.children.push_back(wall);
+
+    bimeup::core::EventBus bus;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    panel.SetEventBus(&bus);
+
+    EXPECT_FALSE(panel.IsSelected(42));
+    bus.Publish(bimeup::core::ElementSelected{42, false});
+    EXPECT_TRUE(panel.IsSelected(42));
+    EXPECT_FALSE(panel.IsSelected(1));
+}
+
+TEST(HierarchyPanelTest, ElementSelectedMarksAncestorsForExpand) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode site = MakeNode("IfcSite", "Site");
+    site.expressId = 2;
+    HierarchyNode wall = MakeNode("IfcWall", "W");
+    wall.expressId = 42;
+    site.children.push_back(wall);
+    root.children.push_back(site);
+
+    bimeup::core::EventBus bus;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    panel.SetEventBus(&bus);
+
+    bus.Publish(bimeup::core::ElementSelected{42, false});
+    EXPECT_TRUE(panel.IsAncestorOfSelection(1));
+    EXPECT_TRUE(panel.IsAncestorOfSelection(2));
+    EXPECT_FALSE(panel.IsAncestorOfSelection(42));  // the selected node itself is not its own ancestor
+}
+
+TEST(HierarchyPanelTest, NonAdditiveElementSelectedReplacesPrevious) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode a = MakeNode("IfcWall", "A"); a.expressId = 10;
+    HierarchyNode b = MakeNode("IfcWall", "B"); b.expressId = 20;
+    root.children.push_back(a);
+    root.children.push_back(b);
+
+    bimeup::core::EventBus bus;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    panel.SetEventBus(&bus);
+
+    bus.Publish(bimeup::core::ElementSelected{10, false});
+    bus.Publish(bimeup::core::ElementSelected{20, false});
+    EXPECT_FALSE(panel.IsSelected(10));
+    EXPECT_TRUE(panel.IsSelected(20));
+}
+
+TEST(HierarchyPanelTest, AdditiveElementSelectedAccumulates) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode a = MakeNode("IfcWall", "A"); a.expressId = 10;
+    HierarchyNode b = MakeNode("IfcWall", "B"); b.expressId = 20;
+    root.children.push_back(a);
+    root.children.push_back(b);
+
+    bimeup::core::EventBus bus;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    panel.SetEventBus(&bus);
+
+    bus.Publish(bimeup::core::ElementSelected{10, false});
+    bus.Publish(bimeup::core::ElementSelected{20, true});  // additive
+    EXPECT_TRUE(panel.IsSelected(10));
+    EXPECT_TRUE(panel.IsSelected(20));
+}
+
+TEST(HierarchyPanelTest, SelectionClearedResetsState) {
+    HierarchyNode root = MakeNode("IfcProject", "Project");
+    root.expressId = 1;
+    HierarchyNode wall = MakeNode("IfcWall", "W");
+    wall.expressId = 42;
+    root.children.push_back(wall);
+
+    bimeup::core::EventBus bus;
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+    panel.SetEventBus(&bus);
+
+    bus.Publish(bimeup::core::ElementSelected{42, false});
+    bus.Publish(bimeup::core::SelectionCleared{});
+    EXPECT_FALSE(panel.IsSelected(42));
+    EXPECT_FALSE(panel.IsAncestorOfSelection(1));
 }
 
 TEST(HierarchyPanelTest, SetRootNullClearsState) {

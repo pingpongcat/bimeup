@@ -42,8 +42,83 @@ std::string FormatLabel(const ifc::HierarchyNode& node) {
 
 HierarchyPanel::HierarchyPanel(const ifc::HierarchyNode* root) : m_root(root) {}
 
+HierarchyPanel::~HierarchyPanel() {
+    UnsubscribeFromBus();
+}
+
 void HierarchyPanel::SetEventBus(core::EventBus* bus) {
+    if (m_bus == bus) {
+        return;
+    }
+    UnsubscribeFromBus();
     m_bus = bus;
+    if (m_bus == nullptr) {
+        return;
+    }
+    m_subSelected = m_bus->Subscribe<core::ElementSelected>(
+        [this](const core::ElementSelected& e) { HandleSelected(e.expressId, e.additive); });
+    m_subCleared = m_bus->Subscribe<core::SelectionCleared>(
+        [this](const core::SelectionCleared&) { HandleCleared(); });
+}
+
+void HierarchyPanel::UnsubscribeFromBus() {
+    if (m_bus == nullptr) {
+        return;
+    }
+    if (m_subSelected != 0) {
+        m_bus->Unsubscribe<core::ElementSelected>(m_subSelected);
+        m_subSelected = 0;
+    }
+    if (m_subCleared != 0) {
+        m_bus->Unsubscribe<core::SelectionCleared>(m_subCleared);
+        m_subCleared = 0;
+    }
+}
+
+void HierarchyPanel::HandleSelected(std::uint32_t expressId, bool additive) {
+    if (!additive) {
+        m_selectedIds.clear();
+    }
+    m_selectedIds.insert(expressId);
+    RecomputeAncestors();
+}
+
+void HierarchyPanel::HandleCleared() {
+    m_selectedIds.clear();
+    m_ancestorIds.clear();
+}
+
+void HierarchyPanel::RecomputeAncestors() {
+    m_ancestorIds.clear();
+    if (m_root == nullptr) {
+        return;
+    }
+    for (std::uint32_t id : m_selectedIds) {
+        CollectAncestorPath(*m_root, id, m_ancestorIds);
+    }
+}
+
+bool HierarchyPanel::CollectAncestorPath(const ifc::HierarchyNode& node,
+                                         std::uint32_t targetId,
+                                         std::unordered_set<std::uint32_t>& out) const {
+    if (node.expressId == targetId) {
+        return true;
+    }
+    for (const auto& child : node.children) {
+        if (CollectAncestorPath(child, targetId, out)) {
+            out.insert(node.expressId);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HierarchyPanel::IsSelected(std::uint32_t expressId) const {
+    return m_selectedIds.count(expressId) > 0;
+}
+
+bool HierarchyPanel::IsAncestorOfSelection(std::uint32_t expressId) const {
+    return m_ancestorIds.count(expressId) > 0;
 }
 
 void HierarchyPanel::Select(std::uint32_t expressId, bool additive) {
@@ -58,6 +133,7 @@ const char* HierarchyPanel::GetName() const {
 
 void HierarchyPanel::SetRoot(const ifc::HierarchyNode* root) {
     m_root = root;
+    RecomputeAncestors();
 }
 
 const ifc::HierarchyNode* HierarchyPanel::GetRoot() const {
@@ -94,6 +170,12 @@ void HierarchyPanel::DrawNode(const ifc::HierarchyNode& node) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                ImGuiTreeNodeFlags_OpenOnDoubleClick |
                                ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (IsSelected(node.expressId)) {
+        flags |= ImGuiTreeNodeFlags_Selected;
+    }
+    if (IsAncestorOfSelection(node.expressId)) {
+        ImGui::SetNextItemOpen(true);
+    }
     if (node.children.empty()) {
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
         ImGui::TreeNodeEx(label.c_str(), flags);
