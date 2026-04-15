@@ -7,6 +7,7 @@ add_executable(test_scene
     test_measurement.cpp
     test_snap.cpp
     test_slicing.cpp
+    test_section_cap_geometry.cpp
 )
 
 target_link_libraries(test_scene PRIVATE
@@ -16,8 +17,12 @@ target_link_libraries(test_scene PRIVATE
 
 bimeup_enable_sanitizers(test_scene)
 
+set(SCENE_LSAN_SUPPRESSIONS "LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/cmake/asan_suppressions.txt")
+
 include(GoogleTest)
-gtest_discover_tests(test_scene)
+gtest_discover_tests(test_scene
+    PROPERTIES ENVIRONMENT "${SCENE_LSAN_SUPPRESSIONS}"
+)
 
 add_executable(test_scene_builder
     test_scene_builder.cpp
