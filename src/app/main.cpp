@@ -768,6 +768,10 @@ int main(int argc, char* argv[]) {
                 std::unordered_set<std::uint32_t> keep(ids.begin(), ids.end());
                 scene.IsolateByExpressId(keep);
             });
+        hierarchyPanel->SetTypeVisibilityQuery(
+            [typeVisibilityPanel](const std::string& ifcType) {
+                return typeVisibilityPanel->IsTypeVisible(ifcType);
+            });
     }
 
     auto selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(

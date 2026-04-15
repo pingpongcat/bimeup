@@ -133,6 +133,15 @@ void HierarchyPanel::SetVisibilityQuery(VisibilityQuery q) {
     m_visibilityQuery = std::move(q);
 }
 
+void HierarchyPanel::SetTypeVisibilityQuery(TypeVisibilityQuery q) {
+    m_typeVisibilityQuery = std::move(q);
+}
+
+bool HierarchyPanel::IsTypeHidden(const ifc::HierarchyNode& node) const {
+    if (!m_typeVisibilityQuery) return false;
+    return !m_typeVisibilityQuery(node.type);
+}
+
 void HierarchyPanel::TriggerToggleVisibility(const ifc::HierarchyNode& node) {
     if (m_onToggleVisibility) {
         m_onToggleVisibility(node);
@@ -201,20 +210,28 @@ void HierarchyPanel::DrawNode(const ifc::HierarchyNode& node) {
     if (IsAncestorOfSelection(node.expressId)) {
         ImGui::SetNextItemOpen(true);
     }
+    const bool typeHidden = IsTypeHidden(node);
+    if (typeHidden) {
+        // Dim text for rows whose IFC type is disabled in the Types panel.
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    }
     if (node.children.empty()) {
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
         ImGui::TreeNodeEx(label.c_str(), flags);
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
             Select(node.expressId, ImGui::GetIO().KeyCtrl);
         }
-        DrawRowIcons(node);
+        if (typeHidden) ImGui::PopStyleColor();
+        if (!typeHidden) DrawRowIcons(node);
         return;
     }
     const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         Select(node.expressId, ImGui::GetIO().KeyCtrl);
     }
-    DrawRowIcons(node);
+    if (typeHidden) ImGui::PopStyleColor();
+    if (!typeHidden) DrawRowIcons(node);
     if (open) {
         for (const auto& child : node.children) {
             DrawNode(child);

@@ -198,6 +198,23 @@ TEST(HierarchyPanelTest, TriggerIsolateFiresCallbackWithNode) {
     EXPECT_EQ(captured, 42u);
 }
 
+TEST(HierarchyPanelTest, IsTypeHiddenHonoursQuery) {
+    HierarchyNode root = MakeNode("IfcProject", "P"); root.expressId = 1;
+    HierarchyNode space = MakeNode("IfcSpace", "S"); space.expressId = 10;
+    root.children.push_back(space);
+
+    HierarchyPanel panel;
+    panel.SetRoot(&root);
+
+    // Without a query set, nothing is considered type-hidden.
+    EXPECT_FALSE(panel.IsTypeHidden(root.children[0]));
+
+    panel.SetTypeVisibilityQuery(
+        [](const std::string& t) { return t != "IfcSpace"; });
+    EXPECT_TRUE(panel.IsTypeHidden(root.children[0]));
+    EXPECT_FALSE(panel.IsTypeHidden(root));
+}
+
 TEST(HierarchyPanelTest, TriggersAreNoOpWithoutCallback) {
     HierarchyNode root = MakeNode("IfcProject", "Project");
     root.expressId = 1;

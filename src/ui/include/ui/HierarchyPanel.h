@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <unordered_set>
 
 namespace bimeup::core {
@@ -40,9 +41,15 @@ public:
 
     using NodeCallback = std::function<void(const ifc::HierarchyNode& node)>;
     using VisibilityQuery = std::function<bool(const ifc::HierarchyNode& node)>;
+    using TypeVisibilityQuery = std::function<bool(const std::string& ifcType)>;
     void SetOnToggleVisibility(NodeCallback cb);
     void SetOnIsolate(NodeCallback cb);
     void SetVisibilityQuery(VisibilityQuery q);
+    /// Optional. When set, rows whose ifcType reports `false` are dimmed
+    /// and their eye/isolate icons are suppressed. Use this to reflect
+    /// the TypeVisibilityPanel state in the tree.
+    void SetTypeVisibilityQuery(TypeVisibilityQuery q);
+    [[nodiscard]] bool IsTypeHidden(const ifc::HierarchyNode& node) const;
 
     // Test-friendly triggers (same code path the UI icons use).
     void TriggerToggleVisibility(const ifc::HierarchyNode& node);
@@ -59,6 +66,7 @@ private:
     NodeCallback m_onToggleVisibility;
     NodeCallback m_onIsolate;
     VisibilityQuery m_visibilityQuery;
+    TypeVisibilityQuery m_typeVisibilityQuery;
 
     void DrawNode(const ifc::HierarchyNode& node);
     void DrawRowIcons(const ifc::HierarchyNode& node);
