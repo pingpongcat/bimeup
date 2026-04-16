@@ -667,36 +667,47 @@ namespace bimeup::ui {
 
 ---
 
-## Stage 8 — Performance & Large Model Support
+## Stage 8 — Loading Responsiveness & Memory
 
-**Goal**: Handle large IFC files (100k+ elements). Multithreaded loading, LOD, frustum culling, lazy loading.
+**Goal**: Open complex single-building IFC files (e.g. `Ifc2x3_SampleCastle.ifc` — 3.8k elements, 9k scene nodes) without OOM-killing the process, and keep the UI responsive during the multi-second parse + extract phase. The target use-case is compact buildings, not city-scale scenes — so this stage focuses on **load time, peak memory, and UI responsiveness**, not on draw-call throughput or view-dependent culling.
 
-**Sessions**: 2–3
+**Sessions**: 2
+
+### Scope decisions (2026-04-17)
+
+The original Stage 8 included BVH, frustum culling, LOD, and indirect drawing. These were dropped after re-scoping against the actual target (compact houses, not 100k-element campuses):
+
+- **Frustum culling** — a single building is in-frustum almost always; the cull would save nothing.
+- **BVH** — the scene-node count (≲10k) makes a linear raycast sub-millisecond; a tree adds complexity for no measurable picking gain. Frustum queries vanish with frustum culling.
+- **LOD generation** — IFC house elements (walls/slabs/openings/fixtures) are already low-poly; nobody zooms out far enough for simplified versions to matter.
+- **Indirect drawing** — Castle renders in 120 draw calls thanks to type+color batching (Stage 4.10). That's already cheap; indirect drawing matters past a few thousand draws.
+
+If a future use-case introduces large-site or campus models, reopen this list — the dropped tasks aren't *wrong*, they're just not justified for the current target.
 
 ### Modules involved
-- `ifc/` (async loading)
-- `scene/` (spatial indexing, LOD, culling)
-- `renderer/` (indirect drawing, GPU culling)
+- `ifc/` (async loading, lazy/skip-by-type extraction)
+- `tools/` (thread pool for parallel extraction)
+- `scene/` (skip-hidden-types in `SceneBuilder`)
+- `app/` (loading modal, progress wiring)
+- `tests/` (memory + load-time benchmark)
 
 ### Tasks
 
 | # | Task | Test | Output |
 |---|------|------|--------|
-| 8.1 | Implement async IFC loading with progress reporting | Unit test: load completes on background thread, progress callback fires, cancel works | Async loading in ifc/ |
-| 8.2 | Implement BVH (Bounding Volume Hierarchy) for scene | Unit test: BVH correctly classifies ray hits, frustum queries return correct nodes | `src/scene/include/scene/BVH.h` |
-| 8.3 | Implement frustum culling using BVH | Unit test: nodes outside frustum excluded from draw list | Culling in scene/ |
-| 8.4 | Implement LOD — generate simplified meshes for distant objects | Unit test: LOD0 has more triangles than LOD1, LOD switch at correct distance | `src/scene/include/scene/LOD.h` |
-| 8.5 | Implement indirect drawing — single draw call for batched meshes | Benchmark: fewer draw calls than elements, frame time reduced | Indirect drawing in renderer/ |
-| 8.6 | Implement lazy geometry generation — only triangulate visible elements | Unit test: elements outside view not triangulated until needed | Lazy loading in ifc/ |
-| 8.7 | Implement multithreaded geometry processing (thread pool) | Unit test: N elements processed in parallel, results correct | Thread pool in tools/ |
-| 8.8 | Benchmark with large IFC file — target: 60 FPS with 100k elements | Performance test: frame time < 16ms on target hardware | Benchmark in tests/ |
+| 8.1 | `ifc::AsyncLoader` — `LoadAsync(path, ProgressCallback)` + `Cancel()` returning `std::future<std::unique_ptr<IfcModel>>`; progress callback invoked from the worker thread, cancellation checked between phases | Unit test: load completes on background thread, progress callback fires monotonically, cancel returns early without crash | `src/ifc/include/ifc/AsyncLoader.h` |
+| 8.2 | Loading modal in `app/` — ImGui overlay shown while the future is pending; displays % + current phase string + Cancel button; main render loop ticks (clear → present) so the window stays responsive | Manual test: open Castle, modal appears, progress advances, Cancel aborts the load and returns to empty scene | Loading UI in `src/app/main.cpp` (or new `ui::LoadingModal`) |
+| 8.3 | Skip extraction for hidden-by-default types — `SceneBuilder` (or `IfcGeometryExtractor`) does not call `ExtractSubMeshes` for types listed in `scene::DefaultHiddenTypes()` (IfcSpace, IfcOpeningElement, IfcGrid, IfcAnnotation). Saves both extract time and peak heap | Unit test: build with a model containing IfcSpace returns zero meshes for those elements; non-hidden types unaffected | Skip-on-extract in `scene/SceneBuilder` |
+| 8.4 | Memory-footprint audit & fix — measure peak RSS during Castle load with `getrusage`; identify duplications (web-ifc geometry-processor retention, `TriangulatedMesh`+batched-buffer+staging-copy triple-buffer, per-vertex override shadows for elements with no overrides). Fix the cheapest 1–2 wins until Castle loads on a 16 GB machine without SIGKILL | Benchmark test: peak RSS for Castle below a documented threshold (set after first measurement) | Memory fixes in `ifc/`, `scene/`, possibly `renderer/MeshBuffer` |
+| 8.5 | `tools::ThreadPool` + parallel geometry extraction — fan out per-element `IfcGeometryExtractor::ExtractSubMeshes` across N worker threads; `SceneBuilder` consumes the resulting per-element mesh lists in deterministic order (sort by expressId before stitching into the scene) | Unit test (tools): pool runs N tasks in parallel, results returned in order. Integration test (ifc): parallel extract over a sample model produces byte-identical scene output to the serial path | `src/tools/include/tools/ThreadPool.h` + parallel path in `ifc/` |
+| 8.6 | Benchmark target & regression bar — `tests/benchmarks/load_castle.cpp` measures parse time, extract time, scene-build time, peak RSS, and first-frame time on `Ifc2x3_SampleCastle.ifc`. CI prints the numbers; thresholds documented in `PROGRESS.md` once we have a baseline | Benchmark passes within documented thresholds | `tests/benchmarks/load_castle.cpp` |
 
 ### Expected APIs after Stage 8
 
 ```cpp
 // ifc/include/ifc/AsyncLoader.h
 namespace bimeup::ifc {
-    using ProgressCallback = std::function<void(float percent, const std::string& status)>;
+    using ProgressCallback = std::function<void(float percent, std::string_view phase)>;
 
     class AsyncLoader {
     public:
@@ -708,16 +719,22 @@ namespace bimeup::ifc {
     };
 }
 
-// scene/include/scene/BVH.h
-namespace bimeup::scene {
-    class BVH {
+// tools/include/tools/ThreadPool.h
+namespace bimeup::tools {
+    class ThreadPool {
     public:
-        void Build(const Scene& scene);
-        std::vector<NodeId> QueryFrustum(const glm::mat4& viewProj) const;
-        std::optional<NodeId> Raycast(glm::vec3 origin, glm::vec3 dir) const;
+        explicit ThreadPool(std::size_t threads = std::thread::hardware_concurrency());
+        ~ThreadPool();
+        template <class F> auto Submit(F&& fn) -> std::future<std::invoke_result_t<F>>;
+        void WaitAll();
     };
 }
 ```
+
+### Out of scope (intentionally dropped from original Stage 8)
+
+- BVH, frustum culling, LOD generation, indirect drawing — see "Scope decisions" above.
+- Splash-screen-before-window — purely cosmetic; revisit in Stage 11 (Polish & Release) if still wanted after the loading modal lands.
 
 ---
 

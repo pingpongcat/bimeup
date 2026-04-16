@@ -94,3 +94,22 @@ target_compile_definitions(test_ifc_hierarchy PRIVATE
 gtest_discover_tests(test_ifc_hierarchy
     PROPERTIES ENVIRONMENT "${IFC_LSAN_SUPPRESSIONS}"
 )
+
+add_executable(test_async_loader
+    test_async_loader.cpp
+)
+
+target_link_libraries(test_async_loader PRIVATE
+    GTest::gtest_main
+    bimeup_ifc
+)
+
+bimeup_enable_sanitizers(test_async_loader)
+
+target_compile_definitions(test_async_loader PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/ifc/data"
+)
+
+gtest_discover_tests(test_async_loader
+    PROPERTIES ENVIRONMENT "${IFC_LSAN_SUPPRESSIONS}"
+)

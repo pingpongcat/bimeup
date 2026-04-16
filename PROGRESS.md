@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 8 — Performance & Large Models
-## Current Task: 8.1 — Async IFC loading with progress
+## Current Stage: 8 — Loading Responsiveness & Memory
+## Current Task: 8.2 — Loading modal in app/ (% + phase + Cancel)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -153,15 +153,15 @@
 - [x] N.1c Framing — `Camera::Frame(min,max)` + Home (frame-all) / Numpad . (frame-selected, falls back to frame-all) / Shift+C (reset pivot to origin)
 - [x] N.1d Axis snaps — `Camera::SetAxisView(AxisView)` + numpad 1/3/7 (Ctrl = opposite side) for Front/Back/Right/Left/Top/Bottom
 
-## Stage 8 — Performance & Large Models
-- [ ] 8.1 Async IFC loading with progress
-- [ ] 8.2 BVH for scene
-- [ ] 8.3 Frustum culling
-- [ ] 8.4 LOD generation
-- [ ] 8.5 Indirect drawing
-- [ ] 8.6 Lazy geometry generation
-- [ ] 8.7 Multithreaded geometry processing
-- [ ] 8.8 Benchmark with large IFC
+## Stage 8 — Loading Responsiveness & Memory
+Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 (indirect drawing) dropped — they target city/campus scale, not compact buildings (see PLAN.md "Scope decisions"). Reopen if a campus model appears.
+
+- [x] 8.1 Async IFC loading with progress + cancel (`ifc::AsyncLoader` — worker-thread `LoadAsync` returns `std::future<std::unique_ptr<IfcModel>>`, progress emitted at "starting"/"parsing"/"done" boundaries, atomic cancel flag sampled at every boundary; serializes by joining any prior in-flight load. 7 unit tests cover worker-thread execution, monotonic 0→100 progress, null-callback safety, invalid-path → nullptr, cancel-flag toggling, cancel-during-progress → nullptr, and second-load resetting the flag. Not yet wired into `main.cpp` — that lands with 8.2 loading modal.)
+- [ ] 8.2 Loading modal in `app/` (ImGui overlay, % + phase + Cancel)
+- [ ] 8.3 Skip extraction for hidden-by-default IFC types in `SceneBuilder`
+- [ ] 8.4 Memory-footprint audit & fix — make `Ifc2x3_SampleCastle.ifc` open without SIGKILL
+- [ ] 8.5 `tools::ThreadPool` + parallel geometry extraction
+- [ ] 8.6 Benchmark `Ifc2x3_SampleCastle.ifc` — parse/extract/build time, peak RSS, first-frame time
 
 ## Stage 9 — VR Integration
 - [ ] 9.1 OpenXR session lifecycle
