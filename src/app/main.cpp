@@ -5,6 +5,7 @@
 #include <core/Picking.h>
 #include <core/SceneUploader.h>
 #include <core/Selection.h>
+#include <ifc/AsyncLoader.h>
 #include <ifc/IfcHierarchy.h>
 #include <ifc/IfcModel.h>
 #include <platform/Input.h>
@@ -59,13 +60,18 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <future>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -251,18 +257,133 @@ int main(int argc, char* argv[]) {
     // MeshBuffer for all geometry
     bimeup::renderer::MeshBuffer meshBuffer(device);
 
+    renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
+
+    // UI — initialised before the IFC load so the loading modal can render
+    // each frame while the worker thread parses the file.
+    bimeup::ui::UIManager uiManager;
+    auto initImGui = [&] {
+        uiManager.InitVulkanBackend({
+            .window = window.GetHandle(),
+            .instance = vulkanContext.GetInstance(),
+            .physicalDevice = device.GetPhysicalDevice(),
+            .device = device.GetDevice(),
+            .queueFamily = device.GetGraphicsQueueFamily(),
+            .queue = device.GetGraphicsQueue(),
+            .renderPass = renderLoop.GetRenderPass(),
+            .minImageCount = swapchain.GetImageCount(),
+            .imageCount = swapchain.GetImageCount(),
+            .apiVersion = VK_API_VERSION_1_2,
+            .msaaSamples = renderLoop.GetSampleCount(),
+        });
+    };
+    initImGui();
+
+    bimeup::ui::Theme::Apply();
+
+    // Minimal swapchain recreate usable during loading (no scene / camera deps).
+    auto recreateSwapchainForLoading = [&] {
+        auto sz = window.GetFramebufferSize();
+        while (sz.x == 0 || sz.y == 0) {
+            glfwWaitEvents();
+            if (window.ShouldClose()) return;
+            sz = window.GetFramebufferSize();
+        }
+        renderLoop.WaitIdle();
+        swapchain.Recreate(
+            surface,
+            VkExtent2D{static_cast<uint32_t>(sz.x), static_cast<uint32_t>(sz.y)});
+        renderLoop.RecreateForSwapchain();
+    };
+
     // Load IFC file (use CLI argument if given, otherwise the bundled sample).
     std::string ifcPath = (argc > 1) ? std::string(argv[1]) : std::string(BIMEUP_SAMPLE_IFC);
     LOG_INFO("Loading IFC file: {}", ifcPath);
 
-    std::optional<bimeup::scene::BuildResult> sceneResult;
-    bimeup::ifc::IfcModel ifcModel;
+    bimeup::ifc::AsyncLoader asyncLoader;
+    std::atomic<float> loadPercent{0.0F};
+    std::mutex loadPhaseMtx;
+    std::string loadPhase = "starting";
 
-    if (!ifcModel.LoadFromFile(ifcPath)) {
-        LOG_ERROR("Failed to load IFC file: {}", ifcPath);
-        return 1;
+    auto loadFuture = asyncLoader.LoadAsync(
+        ifcPath, [&](float pct, std::string_view phase) {
+            loadPercent.store(pct, std::memory_order_release);
+            std::lock_guard lk(loadPhaseMtx);
+            loadPhase.assign(phase.data(), phase.size());
+        });
+
+    bool windowClosedDuringLoad = false;
+    while (loadFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+        glfwPollEvents();
+        if (window.ShouldClose()) {
+            asyncLoader.Cancel();
+            windowClosedDuringLoad = true;
+            loadFuture.wait();
+            break;
+        }
+
+        if (!renderLoop.BeginFrame()) {
+            recreateSwapchainForLoading();
+            continue;
+        }
+
+        uiManager.BeginFrame();
+        {
+            const auto* viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always,
+                                    ImVec2(0.5F, 0.5F));
+            ImGui::Begin("Loading IFC", nullptr,
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoSavedSettings);
+            std::string phaseSnap;
+            {
+                std::lock_guard lk(loadPhaseMtx);
+                phaseSnap = loadPhase;
+            }
+            ImGui::TextUnformatted(ifcPath.c_str());
+            ImGui::Spacing();
+            ImGui::Text("Phase: %s", phaseSnap.c_str());
+            ImGui::ProgressBar(loadPercent.load(std::memory_order_acquire) / 100.0F,
+                               ImVec2(360.0F, 0.0F));
+            ImGui::Spacing();
+            const bool cancelled = asyncLoader.IsCancelled();
+            ImGui::BeginDisabled(cancelled);
+            if (ImGui::Button("Cancel", ImVec2(120.0F, 0.0F))) {
+                asyncLoader.Cancel();
+            }
+            ImGui::EndDisabled();
+            if (cancelled) {
+                ImGui::SameLine();
+                ImGui::TextUnformatted("(cancelling…)");
+            }
+            ImGui::End();
+        }
+        uiManager.EndFrame(renderLoop.GetCurrentCommandBuffer());
+
+        if (!renderLoop.EndFrame()) {
+            recreateSwapchainForLoading();
+        }
     }
+
+    auto loadedModel = loadFuture.get();
+    if (windowClosedDuringLoad || asyncLoader.IsCancelled() || !loadedModel) {
+        if (windowClosedDuringLoad) {
+            LOG_INFO("IFC load aborted (window closed)");
+        } else if (asyncLoader.IsCancelled()) {
+            LOG_INFO("IFC load cancelled by user");
+        } else {
+            LOG_ERROR("Failed to load IFC file: {}", ifcPath);
+        }
+        renderLoop.WaitIdle();
+        uiManager.ShutdownVulkanBackend();
+        bimeup::tools::Log::Shutdown();
+        return (windowClosedDuringLoad || asyncLoader.IsCancelled()) ? 0 : 1;
+    }
+    auto& ifcModel = *loadedModel;
     LOG_INFO("IFC loaded: {} elements", ifcModel.GetElementCount());
+
+    std::optional<bimeup::scene::BuildResult> sceneResult;
 
     bimeup::scene::SceneBuilder builder;
     builder.SetBatchingEnabled(true);
@@ -825,29 +946,6 @@ int main(int argc, char* argv[]) {
             camera.SetAxisView(view);
         }
     });
-
-    renderLoop.SetClearColor(0.15F, 0.15F, 0.18F);
-
-    // UI
-    bimeup::ui::UIManager uiManager;
-    auto initImGui = [&] {
-        uiManager.InitVulkanBackend({
-            .window = window.GetHandle(),
-            .instance = vulkanContext.GetInstance(),
-            .physicalDevice = device.GetPhysicalDevice(),
-            .device = device.GetDevice(),
-            .queueFamily = device.GetGraphicsQueueFamily(),
-            .queue = device.GetGraphicsQueue(),
-            .renderPass = renderLoop.GetRenderPass(),
-            .minImageCount = swapchain.GetImageCount(),
-            .imageCount = swapchain.GetImageCount(),
-            .apiVersion = VK_API_VERSION_1_2,
-            .msaaSamples = renderLoop.GetSampleCount(),
-        });
-    };
-    initImGui();
-
-    bimeup::ui::Theme::Apply();
 
     // Construct panels and keep raw pointers so we can update them each frame.
     auto toolbarOwned = std::make_unique<bimeup::ui::Toolbar>();
