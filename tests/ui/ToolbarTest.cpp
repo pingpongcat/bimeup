@@ -193,6 +193,39 @@ TEST(ToolbarTest, ActivatingMeasureDeactivatesPointOfView) {
     EXPECT_FALSE(povState);
 }
 
+TEST(ToolbarTest, MeasurementsVisibleDefaultsOn) {
+    Toolbar toolbar;
+    EXPECT_TRUE(toolbar.AreMeasurementsVisible());
+}
+
+TEST(ToolbarTest, TriggerMeasurementsVisibleUpdatesStateAndInvokesCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    bool received = true;
+    toolbar.SetOnMeasurementsVisibilityChanged([&](bool visible) {
+        received = visible;
+        ++calls;
+    });
+    toolbar.TriggerMeasurementsVisible(false);
+    EXPECT_FALSE(toolbar.AreMeasurementsVisible());
+    EXPECT_FALSE(received);
+    EXPECT_EQ(calls, 1);
+
+    toolbar.TriggerMeasurementsVisible(true);
+    EXPECT_TRUE(toolbar.AreMeasurementsVisible());
+    EXPECT_TRUE(received);
+    EXPECT_EQ(calls, 2);
+}
+
+TEST(ToolbarTest, SetMeasurementsVisibleDoesNotFireCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    toolbar.SetOnMeasurementsVisibilityChanged([&](bool) { ++calls; });
+    toolbar.SetMeasurementsVisible(false);  // external sync — no callback
+    EXPECT_FALSE(toolbar.AreMeasurementsVisible());
+    EXPECT_EQ(calls, 0);
+}
+
 TEST(ToolbarTest, DeactivatingOneDoesNotToggleTheOther) {
     Toolbar toolbar;
     int measureCalls = 0;

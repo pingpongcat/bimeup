@@ -537,6 +537,11 @@ int main(int argc, char* argv[]) {
     bool pointOfViewArmed = false;
     bool firstPersonActive = false;
 
+    // While PoV is active we hide measurements instead of deleting them so
+    // they reappear when the user exits. Snapshot of the per-item `visible`
+    // flags taken at PoV-on, restored at PoV-off.
+    std::vector<bool> measurementVisibilitySnapshot;
+
     // Assigned after the toolbar exists (line ~1010). Declared here so the
     // input handlers registered below can route Esc / the exit button
     // through the same path.
@@ -1016,23 +1021,41 @@ int main(int argc, char* argv[]) {
         measureSnapIsVertex = false;
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
+    toolbar->SetOnMeasurementsVisibilityChanged([&](bool visible) {
+        measureTool.SetAllVisibility(visible);
+        LOG_INFO("Show Measurements: {}", visible ? "on" : "off");
+    });
     toolbar->SetOnPointOfViewChanged([&](bool active) {
         if (!sceneResult) {
             return;
         }
         pointOfViewArmed = active;
         if (active) {
-            // Measurements would clutter the first-person view and the
-            // Toolbar has already turned Measure mode off via mutual
-            // exclusion; drop any stored segments too.
+            // Hide measurements so they don't clutter the first-person
+            // view, but preserve per-item visibility so exiting PoV brings
+            // them back in the exact state the user left them in. The
+            // Toolbar has already flipped Measure mode off via mutex.
             measureTool.Cancel();
-            measureTool.ClearMeasurements();
             measureSnapPoint.reset();
             measureSnapIsVertex = false;
+            const auto& items = measureTool.GetMeasurements();
+            measurementVisibilitySnapshot.clear();
+            measurementVisibilitySnapshot.reserve(items.size());
+            for (const auto& r : items) {
+                measurementVisibilitySnapshot.push_back(r.visible);
+            }
+            measureTool.SetAllVisibility(false);
             bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.2F);
         } else {
             bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
             firstPersonActive = false;
+            const auto& items = measureTool.GetMeasurements();
+            for (std::size_t i = 0; i < items.size() &&
+                                    i < measurementVisibilitySnapshot.size();
+                 ++i) {
+                measureTool.SetVisibility(i, measurementVisibilitySnapshot[i]);
+            }
+            measurementVisibilitySnapshot.clear();
         }
         hoverDiskValid = false;
         LOG_INFO("Point of View: {}", active ? "on" : "off");
@@ -1217,6 +1240,16 @@ int main(int argc, char* argv[]) {
                                       measureSnapIsVertex);
         }
         toolbar->SetRenderMode(renderMode);
+        {
+            // Reflect whether any measurement is currently visible. An empty
+            // list counts as "visible" (default-on) so the checkbox stays
+            // checked until the user toggles it.
+            const auto& items = measureTool.GetMeasurements();
+            const bool anyVisible =
+                items.empty() || std::any_of(items.begin(), items.end(),
+                                             [](const auto& r) { return r.visible; });
+            toolbar->SetMeasurementsVisible(anyVisible);
+        }
 
         // 7.10d — First-person minimal UI. On entering FPS we snapshot every
         // main panel's current visibility and hide it; on exit we restore.

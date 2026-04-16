@@ -15,6 +15,7 @@ public:
     using FrameSelectedCallback = std::function<void()>;
     using MeasureModeCallback = std::function<void(bool active)>;
     using PointOfViewCallback = std::function<void(bool active)>;
+    using MeasurementsVisibleCallback = std::function<void(bool visible)>;
 
     Toolbar() = default;
 
@@ -27,12 +28,15 @@ public:
     void SetOnFrameSelected(FrameSelectedCallback callback);
     void SetOnMeasureModeChanged(MeasureModeCallback callback);
     void SetOnPointOfViewChanged(PointOfViewCallback callback);
+    void SetOnMeasurementsVisibilityChanged(MeasurementsVisibleCallback callback);
 
     [[nodiscard]] renderer::RenderMode GetRenderMode() const;
     void SetRenderMode(renderer::RenderMode mode);
 
     [[nodiscard]] bool IsMeasureModeActive() const { return m_measureModeActive; }
     [[nodiscard]] bool IsPointOfViewActive() const { return m_pointOfViewActive; }
+    [[nodiscard]] bool AreMeasurementsVisible() const { return m_measurementsVisible; }
+    void SetMeasurementsVisible(bool visible) { m_measurementsVisible = visible; }
 
     void TriggerOpenFile();
     void TriggerRenderMode(renderer::RenderMode mode);
@@ -40,17 +44,20 @@ public:
     void TriggerFrameSelected();
     void TriggerMeasureMode(bool active);
     void TriggerPointOfView(bool active);
+    void TriggerMeasurementsVisible(bool visible);
 
 private:
     renderer::RenderMode m_renderMode = renderer::RenderMode::Shaded;
     bool m_measureModeActive = false;
     bool m_pointOfViewActive = false;
+    bool m_measurementsVisible = true;
     OpenFileCallback m_onOpenFile;
     RenderModeCallback m_onRenderModeChanged;
     FitToViewCallback m_onFitToView;
     FrameSelectedCallback m_onFrameSelected;
     MeasureModeCallback m_onMeasureModeChanged;
     PointOfViewCallback m_onPointOfViewChanged;
+    MeasurementsVisibleCallback m_onMeasurementsVisibilityChanged;
 };
 
 }  // namespace bimeup::ui
