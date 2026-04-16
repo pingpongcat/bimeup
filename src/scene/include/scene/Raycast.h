@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "SceneMesh.h"
 
+#include <functional>
 #include <optional>
 #include <span>
 
@@ -35,8 +36,17 @@ std::optional<float> RayTriangleIntersect(const Ray& ray,
                                           const glm::vec3& v1,
                                           const glm::vec3& v2);
 
+/// Predicate-filtered node test. Returning false excludes the node from
+/// candidates; candidates still have to pass the visibility check.
+using NodeFilter = std::function<bool(const SceneNode&)>;
+
 std::optional<RayHit> RaycastScene(const Ray& ray,
                                    const Scene& scene,
                                    std::span<const SceneMesh> meshes);
+
+std::optional<RayHit> RaycastScene(const Ray& ray,
+                                   const Scene& scene,
+                                   std::span<const SceneMesh> meshes,
+                                   const NodeFilter& filter);
 
 } // namespace bimeup::scene

@@ -249,6 +249,44 @@ TEST(RaycastTest, AttachedMeshHitReturnsWorldSpaceTriangleVertices) {
     EXPECT_FLOAT_EQ(hit->triV1.x, 11.0f);
 }
 
+// Fix #2 — PoV placement needs to see the slab even when a wall stands in
+// front of it. The type-filtered overload skips non-matching elements so the
+// hover disk / teleport click finds the slab behind them.
+TEST(RaycastTest, RaycastSceneFilterSkipsNonMatchingElements) {
+    Scene scene;
+    std::vector<SceneMesh> meshes;
+    meshes.push_back(MakeQuadMesh());
+
+    // Wall in front (z=-2), Slab behind (z=2). Without a filter, the wall is
+    // the closest hit and wins.
+    SceneNode wall;
+    wall.ifcType = "IfcWall";
+    wall.mesh = 0;
+    wall.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -2.0f));
+    wall.bounds = AABB(glm::vec3(-1.0f, -1.0f, -2.0f), glm::vec3(1.0f, 1.0f, -2.0f));
+    NodeId wallId = scene.AddNode(wall);
+
+    SceneNode slab;
+    slab.ifcType = "IfcSlab";
+    slab.mesh = 0;
+    slab.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 2.0f));
+    slab.bounds = AABB(glm::vec3(-1.0f, -1.0f, 2.0f), glm::vec3(1.0f, 1.0f, 2.0f));
+    NodeId slabId = scene.AddNode(slab);
+
+    Ray ray{glm::vec3(0.0f, 0.0f, -10.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+
+    // Without filter: closest (wall) wins.
+    auto unfiltered = RaycastScene(ray, scene, meshes);
+    ASSERT_TRUE(unfiltered.has_value());
+    EXPECT_EQ(unfiltered->nodeId, wallId);
+
+    // With filter restricting to IfcSlab: slab wins even though wall is closer.
+    NodeFilter slabOnly = [](const SceneNode& n) { return n.ifcType == "IfcSlab"; };
+    auto filtered = RaycastScene(ray, scene, meshes, slabOnly);
+    ASSERT_TRUE(filtered.has_value());
+    EXPECT_EQ(filtered->nodeId, slabId);
+}
+
 TEST(RaycastTest, RaycastSceneMissReturnsNullopt) {
     Scene scene;
     std::vector<SceneMesh> meshes;

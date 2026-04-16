@@ -549,7 +549,7 @@ int main(int argc, char* argv[]) {
     glm::vec3 hoverDiskCenter(0.0F);
     glm::vec3 hoverDiskNormal(0.0F, 1.0F, 0.0F);
     constexpr float kHoverDiskRadius = 0.35F;
-    const glm::vec4 kHoverDiskColor(0.25F, 0.85F, 1.0F, 0.55F);
+    const glm::vec4 kHoverDiskColor(0.70F, 0.30F, 0.95F, 0.60F);
 
     // Shared helpers for picking. These capture references to the renderer/scene state used each frame.
     auto buildViewProj = [&]() {
@@ -620,11 +620,15 @@ int main(int argc, char* argv[]) {
                 }
             } else if (pointOfViewArmed) {
                 // PoV-armed: click on an IfcSlab top face teleports to hit + (0,1.5,0),
-                // gaze along +Z. Non-slab / non-top hits are no-ops (no selection).
+                // gaze along +Z. Filter to IfcSlab so walls/other elements between
+                // the camera and the floor don't block the hit. Non-top slab hits
+                // (underside) still fall through as no-ops.
                 auto [view, proj] = buildViewProj();
                 auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
+                bimeup::scene::NodeFilter slabOnly =
+                    [](const bimeup::scene::SceneNode& n) { return n.ifcType == "IfcSlab"; };
                 if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
-                                                          sceneResult->meshes)) {
+                                                          sceneResult->meshes, slabOnly)) {
                     const auto& node = sceneResult->scene.GetNode(hit->nodeId);
                     glm::vec3 n = glm::cross(hit->triV1 - hit->triV0, hit->triV2 - hit->triV0);
                     const float nlen = glm::length(n);
@@ -705,12 +709,14 @@ int main(int argc, char* argv[]) {
                 }
             } else if (pointOfViewArmed && !firstPersonActive) {
                 // PoV preview: drop the disk on IfcSlab top faces under the
-                // cursor. Same accept rule as the click handler so what you
-                // see is what you'll teleport onto.
+                // cursor. Filter to IfcSlab so walls/other occluders don't
+                // stop the ray from landing on the floor behind them.
                 auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
                 hoverDiskValid = false;
+                bimeup::scene::NodeFilter slabOnly =
+                    [](const bimeup::scene::SceneNode& n) { return n.ifcType == "IfcSlab"; };
                 if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
-                                                          sceneResult->meshes)) {
+                                                          sceneResult->meshes, slabOnly)) {
                     const auto& node = sceneResult->scene.GetNode(hit->nodeId);
                     glm::vec3 n = glm::cross(hit->triV1 - hit->triV0,
                                              hit->triV2 - hit->triV0);

@@ -109,9 +109,15 @@ AABB TransformAABB(const AABB& box, const glm::mat4& transform) {
 
 std::optional<RayHit> RaycastScene(const Ray& ray,
                                    const Scene& scene,
-                                   std::span<const SceneMesh> meshes) {
+                                   std::span<const SceneMesh> meshes,
+                                   const NodeFilter& filter) {
     std::optional<RayHit> best;
     size_t nodeCount = scene.GetNodeCount();
+
+    auto accept = [&](const SceneNode& n) {
+        if (!n.visible) return false;
+        return !filter || filter(n);
+    };
 
     // Baked-mesh path: meshes whose triangleOwners are set are assumed to be in
     // world-space already (output of SceneBuilder batching), and each triangle
@@ -133,7 +139,7 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
             NodeId owner = owners[tri];
             if (owner >= nodeCount) continue;
             const SceneNode& ownerNode = scene.GetNode(owner);
-            if (!ownerNode.visible) continue;
+            if (!accept(ownerNode)) continue;
 
             const glm::vec3& v0 = positions[indices[tri * 3]];
             const glm::vec3& v1 = positions[indices[tri * 3 + 1]];
@@ -157,7 +163,7 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
     // Attached-mesh path: legacy per-node iteration for meshes without owners.
     for (NodeId id = 0; id < nodeCount; ++id) {
         const SceneNode& node = scene.GetNode(id);
-        if (!node.visible || !node.mesh.has_value()) {
+        if (!node.mesh.has_value() || !accept(node)) {
             continue;
         }
         MeshHandle handle = *node.mesh;
@@ -199,6 +205,12 @@ std::optional<RayHit> RaycastScene(const Ray& ray,
     }
 
     return best;
+}
+
+std::optional<RayHit> RaycastScene(const Ray& ray,
+                                   const Scene& scene,
+                                   std::span<const SceneMesh> meshes) {
+    return RaycastScene(ray, scene, meshes, NodeFilter{});
 }
 
 } // namespace bimeup::scene
