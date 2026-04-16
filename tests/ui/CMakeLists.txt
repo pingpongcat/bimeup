@@ -1,5 +1,6 @@
 add_executable(ui_tests
     ClipPlanesPanelTest.cpp
+    FirstPersonExitPanelTest.cpp
     HierarchyPanelTest.cpp
     ImGuiContextTest.cpp
     ImGuizmoIntegrationTest.cpp

@@ -38,6 +38,7 @@
 #include <scene/SectionCapGeometry.h>
 #include <tools/Log.h>
 #include <ui/ClipPlanesPanel.h>
+#include <ui/FirstPersonExitPanel.h>
 #include <ui/PlanViewPanel.h>
 #include <ui/HierarchyPanel.h>
 #include <ui/MeasurementsPanel.h>
@@ -531,6 +532,11 @@ int main(int argc, char* argv[]) {
     bool pointOfViewArmed = false;
     bool firstPersonActive = false;
 
+    // Assigned after the toolbar exists (line ~1010). Declared here so the
+    // input handlers registered below can route Esc / the exit button
+    // through the same path.
+    std::function<void()> exitFirstPerson;
+
     // Hover disk preview: the mouse-move handler tags the last valid slab hit
     // while PoV is armed (and FPC isn't already driving the camera). The main
     // loop rebuilds the GPU buffer from this state and draws the disk.
@@ -624,6 +630,9 @@ int main(int argc, char* argv[]) {
                         fpc.SetYawPitch(glm::pi<float>(), 0.0F);
                         firstPersonActive = true;
                         hoverDiskValid = false;
+                        // Teleport drops us into the scene; restore full opacity
+                        // so the walking experience isn't see-through.
+                        bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
                         fpc.ApplyTo(camera);
                         LOG_INFO("PoV teleport: ({:.2f},{:.2f},{:.2f})",
                                  fpc.GetPosition().x, fpc.GetPosition().y, fpc.GetPosition().z);
@@ -726,7 +735,17 @@ int main(int argc, char* argv[]) {
 
     input.OnKey([&](bimeup::platform::Key key, bool pressed) {
         if (key == bimeup::platform::Key::Escape && pressed) {
-            glfwSetWindowShouldClose(window.GetHandle(), GLFW_TRUE);
+            if (firstPersonActive) {
+                exitFirstPerson();
+            } else {
+                glfwSetWindowShouldClose(window.GetHandle(), GLFW_TRUE);
+            }
+            return;
+        }
+        // While walking, swallow every other key so W doesn't flip wireframe,
+        // Home doesn't yank the camera, etc. Movement is polled separately.
+        if (firstPersonActive) {
+            return;
         }
         if (key == bimeup::platform::Key::W && pressed) {
             renderMode = (renderMode == bimeup::renderer::RenderMode::Shaded)
@@ -824,6 +843,7 @@ int main(int argc, char* argv[]) {
     auto clipPlanesOwned = std::make_unique<bimeup::ui::ClipPlanesPanel>();
     auto planViewOwned = std::make_unique<bimeup::ui::PlanViewPanel>();
     auto typeVisibilityOwned = std::make_unique<bimeup::ui::TypeVisibilityPanel>();
+    auto firstPersonExitOwned = std::make_unique<bimeup::ui::FirstPersonExitPanel>();
 
     auto* toolbar = toolbarOwned.get();
     auto* hierarchyPanel = hierarchyOwned.get();
@@ -834,6 +854,7 @@ int main(int argc, char* argv[]) {
     auto* clipPlanesPanel = clipPlanesOwned.get();
     planViewPanel = planViewOwned.get();
     auto* typeVisibilityPanel = typeVisibilityOwned.get();
+    auto* firstPersonExitPanel = firstPersonExitOwned.get();
     typeVisibilityPanel->SetScene(&sceneResult->scene);
     typeVisibilityPanel->ApplyDefaults();
     measurementsPanel->SetTool(&measureTool);
@@ -950,6 +971,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(clipPlanesOwned));
     uiManager.AddPanel(std::move(planViewOwned));
     uiManager.AddPanel(std::move(typeVisibilityOwned));
+    uiManager.AddPanel(std::move(firstPersonExitOwned));
 
     toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
         renderMode = mode;
@@ -997,6 +1019,19 @@ int main(int argc, char* argv[]) {
         hoverDiskValid = false;
         LOG_INFO("Point of View: {}", active ? "on" : "off");
     });
+
+    // Exits first-person mode: flips the toolbar checkbox off (which clears
+    // ghost alpha + firstPersonActive via its callback) and frames the scene
+    // so the user sees the whole model again. No-op outside FPS. Stored in
+    // the std::function declared up-top so the Esc handler can share it.
+    exitFirstPerson = [&] {
+        if (!firstPersonActive) {
+            return;
+        }
+        toolbar->TriggerPointOfView(false);
+        fitToViewRequested = true;
+    };
+    firstPersonExitPanel->SetOnExit(exitFirstPerson);
 
     // Depth-only shadow pass — recorded before the main render pass each frame
     // when shadows are enabled. Renders scene geometry from the key light's POV
@@ -1165,6 +1200,34 @@ int main(int argc, char* argv[]) {
         }
         toolbar->SetRenderMode(renderMode);
 
+        // 7.10d — First-person minimal UI. On entering FPS we snapshot every
+        // main panel's current visibility and hide it; on exit we restore.
+        // Only the first-person exit overlay is shown while FPS is active.
+        {
+            static bool wasFirstPersonActive = false;
+            static std::vector<std::pair<bimeup::ui::Panel*, bool>> savedVisibility;
+            bimeup::ui::Panel* mainPanels[] = {
+                toolbar,            hierarchyPanel,   propertyPanel,
+                overlay,            measurementsPanel, renderQualityPanel,
+                clipPlanesPanel,    planViewPanel,    typeVisibilityPanel,
+            };
+            if (firstPersonActive && !wasFirstPersonActive) {
+                savedVisibility.clear();
+                for (auto* p : mainPanels) {
+                    savedVisibility.emplace_back(p, p->IsVisible());
+                    p->SetVisible(false);
+                }
+                firstPersonExitPanel->Open();
+            } else if (!firstPersonActive && wasFirstPersonActive) {
+                for (auto& [p, v] : savedVisibility) {
+                    p->SetVisible(v);
+                }
+                savedVisibility.clear();
+                firstPersonExitPanel->Close();
+            }
+            wasFirstPersonActive = firstPersonActive;
+        }
+
         // ImGuizmo expects GL-convention NDC (Y up); Camera::GetProjectionMatrix
         // pre-flips Y for Vulkan, so undo that before handing it to the gizmo code.
         glm::mat4 gizmoProj = camera.GetProjectionMatrix();
@@ -1176,7 +1239,8 @@ int main(int argc, char* argv[]) {
         // ImGuizmo view cube: top-right, 128 px square. Captures drags on the
         // cube and mutates the view matrix; we extract yaw/pitch back onto the
         // orbit camera so the next frame's camera.GetViewMatrix() matches.
-        {
+        // Hidden during first-person mode so the exit button owns the corner.
+        if (!firstPersonActive) {
             const auto ws = windowSize();
             constexpr float kCubeSize = 128.0F;
             const ImVec2 cubePos(ws.x - kCubeSize - 10.0F, 10.0F);
