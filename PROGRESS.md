@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.10c.3 — Hover disk marker preview (new pipeline + shader)
+## Current Task: 7.10c.4 — CPU-side hover disk geometry + per-frame upload + draw
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -134,7 +134,7 @@
   - [ ] 7.10c Viewpoint placement — click on an `IfcSlab` top face while PoV-armed teleports camera to hit + (0,1.5,0), gaze along +Z. New `renderer::FirstPersonController` (yaw/pitch from mouse, WASD/arrow translation). Circular flat disk marker rendered at cursor as hover preview.
     - [x] 7.10c.1 `renderer::FirstPersonController` — pure yaw/pitch + WASD logic independent of `Camera`. `SetPosition`/`SetYawPitch`, `Look(mouseDelta, sensitivity)`, `Move(localInput, dt, speed)`, `GetForward`, `ApplyTo(camera)` (sets orbit-camera target+distance so `camera.GetPosition() == fpc.GetPosition()` and gaze matches). Pitch clamped to ±π/2−ε. Horizontal walking (pitch ignored). 14 unit tests.
     - [x] 7.10c.2 Teleport on IfcSlab click + WASD/mouselook wiring in `main.cpp`. New `pointOfViewArmed` mirror flag and `firstPersonActive` state. Toolbar PoV toggle writes `pointOfViewArmed` and clears `firstPersonActive` on off. Left-click while armed: raycast; if hit node `ifcType == "IfcSlab"`, ray came from above (`ray.dir.y < 0`), and `|n.y| > 0.7` (horizontal face), teleport to `hit.point + (0,1.5,0)` with yaw=π (gaze +Z). Mouse-move while `firstPersonActive` calls `fpc.Look` (sensitivity 0.003 rad/px) — bypasses orbit/hover. Per-frame WASD/arrows poll `Input::IsKeyDown` and feed `fpc.Move` at 3 m/s. Scroll-zoom disabled in FPS. Visual verification deferred to the user (UI behavior). Renderer+UI tests green (28/28).
-    - [ ] 7.10c.3 Hover disk marker — flat circular disk at cursor hit on IfcSlab top face while PoV-armed (new `renderer::DiskMarkerPipeline` + shader, billboard-free geometry on the slab plane).
+    - [x] 7.10c.3 `renderer::DiskMarkerPipeline` + `disk_marker.{vert,frag}` shaders — flat-color pipeline for a pre-triangulated disk (`DiskVertex`: vec3 position + vec4 color). Depth LEQUAL / write-off, CULL_NONE, alpha-blend ON so per-vertex alpha fades to a soft edge; single camera UBO descriptor set (matches `SectionFillPipeline`). 4 Vulkan integration tests (shader-SPIR-V presence, construction, MSAA 4×, RAII). CPU geometry + per-frame upload + draw deferred to 7.10c.4.
   - [ ] 7.10d Minimal in-flight UI — hide panels/overlays during first-person mode, show only top-right "Exit Point of View" button; Esc also exits. Exit clears ghost-mode alphas and Fit-to-View's the camera.
 
 ## Stage R — Render Quality
