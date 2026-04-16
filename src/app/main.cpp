@@ -15,6 +15,8 @@
 #include <renderer/MeshBuffer.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
+#include <renderer/DiskMarker.h>
+#include <renderer/DiskMarkerPipeline.h>
 #include <renderer/FirstPersonController.h>
 #include <renderer/Lighting.h>
 #include <renderer/Msaa.h>
@@ -198,6 +200,10 @@ int main(int argc, char* argv[]) {
                                                    shaderDir + "/section_fill.vert.spv");
     bimeup::renderer::Shader sectionFillFragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                                    shaderDir + "/section_fill.frag.spv");
+    bimeup::renderer::Shader diskMarkerVertShader(device, bimeup::renderer::ShaderStage::Vertex,
+                                                  shaderDir + "/disk_marker.vert.spv");
+    bimeup::renderer::Shader diskMarkerFragShader(device, bimeup::renderer::ShaderStage::Fragment,
+                                                  shaderDir + "/disk_marker.frag.spv");
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     //                 + clip planes UBO (fragment)
@@ -354,6 +360,18 @@ int main(int argc, char* argv[]) {
     buildSectionFillPipeline();
 
     bimeup::scene::SectionCapGeometry sectionCapGeometry(device);
+
+    // Disk marker pipeline + GPU buffer for the PoV hover preview. Rebuilt on
+    // MSAA change alongside the other scene pipelines.
+    std::unique_ptr<bimeup::renderer::DiskMarkerPipeline> diskMarkerPipeline;
+    auto buildDiskMarkerPipeline = [&] {
+        diskMarkerPipeline = std::make_unique<bimeup::renderer::DiskMarkerPipeline>(
+            device, diskMarkerVertShader, diskMarkerFragShader,
+            renderLoop.GetRenderPass(), dsLayout.GetLayout(),
+            renderLoop.GetSampleCount());
+    };
+    buildDiskMarkerPipeline();
+    bimeup::renderer::DiskMarkerBuffer diskMarkerBuffer(device);
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
     VkPushConstantRange shadowPushRange{};
@@ -513,6 +531,15 @@ int main(int argc, char* argv[]) {
     bool pointOfViewArmed = false;
     bool firstPersonActive = false;
 
+    // Hover disk preview: the mouse-move handler tags the last valid slab hit
+    // while PoV is armed (and FPC isn't already driving the camera). The main
+    // loop rebuilds the GPU buffer from this state and draws the disk.
+    bool hoverDiskValid = false;
+    glm::vec3 hoverDiskCenter(0.0F);
+    glm::vec3 hoverDiskNormal(0.0F, 1.0F, 0.0F);
+    constexpr float kHoverDiskRadius = 0.35F;
+    const glm::vec4 kHoverDiskColor(0.25F, 0.85F, 1.0F, 0.55F);
+
     // Shared helpers for picking. These capture references to the renderer/scene state used each frame.
     auto buildViewProj = [&]() {
         glm::mat4 proj = camera.GetProjectionMatrix();
@@ -596,6 +623,7 @@ int main(int argc, char* argv[]) {
                         fpc.SetPosition(hit->point + glm::vec3(0.0F, 1.5F, 0.0F));
                         fpc.SetYawPitch(glm::pi<float>(), 0.0F);
                         firstPersonActive = true;
+                        hoverDiskValid = false;
                         fpc.ApplyTo(camera);
                         LOG_INFO("PoV teleport: ({:.2f},{:.2f},{:.2f})",
                                  fpc.GetPosition().x, fpc.GetPosition().y, fpc.GetPosition().z);
@@ -660,6 +688,27 @@ int main(int argc, char* argv[]) {
                 } else {
                     measureSnapPoint.reset();
                     measureSnapIsVertex = false;
+                }
+            } else if (pointOfViewArmed && !firstPersonActive) {
+                // PoV preview: drop the disk on IfcSlab top faces under the
+                // cursor. Same accept rule as the click handler so what you
+                // see is what you'll teleport onto.
+                auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
+                hoverDiskValid = false;
+                if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
+                                                          sceneResult->meshes)) {
+                    const auto& node = sceneResult->scene.GetNode(hit->nodeId);
+                    glm::vec3 n = glm::cross(hit->triV1 - hit->triV0,
+                                             hit->triV2 - hit->triV0);
+                    const float nlen = glm::length(n);
+                    if (nlen > 0.0F) n /= nlen;
+                    if (n.y < 0.0F) n = -n;  // orient up so the disk faces +Y.
+                    const bool topFace = ray.direction.y < 0.0F && std::abs(n.y) > 0.7F;
+                    if (node.ifcType == "IfcSlab" && topFace) {
+                        hoverDiskValid = true;
+                        hoverDiskCenter = hit->point;
+                        hoverDiskNormal = n;
+                    }
                 }
             } else {
                 bimeup::core::HoverElement(sp, windowSize(), view, proj, sceneResult->scene,
@@ -945,6 +994,7 @@ int main(int argc, char* argv[]) {
             bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
             firstPersonActive = false;
         }
+        hoverDiskValid = false;
         LOG_INFO("Point of View: {}", active ? "on" : "off");
     });
 
@@ -1091,6 +1141,7 @@ int main(int argc, char* argv[]) {
                 currentSamples = desired;
                 buildPipelines(shadedPipeline, wireframePipeline, transparentPipeline);
                 buildSectionFillPipeline();
+                buildDiskMarkerPipeline();
                 initImGui();
                 // Reflect the clamped value back to the panel so the UI doesn't
                 // claim e.g. 8x when the device only supports 4x.
@@ -1262,6 +1313,23 @@ int main(int argc, char* argv[]) {
                     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
                     vkCmdDraw(cmd, sectionCapGeometry.GetVertexCount(), 1, 0, 0);
                 }
+            }
+        }
+
+        // Hover disk preview — drawn while PoV is armed and the cursor is over
+        // an IfcSlab top face (state set by the mouse-move handler). Lift the
+        // disk ~2mm along the slab normal so it doesn't z-fight the slab.
+        if (hoverDiskValid) {
+            const glm::vec3 liftedCenter = hoverDiskCenter + hoverDiskNormal * 0.002F;
+            diskMarkerBuffer.Rebuild(liftedCenter, hoverDiskNormal, kHoverDiskRadius,
+                                     kHoverDiskColor);
+            if (!diskMarkerBuffer.IsEmpty()) {
+                diskMarkerPipeline->Bind(cmd);
+                descriptorSet.Bind(cmd, diskMarkerPipeline->GetLayout());
+                VkBuffer vb = diskMarkerBuffer.GetVertexBuffer();
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+                vkCmdDraw(cmd, diskMarkerBuffer.GetVertexCount(), 1, 0, 0);
             }
         }
 
