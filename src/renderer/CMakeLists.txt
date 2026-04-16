@@ -16,6 +16,7 @@ add_library(bimeup_renderer STATIC
     src/Msaa.cpp
     src/ShadowPass.cpp
     src/ViewportNavigator.cpp
+    src/FirstPersonController.cpp
     src/ClipPlane.cpp
     src/ClipPlaneManager.cpp
     src/SectionFillPipeline.cpp

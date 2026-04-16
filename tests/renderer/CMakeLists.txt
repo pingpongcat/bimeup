@@ -17,6 +17,7 @@ add_executable(renderer_tests
     MsaaTest.cpp
     ShadowPassTest.cpp
     ViewportNavigatorTest.cpp
+    FirstPersonControllerTest.cpp
     ClipPlaneTest.cpp
     ClipPlaneManagerTest.cpp
     SectionFillPipelineTest.cpp
