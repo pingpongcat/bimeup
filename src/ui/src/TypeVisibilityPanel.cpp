@@ -61,21 +61,6 @@ void TypeVisibilityPanel::ReapplyToScene() {
     }
 }
 
-void TypeVisibilityPanel::SetTypeAlphaOverride(const std::string& ifcType, float alpha) {
-    if (m_scene == nullptr) return;
-    m_scene->SetTypeAlphaOverride(ifcType, alpha);
-}
-
-void TypeVisibilityPanel::ClearTypeAlphaOverride(const std::string& ifcType) {
-    if (m_scene == nullptr) return;
-    m_scene->ClearTypeAlphaOverride(ifcType);
-}
-
-std::optional<float> TypeVisibilityPanel::GetTypeAlphaOverride(const std::string& ifcType) const {
-    if (m_scene == nullptr) return std::nullopt;
-    return m_scene->GetTypeAlphaOverride(ifcType);
-}
-
 void TypeVisibilityPanel::OnDraw() {
     if (!ImGui::Begin(GetName())) {
         ImGui::End();
@@ -102,24 +87,6 @@ void TypeVisibilityPanel::OnDraw() {
         if (ImGui::Checkbox(t.c_str(), &v)) {
             SetTypeVisible(t, v);
         }
-        ImGui::SameLine();
-        auto current = GetTypeAlphaOverride(t);
-        bool alphaEnabled = current.has_value();
-        if (ImGui::Checkbox("a", &alphaEnabled)) {
-            if (alphaEnabled) {
-                SetTypeAlphaOverride(t, current.value_or(0.5f));
-            } else {
-                ClearTypeAlphaOverride(t);
-            }
-        }
-        ImGui::SameLine();
-        float value = current.value_or(1.0f);
-        ImGui::BeginDisabled(!current.has_value());
-        ImGui::SetNextItemWidth(100.0f);
-        if (ImGui::SliderFloat("##alpha", &value, 0.0f, 1.0f, "%.2f")) {
-            SetTypeAlphaOverride(t, value);
-        }
-        ImGui::EndDisabled();
         ImGui::PopID();
     }
     ImGui::End();

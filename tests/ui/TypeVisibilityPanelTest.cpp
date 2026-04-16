@@ -109,47 +109,4 @@ TEST(TypeVisibilityPanelTest, RefreshPicksUpNewTypes) {
     EXPECT_EQ(panel.GetTypes().size(), 2u);
 }
 
-// ----- 7.8d.3 Per-type alpha override -------------------------------------
-
-TEST(TypeVisibilityPanelAlphaTest, SetTypeAlphaOverrideWritesToScene) {
-    Scene scene = MakeThreeTypeScene();
-    TypeVisibilityPanel panel;
-    panel.SetScene(&scene);
-
-    panel.SetTypeAlphaOverride("IfcWall", 0.3f);
-    ASSERT_TRUE(panel.GetTypeAlphaOverride("IfcWall").has_value());
-    EXPECT_FLOAT_EQ(*panel.GetTypeAlphaOverride("IfcWall"), 0.3f);
-    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWall").has_value());
-    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.3f);
-}
-
-TEST(TypeVisibilityPanelAlphaTest, ClearTypeAlphaOverrideClearsInScene) {
-    Scene scene = MakeThreeTypeScene();
-    TypeVisibilityPanel panel;
-    panel.SetScene(&scene);
-
-    panel.SetTypeAlphaOverride("IfcSlab", 0.4f);
-    panel.ClearTypeAlphaOverride("IfcSlab");
-    EXPECT_FALSE(panel.GetTypeAlphaOverride("IfcSlab").has_value());
-    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
-}
-
-TEST(TypeVisibilityPanelAlphaTest, GetTypeAlphaOverrideReflectsSceneState) {
-    Scene scene = MakeThreeTypeScene();
-    scene.SetTypeAlphaOverride("IfcDoor", 0.75f);
-    TypeVisibilityPanel panel;
-    panel.SetScene(&scene);
-
-    ASSERT_TRUE(panel.GetTypeAlphaOverride("IfcDoor").has_value());
-    EXPECT_FLOAT_EQ(*panel.GetTypeAlphaOverride("IfcDoor"), 0.75f);
-    EXPECT_FALSE(panel.GetTypeAlphaOverride("IfcWall").has_value());
-}
-
-TEST(TypeVisibilityPanelAlphaTest, NoSceneMeansNoOp) {
-    TypeVisibilityPanel panel;
-    panel.SetTypeAlphaOverride("IfcWall", 0.5f);
-    EXPECT_FALSE(panel.GetTypeAlphaOverride("IfcWall").has_value());
-    panel.ClearTypeAlphaOverride("IfcWall");  // must not crash
-}
-
 }  // namespace

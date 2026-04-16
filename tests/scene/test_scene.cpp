@@ -340,6 +340,16 @@ TEST(SceneTest, DefaultHiddenTypesContainsNonVisualTypes) {
     EXPECT_TRUE(has("IfcOpeningElement"));
 }
 
+// 7.10a — Default type-alpha overrides. Applied once on scene load so windows
+// always render as glass even without per-type UI control.
+TEST(SceneTest, DefaultTypeAlphaOverridesMarksIfcWindowAsGlass) {
+    const auto& defaults = DefaultTypeAlphaOverrides();
+    auto it = std::find_if(defaults.begin(), defaults.end(),
+                           [](const auto& p) { return p.first == "IfcWindow"; });
+    ASSERT_NE(it, defaults.end());
+    EXPECT_FLOAT_EQ(it->second, 0.4F);
+}
+
 TEST(SceneTest, MultipleChildrenOrdering) {
     Scene scene;
 

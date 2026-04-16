@@ -136,6 +136,13 @@ const std::vector<std::string>& DefaultHiddenTypes() {
     return types;
 }
 
+const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides() {
+    static const std::vector<std::pair<std::string, float>> overrides = {
+        {"IfcWindow", 0.4F},
+    };
+    return overrides;
+}
+
 std::vector<NodeId> Scene::FindByType(const std::string& ifcType) const {
     std::vector<NodeId> result;
     for (const auto& node : nodes_) {

@@ -259,6 +259,11 @@ int main(int argc, char* argv[]) {
     builder.SetBatchingEnabled(true);
     sceneResult = builder.Build(ifcModel);
 
+    // Baseline per-type alpha (e.g. IfcWindow renders as glass at 0.4).
+    for (const auto& [ifcType, alpha] : bimeup::scene::DefaultTypeAlphaOverrides()) {
+        sceneResult->scene.SetTypeAlphaOverride(ifcType, alpha);
+    }
+
     // Snapshot node→sceneMeshIdx before Upload overwrites node.mesh with the
     // renderer handle — we still need the scene-mesh-index to find triangle
     // ownership when highlighting selected elements.
@@ -847,19 +852,6 @@ int main(int argc, char* argv[]) {
     auto selectionBridge = std::make_unique<bimeup::ui::SelectionBridge>(
         eventBus, *propertyPanel,
         [&ifcModel](uint32_t expressId) { return ifcModel.GetElement(expressId); });
-
-    propertyPanel->SetAlphaQuery([&](uint32_t expressId) -> std::optional<float> {
-        return sceneResult->scene.GetElementAlphaOverride(expressId);
-    });
-    propertyPanel->SetOnAlphaChange(
-        [&](uint32_t expressId, std::optional<float> alpha) {
-            if (alpha.has_value()) {
-                sceneResult->scene.SetElementAlphaOverride(expressId, *alpha);
-            } else {
-                sceneResult->scene.ClearElementAlphaOverride(expressId);
-            }
-            rebuildAlphaOverrides();
-        });
 
     uiManager.AddPanel(std::move(toolbarOwned));
     uiManager.AddPanel(std::move(hierarchyOwned));

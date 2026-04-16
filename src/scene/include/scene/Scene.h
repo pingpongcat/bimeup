@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace bimeup::scene {
@@ -67,5 +68,10 @@ private:
 /// IFC types that represent non-visual concepts (spatial volumes, openings, grids)
 /// and should be hidden by default on model load.
 const std::vector<std::string>& DefaultHiddenTypes();
+
+/// IFC types that should render with a baseline alpha override on load — e.g.
+/// IfcWindow as semi-transparent glass. Applied via `SetTypeAlphaOverride`
+/// after scene construction.
+const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides();
 
 } // namespace bimeup::scene

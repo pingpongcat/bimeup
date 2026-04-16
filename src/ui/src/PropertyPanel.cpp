@@ -15,39 +15,6 @@ const char* PropertyPanel::GetName() const {
 void PropertyPanel::SetElement(const ifc::IfcElement* element) {
     m_element = element;
     Rebuild();
-    if (m_element != nullptr && m_alphaQuery) {
-        m_alpha = m_alphaQuery(m_element->expressId);
-    } else {
-        m_alpha.reset();
-    }
-}
-
-void PropertyPanel::SetOnAlphaChange(AlphaCallback cb) {
-    m_onAlphaChange = std::move(cb);
-}
-
-void PropertyPanel::SetAlphaQuery(AlphaQuery q) {
-    m_alphaQuery = std::move(q);
-}
-
-void PropertyPanel::TriggerAlphaChange(float alpha) {
-    if (m_element == nullptr) {
-        return;
-    }
-    m_alpha = alpha;
-    if (m_onAlphaChange) {
-        m_onAlphaChange(m_element->expressId, m_alpha);
-    }
-}
-
-void PropertyPanel::TriggerClearAlpha() {
-    if (m_element == nullptr) {
-        return;
-    }
-    m_alpha.reset();
-    if (m_onAlphaChange) {
-        m_onAlphaChange(m_element->expressId, std::nullopt);
-    }
 }
 
 const ifc::IfcElement* PropertyPanel::GetElement() const {
@@ -106,23 +73,6 @@ void PropertyPanel::OnDraw() {
                 }
                 ImGui::EndTable();
             }
-            ImGui::Separator();
-            ImGui::TextUnformatted("Alpha override");
-            bool enabled = m_alpha.has_value();
-            if (ImGui::Checkbox("##alphaEnabled", &enabled)) {
-                if (enabled) {
-                    TriggerAlphaChange(m_alpha.value_or(0.5f));
-                } else {
-                    TriggerClearAlpha();
-                }
-            }
-            ImGui::SameLine();
-            float value = m_alpha.value_or(1.0f);
-            ImGui::BeginDisabled(!m_alpha.has_value());
-            if (ImGui::SliderFloat("##alpha", &value, 0.0f, 1.0f, "%.2f")) {
-                TriggerAlphaChange(value);
-            }
-            ImGui::EndDisabled();
         }
     }
     ImGui::End();
