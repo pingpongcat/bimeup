@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <poly2tri/poly2tri.h>
 
@@ -390,6 +391,46 @@ std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
             clean.pop_back();
             clean2d.pop_back();
         }
+    }
+    if (clean.size() < 3) return {};
+
+    // Dedupe non-adjacent near-duplicates via a quantised hash set. poly2tri
+    // infinitely recurses through FlipEdgeEvent (stack overflow, not a
+    // throwable error) when its input polyline contains duplicate vertices.
+    // IFC slices routinely produce them: two coplanar triangles sharing an
+    // edge deposit the same intersection endpoint twice, and endpoint welding
+    // in StitchSegments preserves those duplicates.
+    {
+        constexpr double kQuantEps = 1e-5;  // ~10 µm in model space
+        struct Key {
+            std::int64_t x;
+            std::int64_t y;
+            bool operator==(const Key& o) const { return x == o.x && y == o.y; }
+        };
+        struct KeyHash {
+            std::size_t operator()(const Key& k) const noexcept {
+                std::size_t h = std::hash<std::int64_t>{}(k.x);
+                h ^= std::hash<std::int64_t>{}(k.y) + 0x9e3779b97f4a7c15ULL +
+                     (h << 6) + (h >> 2);
+                return h;
+            }
+        };
+        std::unordered_set<Key, KeyHash> seen;
+        seen.reserve(clean.size() * 2);
+        std::vector<glm::vec3> uniq3;
+        std::vector<glm::vec2> uniq2;
+        uniq3.reserve(clean.size());
+        uniq2.reserve(clean.size());
+        for (std::size_t i = 0; i < clean.size(); ++i) {
+            const Key k{
+                static_cast<std::int64_t>(std::llround(clean2d[i].x / kQuantEps)),
+                static_cast<std::int64_t>(std::llround(clean2d[i].y / kQuantEps))};
+            if (!seen.insert(k).second) continue;
+            uniq3.push_back(clean[i]);
+            uniq2.push_back(clean2d[i]);
+        }
+        clean = std::move(uniq3);
+        clean2d = std::move(uniq2);
     }
     if (clean.size() < 3) return {};
 

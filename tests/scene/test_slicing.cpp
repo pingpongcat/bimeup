@@ -419,6 +419,38 @@ TEST(TriangulatePolygon, ArchProfileCoversAnalyticalArea) {
     EXPECT_NEAR(area, glm::pi<float>() / 2.0F, 5e-2F);
 }
 
+// Fix #4 — poly2tri stack-overflowed (infinite FlipEdgeEvent recursion) when
+// the input polyline contained non-adjacent duplicate vertices. IFC section
+// stitching produces these on boundary-sharing coplanar triangles. The
+// triangulator must dedupe before handing off to poly2tri so the call simply
+// returns instead of crashing.
+TEST(TriangulatePolygon, HandlesBowtieDuplicateVertexWithoutCrash) {
+    // A unit square with (0,0,0) repeated at position 3 — classic bowtie.
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1},
+        {0, 0, 0}, {0, 0, 1},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    EXPECT_EQ(tris.size() % 3, 0U);
+    // After dedup the outline is the unit square (2 triangles).
+    EXPECT_EQ(tris.size(), 6U);
+    EXPECT_NEAR(TrianglesArea(tris), 1.0F, 1e-4F);
+}
+
+TEST(TriangulatePolygon, DedupesNonAdjacentNearDuplicateVertices) {
+    // Same unit square, but with a vertex positioned within ~10 microns of
+    // a non-adjacent corner. Float noise of this shape appears in real IFC
+    // slices when stitching welds endpoints.
+    const std::vector<glm::vec3> poly = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1},
+        {1e-7F, 0, 1e-7F},  // near-duplicate of vertex 0
+        {0, 0, 1},
+    };
+    const auto tris = TriangulatePolygon(poly, {0, 1, 0});
+    EXPECT_EQ(tris.size() % 3, 0U);
+    EXPECT_GT(tris.size(), 0U);
+}
+
 TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {
     const auto mesh = MakeUnitCubeMesh();
     // Translate the cube to x=+10, then cut at y=0.5. All resulting segments
