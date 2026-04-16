@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.10c.2 — Teleport on IfcSlab click + WASD/mouselook wiring in main.cpp
+## Current Task: 7.10c.3 — Hover disk marker preview (new pipeline + shader)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -133,7 +133,7 @@
   - [x] 7.10b Toolbar "Point of View" checkbox next to "Measure"; when active, `scene::ApplyPointOfViewAlpha(scene, 0.2F)` sets 0.2 alpha on every non-IfcSlab type except those already carrying a default alpha (IfcWindow stays at 0.4); disable calls `ClearPointOfViewAlpha` which clears the same set, leaving IfcSlab and defaults untouched. 3 new scene tests + 3 new Toolbar tests; 117/117 ui + 141/141 scene tests pass.
   - [ ] 7.10c Viewpoint placement — click on an `IfcSlab` top face while PoV-armed teleports camera to hit + (0,1.5,0), gaze along +Z. New `renderer::FirstPersonController` (yaw/pitch from mouse, WASD/arrow translation). Circular flat disk marker rendered at cursor as hover preview.
     - [x] 7.10c.1 `renderer::FirstPersonController` — pure yaw/pitch + WASD logic independent of `Camera`. `SetPosition`/`SetYawPitch`, `Look(mouseDelta, sensitivity)`, `Move(localInput, dt, speed)`, `GetForward`, `ApplyTo(camera)` (sets orbit-camera target+distance so `camera.GetPosition() == fpc.GetPosition()` and gaze matches). Pitch clamped to ±π/2−ε. Horizontal walking (pitch ignored). 14 unit tests.
-    - [ ] 7.10c.2 Teleport on IfcSlab click + WASD/mouselook wiring in `main.cpp` (when PoV-armed: left-click → raycast; if hit node's ifcType == IfcSlab and face normal is +Y, set FPC to hit + (0,1.5,0) with yaw=π; per-frame WASD/arrows feed `Move`, raw-cursor mouse delta feeds `Look`; FPC drives camera via `ApplyTo`).
+    - [x] 7.10c.2 Teleport on IfcSlab click + WASD/mouselook wiring in `main.cpp`. New `pointOfViewArmed` mirror flag and `firstPersonActive` state. Toolbar PoV toggle writes `pointOfViewArmed` and clears `firstPersonActive` on off. Left-click while armed: raycast; if hit node `ifcType == "IfcSlab"`, ray came from above (`ray.dir.y < 0`), and `|n.y| > 0.7` (horizontal face), teleport to `hit.point + (0,1.5,0)` with yaw=π (gaze +Z). Mouse-move while `firstPersonActive` calls `fpc.Look` (sensitivity 0.003 rad/px) — bypasses orbit/hover. Per-frame WASD/arrows poll `Input::IsKeyDown` and feed `fpc.Move` at 3 m/s. Scroll-zoom disabled in FPS. Visual verification deferred to the user (UI behavior). Renderer+UI tests green (28/28).
     - [ ] 7.10c.3 Hover disk marker — flat circular disk at cursor hit on IfcSlab top face while PoV-armed (new `renderer::DiskMarkerPipeline` + shader, billboard-free geometry on the slab plane).
   - [ ] 7.10d Minimal in-flight UI — hide panels/overlays during first-person mode, show only top-right "Exit Point of View" button; Esc also exits. Exit clears ghost-mode alphas and Fit-to-View's the camera.
 

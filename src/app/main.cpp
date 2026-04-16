@@ -15,6 +15,7 @@
 #include <renderer/MeshBuffer.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
+#include <renderer/FirstPersonController.h>
 #include <renderer/Lighting.h>
 #include <renderer/Msaa.h>
 #include <renderer/Pipeline.h>
@@ -51,6 +52,7 @@
 #include <ImGuizmo.h>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -503,6 +505,14 @@ int main(int argc, char* argv[]) {
     bool middleMouseDown = false;
     glm::dvec2 lastMousePos{0.0, 0.0};
 
+    // First-person mode: armed by Toolbar "Point of View" (`pointOfViewArmed`),
+    // entered on click on an IfcSlab top face (`firstPersonActive`). While
+    // active, FPC owns the camera. Mirrored from the toolbar callback so the
+    // input handlers (declared before the toolbar) can read it.
+    bimeup::renderer::FirstPersonController fpc;
+    bool pointOfViewArmed = false;
+    bool firstPersonActive = false;
+
     // Shared helpers for picking. These capture references to the renderer/scene state used each frame.
     auto buildViewProj = [&]() {
         glm::mat4 proj = camera.GetProjectionMatrix();
@@ -570,6 +580,27 @@ int main(int argc, char* argv[]) {
                                  res->pointB.x, res->pointB.y, res->pointB.z);
                     }
                 }
+            } else if (pointOfViewArmed) {
+                // PoV-armed: click on an IfcSlab top face teleports to hit + (0,1.5,0),
+                // gaze along +Z. Non-slab / non-top hits are no-ops (no selection).
+                auto [view, proj] = buildViewProj();
+                auto ray = bimeup::core::ScreenPointToRay(sp, windowSize(), view, proj);
+                if (auto hit = bimeup::scene::RaycastScene(ray, sceneResult->scene,
+                                                          sceneResult->meshes)) {
+                    const auto& node = sceneResult->scene.GetNode(hit->nodeId);
+                    glm::vec3 n = glm::cross(hit->triV1 - hit->triV0, hit->triV2 - hit->triV0);
+                    const float nlen = glm::length(n);
+                    if (nlen > 0.0F) n /= nlen;
+                    const bool topFace = ray.direction.y < 0.0F && std::abs(n.y) > 0.7F;
+                    if (node.ifcType == "IfcSlab" && topFace) {
+                        fpc.SetPosition(hit->point + glm::vec3(0.0F, 1.5F, 0.0F));
+                        fpc.SetYawPitch(glm::pi<float>(), 0.0F);
+                        firstPersonActive = true;
+                        fpc.ApplyTo(camera);
+                        LOG_INFO("PoV teleport: ({:.2f},{:.2f},{:.2f})",
+                                 fpc.GetPosition().x, fpc.GetPosition().y, fpc.GetPosition().z);
+                    }
+                }
             } else {
                 auto [view, proj] = buildViewProj();
                 bimeup::core::PickElement(sp, windowSize(), view, proj, sceneResult->scene,
@@ -583,6 +614,13 @@ int main(int argc, char* argv[]) {
         glm::dvec2 pos{x, y};
         glm::dvec2 delta = pos - lastMousePos;
         lastMousePos = pos;
+
+        if (firstPersonActive && !imguiWantsMouse() && !middleMouseDown) {
+            fpc.Look(glm::vec2(static_cast<float>(delta.x), static_cast<float>(delta.y)),
+                     0.003F);
+            fpc.ApplyTo(camera);
+            return;
+        }
 
         if (middleMouseDown) {
             bimeup::renderer::NavModifiers mods{
@@ -631,6 +669,7 @@ int main(int argc, char* argv[]) {
     });
 
     input.OnScroll([&](double /*xOffset*/, double yOffset) {
+        if (firstPersonActive) return;  // FPC owns the camera; ignore scroll.
         camera.Zoom(static_cast<float>(-yOffset) * 0.5F);
     });
 
@@ -899,10 +938,12 @@ int main(int argc, char* argv[]) {
         if (!sceneResult) {
             return;
         }
+        pointOfViewArmed = active;
         if (active) {
             bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.2F);
         } else {
             bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
+            firstPersonActive = false;
         }
         LOG_INFO("Point of View: {}", active ? "on" : "off");
     });
@@ -1009,6 +1050,25 @@ int main(int argc, char* argv[]) {
         if (dt > 0.0) {
             float instantFps = static_cast<float>(1.0 / dt);
             smoothedFps = smoothedFps == 0.0F ? instantFps : (smoothedFps * 0.9F + instantFps * 0.1F);
+        }
+
+        // First-person walking: WASD + arrows feed FPC.Move; FPC drives camera.
+        // Polled here (not key callbacks) so held keys produce continuous motion.
+        if (firstPersonActive && !ImGui::GetIO().WantCaptureKeyboard) {
+            glm::vec3 moveInput(0.0F);
+            if (input.IsKeyDown(bimeup::platform::Key::A) ||
+                input.IsKeyDown(bimeup::platform::Key::Left)) moveInput.x -= 1.0F;
+            if (input.IsKeyDown(bimeup::platform::Key::D) ||
+                input.IsKeyDown(bimeup::platform::Key::Right)) moveInput.x += 1.0F;
+            if (input.IsKeyDown(bimeup::platform::Key::W) ||
+                input.IsKeyDown(bimeup::platform::Key::Up)) moveInput.z += 1.0F;
+            if (input.IsKeyDown(bimeup::platform::Key::S) ||
+                input.IsKeyDown(bimeup::platform::Key::Down)) moveInput.z -= 1.0F;
+            constexpr float kWalkSpeed = 3.0F;  // m/s
+            if (glm::length(moveInput) > 0.0F) {
+                fpc.Move(moveInput, static_cast<float>(dt), kWalkSpeed);
+            }
+            fpc.ApplyTo(camera);
         }
 
         // Fit-to-view request from toolbar: recenter + reset zoom to fit scene bounds.
