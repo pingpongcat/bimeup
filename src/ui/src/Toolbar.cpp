@@ -28,6 +28,10 @@ void Toolbar::SetOnMeasureModeChanged(MeasureModeCallback callback) {
     m_onMeasureModeChanged = std::move(callback);
 }
 
+void Toolbar::SetOnPointOfViewChanged(PointOfViewCallback callback) {
+    m_onPointOfViewChanged = std::move(callback);
+}
+
 renderer::RenderMode Toolbar::GetRenderMode() const {
     return m_renderMode;
 }
@@ -74,6 +78,16 @@ void Toolbar::TriggerMeasureMode(bool active) {
     }
 }
 
+void Toolbar::TriggerPointOfView(bool active) {
+    if (active == m_pointOfViewActive) {
+        return;
+    }
+    m_pointOfViewActive = active;
+    if (m_onPointOfViewChanged) {
+        m_onPointOfViewChanged(active);
+    }
+}
+
 void Toolbar::OnDraw() {
     if (ImGui::Begin(GetName())) {
         if (ImGui::Button("Open File...")) {
@@ -113,6 +127,11 @@ void Toolbar::OnDraw() {
         bool measure = m_measureModeActive;
         if (ImGui::Checkbox("Measure", &measure)) {
             TriggerMeasureMode(measure);
+        }
+        ImGui::SameLine();
+        bool pov = m_pointOfViewActive;
+        if (ImGui::Checkbox("Point of View", &pov)) {
+            TriggerPointOfView(pov);
         }
     }
     ImGui::End();

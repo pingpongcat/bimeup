@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: 7 — BIM Viewer Features
-## Current Task: 7.10b — Toolbar "Point of View" toggle + ghost alpha for non-slab types
+## Current Task: 7.10c — Viewpoint placement on IfcSlab top face + first-person controller
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -130,7 +130,7 @@
 - [x] 7.9 Fit-to-view — `FitCameraToBounds(camera, bounds)` in `main.cpp` + `Camera::Frame(min,max)` (N.1c). Driven by toolbar "Fit to View" (`Toolbar::SetOnFitToView`), toolbar "Frame Selected" (7.7d, falls back to fit-all on empty selection), Home key (frame-all), and Numpad . (frame-selected). Also called on model load.
 - [ ] 7.10 First-person navigation
   - [x] 7.10a Remove per-element/per-type alpha sliders from PropertyPanel + TypeVisibilityPanel; `scene::DefaultTypeAlphaOverrides()` returns `{{"IfcWindow", 0.4}}` and is applied in `main.cpp` right after scene build. PropertyPanel AlphaCallback/Query API + TypeVisibilityPanel Set/Clear/GetTypeAlphaOverride gone; corresponding tests removed. 1 new scene test; 117/117 ui + 138/138 scene tests pass.
-  - [ ] 7.10b Toolbar "Point of View" checkbox next to "Measure"; when active, Scene gets 0.2 alpha on every non-`IfcSlab` type; cleared on disable (IfcWindow 0.4 preserved)
+  - [x] 7.10b Toolbar "Point of View" checkbox next to "Measure"; when active, `scene::ApplyPointOfViewAlpha(scene, 0.2F)` sets 0.2 alpha on every non-IfcSlab type except those already carrying a default alpha (IfcWindow stays at 0.4); disable calls `ClearPointOfViewAlpha` which clears the same set, leaving IfcSlab and defaults untouched. 3 new scene tests + 3 new Toolbar tests; 117/117 ui + 141/141 scene tests pass.
   - [ ] 7.10c Viewpoint placement — click on an `IfcSlab` top face while PoV-armed teleports camera to hit + (0,1.5,0), gaze along +Z. New `renderer::FirstPersonController` (yaw/pitch from mouse, WASD/arrow translation). Circular flat disk marker rendered at cursor as hover preview.
   - [ ] 7.10d Minimal in-flight UI — hide panels/overlays during first-person mode, show only top-right "Exit Point of View" button; Esc also exits. Exit clears ghost-mode alphas and Fit-to-View's the camera.
 

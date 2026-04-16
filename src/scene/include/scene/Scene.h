@@ -74,4 +74,15 @@ const std::vector<std::string>& DefaultHiddenTypes();
 /// after scene construction.
 const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides();
 
+/// Apply a uniform "ghost" alpha to every type present in the scene except
+/// IfcSlab and any type already carrying a default override (see
+/// DefaultTypeAlphaOverrides). Used by the Point-of-View toolbar toggle so
+/// floors stay solid and windows keep their glass alpha.
+void ApplyPointOfViewAlpha(Scene& scene, float alpha);
+
+/// Inverse of ApplyPointOfViewAlpha: clears the type alpha overrides that
+/// Apply would have set, leaving IfcSlab and the default-override types
+/// (e.g. IfcWindow at 0.4) untouched.
+void ClearPointOfViewAlpha(Scene& scene);
+
 } // namespace bimeup::scene

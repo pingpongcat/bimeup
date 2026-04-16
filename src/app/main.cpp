@@ -895,6 +895,17 @@ int main(int argc, char* argv[]) {
         measureSnapIsVertex = false;
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
+    toolbar->SetOnPointOfViewChanged([&](bool active) {
+        if (!sceneResult) {
+            return;
+        }
+        if (active) {
+            bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.2F);
+        } else {
+            bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
+        }
+        LOG_INFO("Point of View: {}", active ? "on" : "off");
+    });
 
     // Depth-only shadow pass — recorded before the main render pass each frame
     // when shadows are enabled. Renders scene geometry from the key light's POV

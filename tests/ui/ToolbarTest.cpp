@@ -123,4 +123,36 @@ TEST(ToolbarTest, TriggerMeasureModeWithSameStateDoesNotFireCallback) {
     EXPECT_EQ(calls, 0);
 }
 
+TEST(ToolbarTest, PointOfViewDefaultsOff) {
+    Toolbar toolbar;
+    EXPECT_FALSE(toolbar.IsPointOfViewActive());
+}
+
+TEST(ToolbarTest, TriggerPointOfViewUpdatesStateAndInvokesCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    bool received = false;
+    toolbar.SetOnPointOfViewChanged([&](bool active) {
+        received = active;
+        ++calls;
+    });
+    toolbar.TriggerPointOfView(true);
+    EXPECT_TRUE(toolbar.IsPointOfViewActive());
+    EXPECT_TRUE(received);
+    EXPECT_EQ(calls, 1);
+
+    toolbar.TriggerPointOfView(false);
+    EXPECT_FALSE(toolbar.IsPointOfViewActive());
+    EXPECT_FALSE(received);
+    EXPECT_EQ(calls, 2);
+}
+
+TEST(ToolbarTest, TriggerPointOfViewWithSameStateDoesNotFireCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    toolbar.SetOnPointOfViewChanged([&](bool) { ++calls; });
+    toolbar.TriggerPointOfView(false);  // same as default
+    EXPECT_EQ(calls, 0);
+}
+
 }  // namespace

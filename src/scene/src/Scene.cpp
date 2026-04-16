@@ -143,6 +143,36 @@ const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides() {
     return overrides;
 }
 
+namespace {
+std::unordered_set<std::string> PointOfViewExcludedTypes() {
+    std::unordered_set<std::string> excluded{"IfcSlab"};
+    for (const auto& [type, _] : DefaultTypeAlphaOverrides()) {
+        excluded.insert(type);
+    }
+    return excluded;
+}
+}  // namespace
+
+void ApplyPointOfViewAlpha(Scene& scene, float alpha) {
+    const auto excluded = PointOfViewExcludedTypes();
+    for (const auto& type : scene.GetUniqueTypes()) {
+        if (excluded.count(type) > 0) {
+            continue;
+        }
+        scene.SetTypeAlphaOverride(type, alpha);
+    }
+}
+
+void ClearPointOfViewAlpha(Scene& scene) {
+    const auto excluded = PointOfViewExcludedTypes();
+    for (const auto& type : scene.GetUniqueTypes()) {
+        if (excluded.count(type) > 0) {
+            continue;
+        }
+        scene.ClearTypeAlphaOverride(type);
+    }
+}
+
 std::vector<NodeId> Scene::FindByType(const std::string& ifcType) const {
     std::vector<NodeId> result;
     for (const auto& node : nodes_) {

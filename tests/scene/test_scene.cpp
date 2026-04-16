@@ -494,3 +494,56 @@ TEST(SceneAlphaOverrideTest, TypeOverrideClampedToUnitRange) {
     scene.SetTypeAlphaOverride("IfcWall", -0.1f);
     EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.0f);
 }
+
+// 7.10b — Point-of-View ghost alpha. Applies a uniform alpha to every type
+// except IfcSlab and any type already carrying a default alpha override.
+TEST(PointOfViewAlphaTest, AppliesToNonSlabNonDefaultTypes) {
+    Scene scene;
+    AddMeshNode(scene, 1, "IfcWall");
+    AddMeshNode(scene, 2, "IfcDoor");
+    AddMeshNode(scene, 3, "IfcSlab");
+
+    ApplyPointOfViewAlpha(scene, 0.2f);
+
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.2f);
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcDoor").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcDoor"), 0.2f);
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
+}
+
+TEST(PointOfViewAlphaTest, PreservesDefaultTypeAlphaOverrides) {
+    Scene scene;
+    AddMeshNode(scene, 1, "IfcWall");
+    AddMeshNode(scene, 2, "IfcWindow");
+
+    // Pre-seed defaults like main.cpp does on scene load.
+    for (const auto& [t, a] : DefaultTypeAlphaOverrides()) {
+        scene.SetTypeAlphaOverride(t, a);
+    }
+
+    ApplyPointOfViewAlpha(scene, 0.2f);
+
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWindow").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWindow"), 0.4f);
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.2f);
+}
+
+TEST(PointOfViewAlphaTest, ClearRemovesGhostAlphasKeepsDefaults) {
+    Scene scene;
+    AddMeshNode(scene, 1, "IfcWall");
+    AddMeshNode(scene, 2, "IfcWindow");
+    AddMeshNode(scene, 3, "IfcSlab");
+
+    for (const auto& [t, a] : DefaultTypeAlphaOverrides()) {
+        scene.SetTypeAlphaOverride(t, a);
+    }
+    ApplyPointOfViewAlpha(scene, 0.2f);
+    ClearPointOfViewAlpha(scene);
+
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
+    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWindow").has_value());
+    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWindow"), 0.4f);
+}
