@@ -155,4 +155,60 @@ TEST(ToolbarTest, TriggerPointOfViewWithSameStateDoesNotFireCallback) {
     EXPECT_EQ(calls, 0);
 }
 
+TEST(ToolbarTest, ActivatingPointOfViewDeactivatesMeasure) {
+    Toolbar toolbar;
+    int measureCalls = 0;
+    bool measureState = true;
+    toolbar.SetOnMeasureModeChanged([&](bool active) {
+        measureState = active;
+        ++measureCalls;
+    });
+    toolbar.TriggerMeasureMode(true);
+    EXPECT_EQ(measureCalls, 1);
+    EXPECT_TRUE(measureState);
+
+    toolbar.TriggerPointOfView(true);
+    EXPECT_TRUE(toolbar.IsPointOfViewActive());
+    EXPECT_FALSE(toolbar.IsMeasureModeActive());
+    EXPECT_EQ(measureCalls, 2);  // one on, one off from the mutex
+    EXPECT_FALSE(measureState);
+}
+
+TEST(ToolbarTest, ActivatingMeasureDeactivatesPointOfView) {
+    Toolbar toolbar;
+    int povCalls = 0;
+    bool povState = true;
+    toolbar.SetOnPointOfViewChanged([&](bool active) {
+        povState = active;
+        ++povCalls;
+    });
+    toolbar.TriggerPointOfView(true);
+    EXPECT_EQ(povCalls, 1);
+    EXPECT_TRUE(povState);
+
+    toolbar.TriggerMeasureMode(true);
+    EXPECT_TRUE(toolbar.IsMeasureModeActive());
+    EXPECT_FALSE(toolbar.IsPointOfViewActive());
+    EXPECT_EQ(povCalls, 2);
+    EXPECT_FALSE(povState);
+}
+
+TEST(ToolbarTest, DeactivatingOneDoesNotToggleTheOther) {
+    Toolbar toolbar;
+    int measureCalls = 0;
+    int povCalls = 0;
+    toolbar.SetOnMeasureModeChanged([&](bool) { ++measureCalls; });
+    toolbar.SetOnPointOfViewChanged([&](bool) { ++povCalls; });
+
+    toolbar.TriggerMeasureMode(true);
+    toolbar.TriggerMeasureMode(false);
+    EXPECT_EQ(measureCalls, 2);
+    EXPECT_EQ(povCalls, 0);
+
+    toolbar.TriggerPointOfView(true);
+    toolbar.TriggerPointOfView(false);
+    EXPECT_EQ(measureCalls, 2);
+    EXPECT_EQ(povCalls, 2);
+}
+
 }  // namespace

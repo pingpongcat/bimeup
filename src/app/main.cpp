@@ -1022,6 +1022,13 @@ int main(int argc, char* argv[]) {
         }
         pointOfViewArmed = active;
         if (active) {
+            // Measurements would clutter the first-person view and the
+            // Toolbar has already turned Measure mode off via mutual
+            // exclusion; drop any stored segments too.
+            measureTool.Cancel();
+            measureTool.ClearMeasurements();
+            measureSnapPoint.reset();
+            measureSnapIsVertex = false;
             bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.2F);
         } else {
             bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);

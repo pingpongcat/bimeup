@@ -72,6 +72,12 @@ void Toolbar::TriggerMeasureMode(bool active) {
     if (active == m_measureModeActive) {
         return;
     }
+    // Measure and Point of View are mutually exclusive: the FPS camera owns
+    // the mouse while active, so measurement clicks would pick through the
+    // ghosted scene and previously crashed.
+    if (active && m_pointOfViewActive) {
+        TriggerPointOfView(false);
+    }
     m_measureModeActive = active;
     if (m_onMeasureModeChanged) {
         m_onMeasureModeChanged(active);
@@ -81,6 +87,9 @@ void Toolbar::TriggerMeasureMode(bool active) {
 void Toolbar::TriggerPointOfView(bool active) {
     if (active == m_pointOfViewActive) {
         return;
+    }
+    if (active && m_measureModeActive) {
+        TriggerMeasureMode(false);
     }
     m_pointOfViewActive = active;
     if (m_onPointOfViewChanged) {
