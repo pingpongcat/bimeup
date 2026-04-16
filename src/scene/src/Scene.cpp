@@ -1,4 +1,5 @@
 #include <scene/Scene.h>
+#include <scene/SceneMesh.h>
 
 #include <algorithm>
 #include <set>
@@ -137,10 +138,22 @@ const std::vector<std::string>& DefaultHiddenTypes() {
 }
 
 const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides() {
-    static const std::vector<std::pair<std::string, float>> overrides = {
-        {"IfcWindow", 0.4F},
-    };
+    static const std::vector<std::pair<std::string, float>> overrides;
     return overrides;
+}
+
+void ApplyTranslucentDefaults(Scene& scene,
+                              std::span<const SceneMesh> meshes,
+                              float alpha) {
+    for (size_t i = 0; i < scene.GetNodeCount(); ++i) {
+        auto id = static_cast<NodeId>(i);
+        const auto& node = scene.GetNode(id);
+        if (!node.mesh.has_value()) continue;
+        auto handle = *node.mesh;
+        if (handle >= meshes.size()) continue;
+        if (!meshes[handle].IsTransparent()) continue;
+        scene.SetNodeAlphaOverride(id, alpha);
+    }
 }
 
 namespace {
@@ -225,12 +238,31 @@ std::optional<float> Scene::GetTypeAlphaOverride(const std::string& ifcType) con
     return it->second;
 }
 
+void Scene::SetNodeAlphaOverride(NodeId id, float alpha) {
+    nodeAlphaOverrides_[id] = ClampUnit(alpha);
+}
+
+void Scene::ClearNodeAlphaOverride(NodeId id) {
+    nodeAlphaOverrides_.erase(id);
+}
+
+std::optional<float> Scene::GetNodeAlphaOverride(NodeId id) const {
+    auto it = nodeAlphaOverrides_.find(id);
+    if (it == nodeAlphaOverrides_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 std::optional<float> Scene::GetEffectiveAlpha(NodeId id) const {
-    const auto& node = GetNode(id);
-    if (auto elem = GetElementAlphaOverride(node.expressId); elem.has_value()) {
+    if (auto node = GetNodeAlphaOverride(id); node.has_value()) {
+        return node;
+    }
+    const auto& n = GetNode(id);
+    if (auto elem = GetElementAlphaOverride(n.expressId); elem.has_value()) {
         return elem;
     }
-    return GetTypeAlphaOverride(node.ifcType);
+    return GetTypeAlphaOverride(n.ifcType);
 }
 
 } // namespace bimeup::scene

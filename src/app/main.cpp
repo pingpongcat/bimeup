@@ -268,10 +268,15 @@ int main(int argc, char* argv[]) {
     builder.SetBatchingEnabled(true);
     sceneResult = builder.Build(ifcModel);
 
-    // Baseline per-type alpha (e.g. IfcWindow renders as glass at 0.4).
+    // Baseline per-type alpha (currently empty — hook for future defaults).
     for (const auto& [ifcType, alpha] : bimeup::scene::DefaultTypeAlphaOverrides()) {
         sceneResult->scene.SetTypeAlphaOverride(ifcType, alpha);
     }
+    // Tag translucent sub-meshes (e.g. IfcWindow glass panes carry native
+    // alpha<1 from IFC surface styles; frames are opaque) with a per-node
+    // baseline so glass fades but frames stay solid.
+    bimeup::scene::ApplyTranslucentDefaults(sceneResult->scene,
+                                            sceneResult->meshes, 0.4F);
 
     // Snapshot node→sceneMeshIdx before Upload overwrites node.mesh with the
     // renderer handle — we still need the scene-mesh-index to find triangle

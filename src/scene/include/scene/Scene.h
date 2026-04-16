@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -12,6 +13,8 @@
 #include <vector>
 
 namespace bimeup::scene {
+
+class SceneMesh;
 
 class Scene {
 public:
@@ -54,8 +57,15 @@ public:
     void ClearTypeAlphaOverride(const std::string& ifcType);
     [[nodiscard]] std::optional<float> GetTypeAlphaOverride(const std::string& ifcType) const;
 
-    /// Effective override for @p id: element override > type override > none.
-    /// Returns nullopt if neither override is set for this node.
+    /// Per-node alpha override, keyed by NodeId. Lets sub-meshes of the same
+    /// IFC element (sharing expressId + ifcType) carry different alphas —
+    /// needed so glass panes can fade while opaque frame sub-meshes stay solid.
+    void SetNodeAlphaOverride(NodeId id, float alpha);
+    void ClearNodeAlphaOverride(NodeId id);
+    [[nodiscard]] std::optional<float> GetNodeAlphaOverride(NodeId id) const;
+
+    /// Effective override for @p id: node > element > type > none.
+    /// Returns nullopt if no override is set for this node.
     [[nodiscard]] std::optional<float> GetEffectiveAlpha(NodeId id) const;
 
 private:
@@ -63,16 +73,27 @@ private:
     NodeId nextId_ = 0;
     std::unordered_map<std::uint32_t, float> elementAlphaOverrides_;
     std::unordered_map<std::string, float> typeAlphaOverrides_;
+    std::unordered_map<NodeId, float> nodeAlphaOverrides_;
 };
 
 /// IFC types that represent non-visual concepts (spatial volumes, openings, grids)
 /// and should be hidden by default on model load.
 const std::vector<std::string>& DefaultHiddenTypes();
 
-/// IFC types that should render with a baseline alpha override on load — e.g.
-/// IfcWindow as semi-transparent glass. Applied via `SetTypeAlphaOverride`
-/// after scene construction.
+/// IFC types that should render with a baseline type-level alpha override on
+/// load. Now empty — glass transparency is handled per-sub-mesh via
+/// `ApplyTranslucentDefaults` so opaque frame sub-meshes under the same
+/// IfcWindow stay solid. Kept as a hook for future type-wide defaults.
 const std::vector<std::pair<std::string, float>>& DefaultTypeAlphaOverrides();
+
+/// Walk mesh-bearing nodes; for every one whose mesh `IsTransparent()` is
+/// true (native IFC surface-style alpha < 1 — e.g. glass panes), apply a
+/// node-level alpha override of @p alpha. Opaque sub-meshes (frames, solid
+/// bodies) are left untouched, so this targets glass-like geometry without
+/// hard-coding IFC type strings.
+void ApplyTranslucentDefaults(Scene& scene,
+                              std::span<const SceneMesh> meshes,
+                              float alpha);
 
 /// Apply a uniform "ghost" alpha to every type present in the scene except
 /// IfcSlab and any type already carrying a default override (see

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <scene/Scene.h>
+#include <scene/SceneMesh.h>
 
 #include <algorithm>
 
@@ -340,14 +341,11 @@ TEST(SceneTest, DefaultHiddenTypesContainsNonVisualTypes) {
     EXPECT_TRUE(has("IfcOpeningElement"));
 }
 
-// 7.10a — Default type-alpha overrides. Applied once on scene load so windows
-// always render as glass even without per-type UI control.
-TEST(SceneTest, DefaultTypeAlphaOverridesMarksIfcWindowAsGlass) {
-    const auto& defaults = DefaultTypeAlphaOverrides();
-    auto it = std::find_if(defaults.begin(), defaults.end(),
-                           [](const auto& p) { return p.first == "IfcWindow"; });
-    ASSERT_NE(it, defaults.end());
-    EXPECT_FLOAT_EQ(it->second, 0.4F);
+// 7.10a (updated) — Default type-alpha overrides are now empty; glass is
+// tagged per-node via ApplyTranslucentDefaults so frames (opaque sub-meshes
+// under the same IfcWindow) are not forced transparent.
+TEST(SceneTest, DefaultTypeAlphaOverridesIsEmpty) {
+    EXPECT_TRUE(DefaultTypeAlphaOverrides().empty());
 }
 
 TEST(SceneTest, MultipleChildrenOrdering) {
@@ -495,6 +493,82 @@ TEST(SceneAlphaOverrideTest, TypeOverrideClampedToUnitRange) {
     EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.0f);
 }
 
+// Node-level alpha (fix #1 for window glass-only transparency). Priority is
+// node > element > type so a translucent sub-mesh of IfcWindow can carry its
+// own alpha without dragging the opaque frame sub-meshes (same ifcType and
+// expressId) along with it.
+TEST(SceneAlphaOverrideTest, NodeOverrideRoundTripAndClamp) {
+    Scene scene;
+    NodeId id = AddMeshNode(scene, 101, "IfcWindow");
+    EXPECT_FALSE(scene.GetNodeAlphaOverride(id).has_value());
+
+    scene.SetNodeAlphaOverride(id, 0.4f);
+    ASSERT_TRUE(scene.GetNodeAlphaOverride(id).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetNodeAlphaOverride(id), 0.4f);
+
+    scene.SetNodeAlphaOverride(id, 2.0f);
+    EXPECT_FLOAT_EQ(*scene.GetNodeAlphaOverride(id), 1.0f);
+    scene.SetNodeAlphaOverride(id, -0.5f);
+    EXPECT_FLOAT_EQ(*scene.GetNodeAlphaOverride(id), 0.0f);
+}
+
+TEST(SceneAlphaOverrideTest, ClearNodeOverride) {
+    Scene scene;
+    NodeId id = AddMeshNode(scene, 101, "IfcWindow");
+    scene.SetNodeAlphaOverride(id, 0.4f);
+    scene.ClearNodeAlphaOverride(id);
+    EXPECT_FALSE(scene.GetNodeAlphaOverride(id).has_value());
+}
+
+TEST(SceneAlphaOverrideTest, NodeOverrideWinsOverElementAndType) {
+    Scene scene;
+    NodeId glass = AddMeshNode(scene, 77, "IfcWindow");
+    NodeId frame = AddMeshNode(scene, 77, "IfcWindow");
+
+    scene.SetTypeAlphaOverride("IfcWindow", 0.8f);
+    scene.SetElementAlphaOverride(77, 0.7f);
+    scene.SetNodeAlphaOverride(glass, 0.4f);
+
+    ASSERT_TRUE(scene.GetEffectiveAlpha(glass).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(glass), 0.4f);  // node wins
+    ASSERT_TRUE(scene.GetEffectiveAlpha(frame).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(frame), 0.7f);  // element wins over type
+}
+
+// scene::ApplyTranslucentDefaults walks mesh-bearing nodes and tags each
+// already-translucent sub-mesh (IsTransparent == true) with a node alpha
+// override. Opaque sub-meshes (e.g. window frames) are left alone. This is
+// the fix for the "IfcWindow frame also went see-through" bug.
+TEST(SceneAlphaOverrideTest, ApplyTranslucentDefaultsOnlyAffectsTranslucentMeshes) {
+    Scene scene;
+
+    std::vector<SceneMesh> meshes(2);
+    // meshes[0] = translucent (glass)
+    meshes[0].SetPositions({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    meshes[0].SetColors({{1, 1, 1, 0.6f}, {1, 1, 1, 0.6f}, {1, 1, 1, 0.6f}});
+    // meshes[1] = opaque (frame)
+    meshes[1].SetPositions({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    meshes[1].SetColors({{0.3f, 0.3f, 0.3f, 1.0f},
+                         {0.3f, 0.3f, 0.3f, 1.0f},
+                         {0.3f, 0.3f, 0.3f, 1.0f}});
+
+    SceneNode glass;
+    glass.ifcType = "IfcWindow";
+    glass.mesh = MeshHandle{0};
+    NodeId glassId = scene.AddNode(std::move(glass));
+
+    SceneNode frame;
+    frame.ifcType = "IfcWindow";
+    frame.mesh = MeshHandle{1};
+    NodeId frameId = scene.AddNode(std::move(frame));
+
+    ApplyTranslucentDefaults(scene, meshes, 0.4f);
+
+    ASSERT_TRUE(scene.GetNodeAlphaOverride(glassId).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetNodeAlphaOverride(glassId), 0.4f);
+    EXPECT_FALSE(scene.GetNodeAlphaOverride(frameId).has_value());
+}
+
 // 7.10b — Point-of-View ghost alpha. Applies a uniform alpha to every type
 // except IfcSlab and any type already carrying a default alpha override.
 TEST(PointOfViewAlphaTest, AppliesToNonSlabNonDefaultTypes) {
@@ -512,38 +586,39 @@ TEST(PointOfViewAlphaTest, AppliesToNonSlabNonDefaultTypes) {
     EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
 }
 
-TEST(PointOfViewAlphaTest, PreservesDefaultTypeAlphaOverrides) {
+TEST(PointOfViewAlphaTest, PreservesNodeOverrideForGlass) {
     Scene scene;
-    AddMeshNode(scene, 1, "IfcWall");
-    AddMeshNode(scene, 2, "IfcWindow");
+    NodeId wall  = AddMeshNode(scene, 1, "IfcWall");
+    NodeId glass = AddMeshNode(scene, 2, "IfcWindow");
+    (void)wall;
 
-    // Pre-seed defaults like main.cpp does on scene load.
-    for (const auto& [t, a] : DefaultTypeAlphaOverrides()) {
-        scene.SetTypeAlphaOverride(t, a);
-    }
+    // Glass node override (set by scene::ApplyTranslucentDefaults on load).
+    scene.SetNodeAlphaOverride(glass, 0.4f);
 
     ApplyPointOfViewAlpha(scene, 0.2f);
 
-    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWindow").has_value());
-    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWindow"), 0.4f);
+    // Wall + IfcWindow frame go to 0.2 via type override, but the glass node
+    // keeps its 0.4 because node > type.
     ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWall").has_value());
     EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWall"), 0.2f);
+    ASSERT_TRUE(scene.GetEffectiveAlpha(glass).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(glass), 0.4f);
 }
 
-TEST(PointOfViewAlphaTest, ClearRemovesGhostAlphasKeepsDefaults) {
+TEST(PointOfViewAlphaTest, ClearRemovesGhostAlphasKeepsNodeOverrides) {
     Scene scene;
-    AddMeshNode(scene, 1, "IfcWall");
-    AddMeshNode(scene, 2, "IfcWindow");
-    AddMeshNode(scene, 3, "IfcSlab");
+    NodeId wall  = AddMeshNode(scene, 1, "IfcWall");
+    NodeId glass = AddMeshNode(scene, 2, "IfcWindow");
+    NodeId slab  = AddMeshNode(scene, 3, "IfcSlab");
+    (void)wall; (void)slab;
 
-    for (const auto& [t, a] : DefaultTypeAlphaOverrides()) {
-        scene.SetTypeAlphaOverride(t, a);
-    }
+    scene.SetNodeAlphaOverride(glass, 0.4f);
     ApplyPointOfViewAlpha(scene, 0.2f);
     ClearPointOfViewAlpha(scene);
 
     EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcWall").has_value());
+    EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcWindow").has_value());
     EXPECT_FALSE(scene.GetTypeAlphaOverride("IfcSlab").has_value());
-    ASSERT_TRUE(scene.GetTypeAlphaOverride("IfcWindow").has_value());
-    EXPECT_FLOAT_EQ(*scene.GetTypeAlphaOverride("IfcWindow"), 0.4f);
+    ASSERT_TRUE(scene.GetEffectiveAlpha(glass).has_value());
+    EXPECT_FLOAT_EQ(*scene.GetEffectiveAlpha(glass), 0.4f);
 }
