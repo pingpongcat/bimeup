@@ -39,6 +39,12 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 add_library(imgui::imgui ALIAS imgui)
 
+# poly2tri (constrained Delaunay triangulation — used by scene/Slicing for
+# robust section-fill caps on complex cross sections like arched roofs).
+add_subdirectory(poly2tri)
+target_include_directories(poly2tri PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/poly2tri)
+
 # googletest (only when tests are enabled)
 if(BIMEUP_BUILD_TESTS)
     add_subdirectory(googletest)

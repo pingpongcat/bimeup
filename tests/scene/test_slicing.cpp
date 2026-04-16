@@ -274,6 +274,24 @@ TEST(StitchSegments, EpsilonSnapsNearlyMatchingEndpoints) {
     EXPECT_EQ(polys[0].size(), 4U);
 }
 
+// Fix #3 prep — endpoint welding. Two endpoints within `epsilon` that happen
+// to fall in adjacent quantization cells (one rounds down, the other rounds
+// up) used to silently fail to match, which kept arched-roof sections from
+// closing. Neighbour-cell lookup now bridges the gap.
+TEST(StitchSegments, MatchesEndpointsAcrossQuantizationBoundary) {
+    // epsilon = 1e-4 → quantization step = 1e-4. Points 0.9999 and 1.0
+    // land in cells 9999 vs 10000 (distance = epsilon).
+    const std::vector<Segment> segs = {
+        {{0, 0, 0}, {0.9999F, 0, 0}},
+        {{1.0F, 0, 0}, {1.0F, 0, 1.0F}},
+        {{1.0F, 0, 1.0F}, {0.0F, 0, 1.0F}},
+        {{0.0F, 0, 1.0F}, {0.0F, 0, 0.0F}},
+    };
+    const auto polys = StitchSegments(segs);
+    ASSERT_EQ(polys.size(), 1U);
+    EXPECT_EQ(polys[0].size(), 4U);
+}
+
 TEST(StitchSegments, CubeSliceStitchesIntoSingleClosedLoop) {
     // The 8 segments produced by SliceSceneMesh on a unit cube at y=0.5 stitch
     // into one closed loop. Each side face contributes two segments meeting at
@@ -375,6 +393,30 @@ TEST(TriangulatePolygon, UsesOriginalVerticesInOutput) {
         EXPECT_TRUE(found) << "output vertex (" << v.x << "," << v.y << "," << v.z
                            << ") not in input polygon";
     }
+}
+
+// Fix #3 — arched-roof cross sections. Ear-clip has been known to refuse
+// ears near tight-angle concavities on dense polygons. poly2tri's constrained
+// Delaunay handles the same input robustly. This test closes a half-disk
+// profile (30-point arc + implicit closing chord) and verifies the output
+// triangles cover the analytical area of π/2.
+TEST(TriangulatePolygon, ArchProfileCoversAnalyticalArea) {
+    std::vector<glm::vec3> polygon;
+    constexpr int kN = 30;
+    polygon.reserve(kN + 1);
+    for (int i = 0; i <= kN; ++i) {
+        const float t = glm::pi<float>() * static_cast<float>(i) /
+                        static_cast<float>(kN);
+        polygon.push_back({std::cos(t), 0.0F, std::sin(t)});
+    }
+    // First pt (1,0,0), last pt (-1,0,0); closing edge runs along y=0.
+
+    const auto tris = TriangulatePolygon(polygon, {0, 1, 0});
+    ASSERT_EQ(tris.size() % 3, 0U);
+    ASSERT_GE(tris.size(), 3U * (polygon.size() - 2));
+
+    const float area = TrianglesArea(tris);
+    EXPECT_NEAR(area, glm::pi<float>() / 2.0F, 5e-2F);
 }
 
 TEST(SliceSceneMesh, AppliesWorldTransformToPositions) {

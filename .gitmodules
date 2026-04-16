@@ -23,3 +23,6 @@
 [submodule "external/ImGuizmo"]
 	path = external/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo.git
+[submodule "external/poly2tri"]
+	path = external/poly2tri
+	url = https://github.com/jhasse/poly2tri.git

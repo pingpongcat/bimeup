@@ -1,8 +1,13 @@
 #include "scene/Slicing.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <unordered_map>
+
+#include <poly2tri/poly2tri.h>
 
 #include "scene/SceneMesh.h"
 
@@ -175,6 +180,35 @@ StitchResult StitchSegmentsDetailed(std::span<const Segment> segments,
 
     std::vector<bool> used(segments.size(), false);
 
+    // Match check: two endpoints are "same" if they quantize to the same cell
+    // OR to any of the 26 neighbouring cells (3×3×3). The neighbour sweep is
+    // the welding prepass that closes section fills on dense/noisy IFC
+    // geometry (e.g. arched roofs) where endpoints straddling a cell boundary
+    // otherwise fail to match.
+    auto keysMatch = [](const GridKey& a, const GridKey& b) {
+        return std::abs(a.x - b.x) <= 1 && std::abs(a.y - b.y) <= 1 &&
+               std::abs(a.z - b.z) <= 1;
+    };
+    auto findNeighbourSegment = [&](const GridKey& key, std::size_t current,
+                                    const std::vector<bool>& usedRef,
+                                    std::size_t& outIdx, bool& outOtherIsB) {
+        for (std::int64_t dx = -1; dx <= 1; ++dx)
+            for (std::int64_t dy = -1; dy <= 1; ++dy)
+                for (std::int64_t dz = -1; dz <= 1; ++dz) {
+                    GridKey k{key.x + dx, key.y + dy, key.z + dz};
+                    auto it = grid.find(k);
+                    if (it == grid.end()) continue;
+                    for (const auto& ref : it->second) {
+                        if (ref.segIndex == current) continue;
+                        if (usedRef[ref.segIndex]) continue;
+                        outIdx = ref.segIndex;
+                        outOtherIsB = !ref.isB;
+                        return true;
+                    }
+                }
+        return false;
+    };
+
     for (std::size_t start = 0; start < segments.size(); ++start) {
         if (used[start]) continue;
 
@@ -190,27 +224,18 @@ StitchResult StitchSegmentsDetailed(std::span<const Segment> segments,
         bool closed = false;
         while (true) {
             const GridKey endKey = Quantise(currentEnd, epsilon);
-            if (endKey == startKey && poly.size() >= 2) {
+            if (keysMatch(endKey, startKey) && poly.size() >= 2) {
                 closed = true;
                 break;
             }
             poly.push_back(currentEnd);
 
-            // Find an unused neighbour segment sharing this endpoint.
-            auto it = grid.find(endKey);
-            if (it == grid.end()) break;
             std::size_t next = segments.size();
             bool nextOtherIsB = false;
-            for (const auto& ref : it->second) {
-                if (ref.segIndex == current) continue;
-                if (used[ref.segIndex]) continue;
-                next = ref.segIndex;
-                // ref.isB tells which end matched; the "other" end becomes
-                // the new walking endpoint.
-                nextOtherIsB = !ref.isB;
+            if (!findNeighbourSegment(endKey, current, used, next,
+                                      nextOtherIsB)) {
                 break;
             }
-            if (next == segments.size()) break;
 
             used[next] = true;
             current = next;
@@ -279,20 +304,15 @@ bool PointInTriangle(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b,
 
 }  // namespace
 
-std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
-                                          const glm::vec3& planeNormal) {
+namespace {
+
+// Ear-clip fallback used when poly2tri throws (degenerate / non-simple input).
+std::vector<glm::vec3> EarClipTriangulate(const std::vector<glm::vec3>& polygon,
+                                          const std::vector<glm::vec2>& verts2d) {
     std::vector<glm::vec3> result;
     const std::size_t n = polygon.size();
     if (n < 3) return result;
 
-    const int drop = DominantAxis(planeNormal);
-
-    std::vector<glm::vec2> verts2d;
-    verts2d.reserve(n);
-    for (const auto& p : polygon) verts2d.push_back(Project(p, drop));
-
-    // Index list of remaining (unclipped) polygon vertices. Ensure CCW ordering
-    // by reversing if signed area is negative — ear test below assumes CCW.
     std::vector<std::size_t> idx;
     idx.reserve(n);
     if (SignedArea2D(verts2d) >= 0.0F) {
@@ -303,7 +323,6 @@ std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
 
     result.reserve(3 * (n - 2));
 
-    // Standard O(n^2) ear-clipping.
     std::size_t guard = 0;
     const std::size_t maxIters = n * n + 8;
     while (idx.size() >= 3 && guard++ < maxIters) {
@@ -316,11 +335,8 @@ std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
             const glm::vec2& a = verts2d[iPrev];
             const glm::vec2& b = verts2d[iCur];
             const glm::vec2& c = verts2d[iNext];
-
-            // Must be a convex corner (CCW turn).
             if (Cross2D(a, b, c) <= 0.0F) continue;
 
-            // No other polygon vertex may lie inside triangle abc.
             bool contains = false;
             for (std::size_t j = 0; j < m; ++j) {
                 if (j == (i + m - 1) % m || j == i || j == (i + 1) % m) continue;
@@ -338,9 +354,102 @@ std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
             earFound = true;
             break;
         }
-        if (!earFound) break;  // non-simple polygon; bail rather than spin.
+        if (!earFound) break;
+    }
+    return result;
+}
+
+}  // namespace
+
+std::vector<glm::vec3> TriangulatePolygon(const std::vector<glm::vec3>& polygon,
+                                          const glm::vec3& planeNormal) {
+    if (polygon.size() < 3) return {};
+
+    const int drop = DominantAxis(planeNormal);
+
+    // Project to 2D and dedupe near-duplicate consecutive points (poly2tri
+    // rejects polylines with repeated vertices). Also drop a closing
+    // duplicate if last == first.
+    std::vector<glm::vec3> clean;
+    std::vector<glm::vec2> clean2d;
+    clean.reserve(polygon.size());
+    clean2d.reserve(polygon.size());
+    constexpr float kDedupEps2 = 1e-10F;
+    for (const auto& p : polygon) {
+        const glm::vec2 q = Project(p, drop);
+        if (!clean2d.empty()) {
+            const glm::vec2 d = q - clean2d.back();
+            if (d.x * d.x + d.y * d.y < kDedupEps2) continue;
+        }
+        clean.push_back(p);
+        clean2d.push_back(q);
+    }
+    if (clean.size() >= 2) {
+        const glm::vec2 d = clean2d.front() - clean2d.back();
+        if (d.x * d.x + d.y * d.y < kDedupEps2) {
+            clean.pop_back();
+            clean2d.pop_back();
+        }
+    }
+    if (clean.size() < 3) return {};
+
+    // poly2tri expects CCW input — reverse if our projected polygon is CW.
+    const bool reversed = SignedArea2D(clean2d) < 0.0F;
+    if (reversed) {
+        std::reverse(clean.begin(), clean.end());
+        std::reverse(clean2d.begin(), clean2d.end());
     }
 
+    // Storage is a vector reserved once so pointers stay stable.
+    std::vector<p2t::Point> storage;
+    storage.reserve(clean.size());
+    std::vector<p2t::Point*> polyline;
+    polyline.reserve(clean.size());
+    for (std::size_t i = 0; i < clean2d.size(); ++i) {
+        storage.emplace_back(static_cast<double>(clean2d[i].x),
+                             static_cast<double>(clean2d[i].y));
+        polyline.push_back(&storage.back());
+    }
+
+    // Map p2t::Point* back to the original 3D vertex via its index in storage.
+    auto indexOf = [&](p2t::Point* pt) -> std::size_t {
+        const std::ptrdiff_t off = pt - storage.data();
+        if (off < 0 || static_cast<std::size_t>(off) >= storage.size()) {
+            return storage.size();
+        }
+        return static_cast<std::size_t>(off);
+    };
+
+    std::vector<glm::vec3> result;
+    try {
+        p2t::CDT cdt(polyline);
+        cdt.Triangulate();
+        const auto tris = cdt.GetTriangles();
+        result.reserve(tris.size() * 3);
+        for (auto* tri : tris) {
+            bool bad = false;
+            std::array<glm::vec3, 3> verts{};
+            for (int k = 0; k < 3; ++k) {
+                const std::size_t idx = indexOf(tri->GetPoint(k));
+                if (idx >= clean.size()) { bad = true; break; }
+                verts[k] = clean[idx];
+            }
+            if (bad) continue;
+            result.push_back(verts[0]);
+            result.push_back(verts[1]);
+            result.push_back(verts[2]);
+        }
+    } catch (const std::exception&) {
+        // Non-simple / degenerate input — fall back to ear-clip on the
+        // original (non-reversed) projection so existing behaviour survives.
+        const auto fallback2d = reversed ? std::vector<glm::vec2>(
+                                               clean2d.rbegin(), clean2d.rend())
+                                         : clean2d;
+        const auto fallback3d = reversed ? std::vector<glm::vec3>(
+                                               clean.rbegin(), clean.rend())
+                                         : clean;
+        return EarClipTriangulate(fallback3d, fallback2d);
+    }
     return result;
 }
 
