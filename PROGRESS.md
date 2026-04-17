@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 8 — Loading Responsiveness & Memory
-## Current Task: 8.3 — Skip extraction for hidden-by-default IFC types
+## Current Stage: 8 — Loading Responsiveness & Memory (paused)
+## Current Task: (Stage 8 paused — 8.1 + 8.2 shipped; Castle-scale perf work deferred, revisit later with a fresh approach)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -158,10 +158,12 @@ Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 
 
 - [x] 8.1 Async IFC loading with progress + cancel (`ifc::AsyncLoader` — worker-thread `LoadAsync` returns `std::future<std::unique_ptr<IfcModel>>`, progress emitted at "starting"/"parsing"/"done" boundaries, atomic cancel flag sampled at every boundary; serializes by joining any prior in-flight load. 7 unit tests cover worker-thread execution, monotonic 0→100 progress, null-callback safety, invalid-path → nullptr, cancel-flag toggling, cancel-during-progress → nullptr, and second-load resetting the flag. Not yet wired into `main.cpp` — that lands with 8.2 loading modal.)
 - [x] 8.2 Loading modal in `app/` (ImGui overlay, % + phase + Cancel — `main.cpp` startup refactored: UIManager + ImGui backend now init *before* the IFC load so a centred ImGui modal renders each frame while `ifc::AsyncLoader` parses on a worker thread. Modal shows file path, current phase ("starting"/"parsing"/"done"), a 0–100 progress bar driven by `std::atomic<float>`, and a Cancel button that flips to "(cancelling…)" once pressed. Window-close during load triggers Cancel + clean shutdown. Local minimal `recreateSwapchainForLoading` lambda handles resize during the modal phase without depending on scene/camera. Ifc model construction moved into a `unique_ptr` returned from the future; `ifcModel` is now a reference into it for the rest of `main`. No new unit tests — the change is pure UI integration on top of 8.1's already-tested AsyncLoader; manual verification deferred to the user. 48/48 ifc tests still pass.)
-- [ ] 8.3 Skip extraction for hidden-by-default IFC types in `SceneBuilder`
-- [ ] 8.4 Memory-footprint audit & fix — make `Ifc2x3_SampleCastle.ifc` open without SIGKILL
-- [ ] 8.5 `tools::ThreadPool` + parallel geometry extraction
-- [ ] 8.6 Benchmark `Ifc2x3_SampleCastle.ifc` — parse/extract/build time, peak RSS, first-frame time
+
+<!-- 8.3+ (skip-extraction-by-type, memory audit, thread pool, benchmarks)
+     were removed 2026-04-17. The Castle-scale perf problem is deferred; when
+     we revisit it we plan to try a different approach rather than resume the
+     previous task list. -->
+
 
 ## Stage 9 — VR Integration
 - [ ] 9.1 OpenXR session lifecycle
