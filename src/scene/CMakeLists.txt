@@ -7,6 +7,7 @@ add_library(bimeup_scene STATIC
     src/Snap.cpp
     src/Slicing.cpp
     src/SectionCapGeometry.cpp
+    src/AxisSectionController.cpp
 )
 
 target_include_directories(bimeup_scene PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

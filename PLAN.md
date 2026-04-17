@@ -724,9 +724,66 @@ namespace bimeup::ifc {
 - BVH, frustum culling, LOD generation, indirect drawing — see "Scope decisions" above.
 - Splash-screen-before-window — purely cosmetic; revisit in Stage 11 (Polish & Release) if still wanted after the loading modal lands.
 
----
+### 8.3 Addendum — Axis Section Mode (added 2026-04-17)
 
-## Stage 9 — VR Integration (OpenXR)
+A second-pass UX that combines **7.3 (clipping planes)** and **7.5 (section fill)** into a single BIM-oriented tool. The free-form 6-plane UI from 7.3d is retired in favour of at most **three axis-locked planes** (one per X / Y / Z), each with an explicit mode.
+
+#### Data model
+
+- `scene::AxisSectionController` owns ≤3 slots keyed by axis. Each slot is `{ offset: float, mode: CutFront | CutBack | SectionOnly }`.
+- Each frame the controller syncs into the existing `renderer::ClipPlaneManager`:
+  - CutFront → plane equation with normal = `+axis`, `d = -offset`
+  - CutBack → normal = `−axis`, `d = +offset` (shader's front/back stays the same; just flipped)
+  - SectionOnly → same equation as CutFront, **and** the controller sets a "hide scene" flag (`AnySectionOnly()`) that `main.cpp` reads to skip the shaded + transparent draws
+- Section fill is implicitly on for every axis slot. The `ClipPlane::fillColor` picker is removed from the user-facing UI (field stays on the struct, defaulted so per-element tint from 7.5k is unchanged).
+
+#### Rendering
+
+- `main.cpp` draw loop:
+  - if `controller.AnySectionOnly()` → skip opaque + transparent scene draws, keep section-fill pipeline draw
+  - else → draw as today (CutFront/CutBack use the existing shader discard path)
+- No new pipelines, shaders, or descriptor sets. `SectionCapGeometry` and `section_fill.{vert,frag}` (7.5g–h) are reused as-is.
+
+#### Gizmo
+
+- `ImGuizmo::OPERATION::TRANSLATE_X/Y/Z` scoped to the active slot's axis — bidirectional by default (drag ±).
+- Small directional arrow marker (separate scene-space overlay, not an ImGuizmo widget) indicating which side is "kept" so CutFront vs CutBack reads at a glance.
+- Stretch (8.3f): an ImGui popup anchored at the plane origin's screen-space position for in-viewport mode switching — ImGuizmo has no custom-widget hook so this is a separate overlay.
+
+#### Tasks
+
+| # | Task | Test |
+|---|------|------|
+| 8.3a | `scene::AxisSectionController` + sync into `ClipPlaneManager` | Unit: slot add/remove/replace per axis, CutBack sign flip, `AnySectionOnly`, idempotent sync |
+| 8.3b | `ui::AxisSectionPanel` — X/Y/Z toggle + mode radio + offset slider | Unit: toggle adds/removes slot, radio writes mode, slider writes offset |
+| 8.3c | Per-axis translate gizmo + direction marker overlay | Unit: gizmo → offset writeback math; marker is manual-verify |
+| 8.3d | `main.cpp` draw-loop skip when `AnySectionOnly()` | Manual-verify (UI path) |
+| 8.3e | Retire `ui::ClipPlanesPanel` + `ColorEdit4` surface | Compile gate; no functional test |
+| 8.3f | Stretch — in-viewport mode-selector popup | Manual-verify |
+
+#### Expected API
+
+```cpp
+// scene/include/scene/AxisSectionController.h
+namespace bimeup::scene {
+    enum class Axis : std::uint8_t { X, Y, Z };
+    enum class SectionMode : std::uint8_t { CutFront, CutBack, SectionOnly };
+
+    struct AxisSectionSlot {
+        float offset;
+        SectionMode mode;
+    };
+
+    class AxisSectionController {
+    public:
+        void SetSlot(Axis axis, AxisSectionSlot slot);
+        void ClearSlot(Axis axis);
+        [[nodiscard]] std::optional<AxisSectionSlot> GetSlot(Axis axis) const;
+        [[nodiscard]] bool AnySectionOnly() const;
+        void SyncTo(renderer::ClipPlaneManager& manager);
+    };
+}
+```
 
 **Goal**: Full VR support — stereoscopic rendering, tracked controllers, teleport, object selection, in-VR UI.
 
