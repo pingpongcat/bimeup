@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 
 namespace bimeup::ui {
 
@@ -60,21 +61,21 @@ float KeptSign(scene::SectionMode mode) {
 
 // GL-convention projection: ImGuizmo matrices have Y up. ImGui screen space is
 // Y down with origin top-left, so flip Y after the NDC divide.
-bool ProjectToScreen(const glm::mat4& view, const glm::mat4& projection,
-                     const glm::vec3& worldPoint, const ImVec2& displaySize,
-                     ImVec2& outScreen) {
+std::optional<ImVec2> ProjectPointToScreen(const glm::mat4& view,
+                                           const glm::mat4& projection,
+                                           const glm::vec3& worldPoint,
+                                           const glm::vec2& displaySize) {
     const glm::vec4 clip = projection * view * glm::vec4(worldPoint, 1.0F);
-    if (clip.w <= 1e-4F) return false;
+    if (clip.w <= 1e-4F) return std::nullopt;
     const float ndcX = clip.x / clip.w;
     const float ndcY = clip.y / clip.w;
-    outScreen = ImVec2((ndcX * 0.5F + 0.5F) * displaySize.x,
-                       (0.5F - ndcY * 0.5F) * displaySize.y);
-    return true;
+    return ImVec2((ndcX * 0.5F + 0.5F) * displaySize.x,
+                  (0.5F - ndcY * 0.5F) * displaySize.y);
 }
 
 void DrawDirectionMarker(const glm::mat4& view, const glm::mat4& projection,
                          scene::Axis axis, const scene::AxisSectionSlot& slot,
-                         const ImVec2& displaySize) {
+                         const glm::vec2& displaySize) {
     const glm::vec3 unit = AxisUnit(axis);
     const glm::vec3 origin = unit * slot.offset;
     const float sign = KeptSign(slot.mode);
@@ -82,10 +83,11 @@ void DrawDirectionMarker(const glm::mat4& view, const glm::mat4& projection,
     // origin→kept gives the arrow direction in pixels.
     const glm::vec3 tip = origin + unit * sign;
 
-    ImVec2 originPx;
-    ImVec2 tipPx;
-    if (!ProjectToScreen(view, projection, origin, displaySize, originPx)) return;
-    if (!ProjectToScreen(view, projection, tip, displaySize, tipPx)) return;
+    const auto originOpt = ProjectPointToScreen(view, projection, origin, displaySize);
+    const auto tipOpt = ProjectPointToScreen(view, projection, tip, displaySize);
+    if (!originOpt.has_value() || !tipOpt.has_value()) return;
+    const ImVec2 originPx = *originOpt;
+    const ImVec2 tipPx = *tipOpt;
 
     const ImVec2 d{tipPx.x - originPx.x, tipPx.y - originPx.y};
     const float lenSq = d.x * d.x + d.y * d.y;
@@ -117,6 +119,15 @@ void DrawDirectionMarker(const glm::mat4& view, const glm::mat4& projection,
 }
 
 }  // namespace
+
+std::optional<glm::vec2> ProjectPlaneOriginToScreen(
+    const glm::mat4& view, const glm::mat4& projection,
+    scene::Axis axis, float offset, const glm::vec2& displaySize) {
+    const glm::vec3 origin = AxisUnit(axis) * offset;
+    const auto px = ProjectPointToScreen(view, projection, origin, displaySize);
+    if (!px.has_value()) return std::nullopt;
+    return glm::vec2{px->x, px->y};
+}
 
 glm::mat4 MakeAxisGizmoTransform(scene::Axis axis, float offset) {
     glm::mat4 m{1.0F};
@@ -170,6 +181,51 @@ void AxisSectionPanel::SetSlotOffset(scene::Axis axis, float offset) {
 void AxisSectionPanel::PruneActiveIfMissing() {
     if (!m_activeAxis.has_value() || m_controller == nullptr) return;
     if (!m_controller->HasSlot(*m_activeAxis)) m_activeAxis.reset();
+}
+
+void AxisSectionPanel::DrawModeContextPopup(scene::Axis axis) {
+    if (m_controller == nullptr || !m_controller->HasSlot(axis)) return;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const glm::vec2 displaySize{io.DisplaySize.x, io.DisplaySize.y};
+    const auto slot = *m_controller->GetSlot(axis);
+    const auto originOpt = ProjectPlaneOriginToScreen(m_view, m_projection, axis,
+                                                      slot.offset, displaySize);
+    if (!originOpt.has_value()) return;
+
+    // Tiny transparent host window centred on the marker origin. Right-click
+    // inside opens the popup; the window body itself has no decoration and
+    // stays behind other UI so it never steals focus.
+    constexpr float kHitSize = 22.0F;
+    ImGui::SetNextWindowPos(ImVec2(originOpt->x - kHitSize * 0.5F,
+                                   originOpt->y - kHitSize * 0.5F),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kHitSize, kHitSize), ImGuiCond_Always);
+
+    constexpr ImGuiWindowFlags hostFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    char wndId[32];
+    std::snprintf(wndId, sizeof(wndId), "##axissec_hit_%d",
+                  static_cast<int>(axis));
+
+    if (ImGui::Begin(wndId, nullptr, hostFlags)) {
+        ImGui::InvisibleButton("hit", ImVec2(kHitSize, kHitSize));
+        if (ImGui::BeginPopupContextItem("mode_menu",
+                                         ImGuiPopupFlags_MouseButtonRight)) {
+            for (const auto& mb : kModeButtons) {
+                const bool selected = (slot.mode == mb.second);
+                if (ImGui::Selectable(mb.first, selected)) {
+                    SetSlotMode(axis, mb.second);
+                }
+            }
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::End();
 }
 
 void AxisSectionPanel::OnDraw() {
@@ -246,12 +302,13 @@ void AxisSectionPanel::OnDraw() {
     // Direction markers + translate gizmo drawn outside the panel window so
     // they appear over the scene viewport.
     const ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 displaySize = io.DisplaySize;
+    const glm::vec2 displaySize{io.DisplaySize.x, io.DisplaySize.y};
 
     for (const auto& btn : kAxisButtons) {
         if (!m_controller->HasSlot(btn.axis)) continue;
-        DrawDirectionMarker(m_view, m_projection, btn.axis,
-                            *m_controller->GetSlot(btn.axis), displaySize);
+        const auto slot = *m_controller->GetSlot(btn.axis);
+        DrawDirectionMarker(m_view, m_projection, btn.axis, slot, displaySize);
+        DrawModeContextPopup(btn.axis);
     }
 
     if (m_activeAxis.has_value() && m_controller->HasSlot(*m_activeAxis)) {
@@ -260,7 +317,7 @@ void AxisSectionPanel::OnDraw() {
 
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
-        ImGuizmo::SetRect(0.0F, 0.0F, displaySize.x, displaySize.y);
+        ImGuizmo::SetRect(0.0F, 0.0F, io.DisplaySize.x, io.DisplaySize.y);
 
         glm::mat4 xform = MakeAxisGizmoTransform(axis, slot.offset);
         const bool used = ImGuizmo::Manipulate(&m_view[0][0],

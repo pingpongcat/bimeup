@@ -23,6 +23,14 @@ glm::mat4 MakeAxisGizmoTransform(scene::Axis axis, float offset);
 // stray motion.
 float ExtractAxisOffset(const glm::mat4& transform, scene::Axis axis);
 
+// Project the axis-plane origin (axis_unit * offset) to ImGui pixel coords.
+// Returns nullopt if the point is behind the camera (clip.w <= 1e-4). Flips Y
+// to match ImGui's top-left screen space. Used both for the direction marker
+// and for anchoring the in-viewport mode-selector popup (8.3f).
+std::optional<glm::vec2> ProjectPlaneOriginToScreen(
+    const glm::mat4& view, const glm::mat4& projection,
+    scene::Axis axis, float offset, const glm::vec2& displaySize);
+
 /// ImGui panel for axis-locked section planes (8.3). Owns a pointer to an
 /// external `scene::AxisSectionController` and exposes X/Y/Z toggles, per-axis
 /// mode radios, and an offset slider. The `Toggle*`/`SetSlot*` methods carry
@@ -65,6 +73,10 @@ public:
     void PruneActiveIfMissing();
 
 private:
+    // 8.3f stretch: ImGui popup anchored at the plane-origin projected screen
+    // coords. Opens on right-click (BeginPopupContextItem) and writes the
+    // selected mode back via SetSlotMode.
+    void DrawModeContextPopup(scene::Axis axis);
     scene::AxisSectionController* m_controller = nullptr;
     glm::mat4 m_view{1.0F};
     glm::mat4 m_projection{1.0F};

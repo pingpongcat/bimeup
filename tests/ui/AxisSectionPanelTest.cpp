@@ -14,6 +14,7 @@ using bimeup::scene::SectionMode;
 using bimeup::ui::AxisSectionPanel;
 using bimeup::ui::ExtractAxisOffset;
 using bimeup::ui::MakeAxisGizmoTransform;
+using bimeup::ui::ProjectPlaneOriginToScreen;
 
 namespace {
 
@@ -271,6 +272,46 @@ TEST(AxisSectionPanelTest, SetCameraMatricesRoundTrips) {
     panel.SetCameraMatrices(view, proj);
     EXPECT_EQ(panel.GetViewMatrix(), view);
     EXPECT_EQ(panel.GetProjectionMatrix(), proj);
+}
+
+TEST(AxisSectionPanelTest, ProjectPlaneOriginToScreenCentersAtOffsetZero) {
+    const glm::mat4 id{1.0F};
+    const auto screen = ProjectPlaneOriginToScreen(id, id, Axis::X, 0.0F,
+                                                   glm::vec2{800.0F, 600.0F});
+    ASSERT_TRUE(screen.has_value());
+    EXPECT_FLOAT_EQ(screen->x, 400.0F);
+    EXPECT_FLOAT_EQ(screen->y, 300.0F);
+}
+
+TEST(AxisSectionPanelTest, ProjectPlaneOriginToScreenMovesRightAlongX) {
+    // With identity view/proj, world (1,0,0) → NDC (1,0) → pixel
+    // ((1*0.5+0.5)*W, (0.5 - 0*0.5)*H) = (W, H/2).
+    const glm::mat4 id{1.0F};
+    const auto screen = ProjectPlaneOriginToScreen(id, id, Axis::X, 1.0F,
+                                                   glm::vec2{800.0F, 600.0F});
+    ASSERT_TRUE(screen.has_value());
+    EXPECT_FLOAT_EQ(screen->x, 800.0F);
+    EXPECT_FLOAT_EQ(screen->y, 300.0F);
+}
+
+TEST(AxisSectionPanelTest, ProjectPlaneOriginToScreenMovesUpAlongY) {
+    // World (0,1,0) → NDC (0,1) → pixel (W/2, (0.5 - 1*0.5)*H) = (W/2, 0).
+    const glm::mat4 id{1.0F};
+    const auto screen = ProjectPlaneOriginToScreen(id, id, Axis::Y, 1.0F,
+                                                   glm::vec2{800.0F, 600.0F});
+    ASSERT_TRUE(screen.has_value());
+    EXPECT_FLOAT_EQ(screen->x, 400.0F);
+    EXPECT_FLOAT_EQ(screen->y, 0.0F);
+}
+
+TEST(AxisSectionPanelTest, ProjectPlaneOriginToScreenReturnsNulloptBehindCamera) {
+    // proj with w-row zeroed out → clip.w == 0 → behind-camera sentinel.
+    glm::mat4 proj{1.0F};
+    proj[3][3] = 0.0F;
+    const auto screen = ProjectPlaneOriginToScreen(glm::mat4{1.0F}, proj,
+                                                   Axis::X, 0.0F,
+                                                   glm::vec2{800.0F, 600.0F});
+    EXPECT_FALSE(screen.has_value());
 }
 
 TEST(AxisSectionPanelTest, ControllerSwitchClearsActiveAxis) {
