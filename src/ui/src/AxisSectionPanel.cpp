@@ -1,9 +1,12 @@
 #include <ui/AxisSectionPanel.h>
 
 #include <imgui.h>
+#include <ImGuizmo.h>
 #include <scene/AxisSectionController.h>
 
 #include <array>
+#include <cmath>
+#include <cstddef>
 
 namespace bimeup::ui {
 
@@ -26,7 +29,104 @@ constexpr std::array<std::pair<const char*, scene::SectionMode>, 3> kModeButtons
     {"Section", scene::SectionMode::SectionOnly},
 }};
 
+std::size_t AxisIndex(scene::Axis axis) {
+    return static_cast<std::size_t>(axis);
+}
+
+ImGuizmo::OPERATION AxisTranslateOp(scene::Axis axis) {
+    switch (axis) {
+        case scene::Axis::X: return ImGuizmo::TRANSLATE_X;
+        case scene::Axis::Y: return ImGuizmo::TRANSLATE_Y;
+        case scene::Axis::Z: return ImGuizmo::TRANSLATE_Z;
+    }
+    return ImGuizmo::TRANSLATE_X;
+}
+
+glm::vec3 AxisUnit(scene::Axis axis) {
+    switch (axis) {
+        case scene::Axis::X: return {1.0F, 0.0F, 0.0F};
+        case scene::Axis::Y: return {0.0F, 1.0F, 0.0F};
+        case scene::Axis::Z: return {0.0F, 0.0F, 1.0F};
+    }
+    return {1.0F, 0.0F, 0.0F};
+}
+
+// +1 when the kept side is +axis, -1 when it is -axis.
+float KeptSign(scene::SectionMode mode) {
+    // CutBack flips the normal to -axis (see AxisSectionController::MakeAxisEquation).
+    // CutFront and SectionOnly both keep the +axis side.
+    return (mode == scene::SectionMode::CutBack) ? -1.0F : 1.0F;
+}
+
+// GL-convention projection: ImGuizmo matrices have Y up. ImGui screen space is
+// Y down with origin top-left, so flip Y after the NDC divide.
+bool ProjectToScreen(const glm::mat4& view, const glm::mat4& projection,
+                     const glm::vec3& worldPoint, const ImVec2& displaySize,
+                     ImVec2& outScreen) {
+    const glm::vec4 clip = projection * view * glm::vec4(worldPoint, 1.0F);
+    if (clip.w <= 1e-4F) return false;
+    const float ndcX = clip.x / clip.w;
+    const float ndcY = clip.y / clip.w;
+    outScreen = ImVec2((ndcX * 0.5F + 0.5F) * displaySize.x,
+                       (0.5F - ndcY * 0.5F) * displaySize.y);
+    return true;
+}
+
+void DrawDirectionMarker(const glm::mat4& view, const glm::mat4& projection,
+                         scene::Axis axis, const scene::AxisSectionSlot& slot,
+                         const ImVec2& displaySize) {
+    const glm::vec3 unit = AxisUnit(axis);
+    const glm::vec3 origin = unit * slot.offset;
+    const float sign = KeptSign(slot.mode);
+    // Second world-space point 1m into the "kept" side — screen projection of
+    // origin→kept gives the arrow direction in pixels.
+    const glm::vec3 tip = origin + unit * sign;
+
+    ImVec2 originPx;
+    ImVec2 tipPx;
+    if (!ProjectToScreen(view, projection, origin, displaySize, originPx)) return;
+    if (!ProjectToScreen(view, projection, tip, displaySize, tipPx)) return;
+
+    const ImVec2 d{tipPx.x - originPx.x, tipPx.y - originPx.y};
+    const float lenSq = d.x * d.x + d.y * d.y;
+    if (lenSq < 1.0F) return;  // axis is almost edge-on; hide the marker
+    const float len = std::sqrt(lenSq);
+    const ImVec2 dir{d.x / len, d.y / len};
+
+    // Axis-mode-independent visual length in screen pixels.
+    constexpr float kArrowPx = 42.0F;
+    const ImVec2 head{originPx.x + dir.x * kArrowPx, originPx.y + dir.y * kArrowPx};
+
+    // Perpendicular for the arrowhead wings.
+    const ImVec2 perp{-dir.y, dir.x};
+    constexpr float kWing = 8.0F;
+    const ImVec2 wingA{head.x - dir.x * kWing + perp.x * kWing,
+                       head.y - dir.y * kWing + perp.y * kWing};
+    const ImVec2 wingB{head.x - dir.x * kWing - perp.x * kWing,
+                       head.y - dir.y * kWing - perp.y * kWing};
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImU32 col = (slot.mode == scene::SectionMode::SectionOnly)
+                          ? IM_COL32(255, 200, 64, 255)   // amber
+                          : IM_COL32(80, 220, 120, 255);  // green
+    constexpr float kThickness = 2.5F;
+    dl->AddLine(originPx, head, col, kThickness);
+    dl->AddLine(head, wingA, col, kThickness);
+    dl->AddLine(head, wingB, col, kThickness);
+    dl->AddCircleFilled(originPx, 3.5F, col);
+}
+
 }  // namespace
+
+glm::mat4 MakeAxisGizmoTransform(scene::Axis axis, float offset) {
+    glm::mat4 m{1.0F};
+    m[3][AxisIndex(axis)] = offset;
+    return m;
+}
+
+float ExtractAxisOffset(const glm::mat4& transform, scene::Axis axis) {
+    return transform[3][AxisIndex(axis)];
+}
 
 const char* AxisSectionPanel::GetName() const {
     return "Axis Section";
@@ -142,6 +242,36 @@ void AxisSectionPanel::OnDraw() {
     PruneActiveIfMissing();
 
     ImGui::End();
+
+    // Direction markers + translate gizmo drawn outside the panel window so
+    // they appear over the scene viewport.
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 displaySize = io.DisplaySize;
+
+    for (const auto& btn : kAxisButtons) {
+        if (!m_controller->HasSlot(btn.axis)) continue;
+        DrawDirectionMarker(m_view, m_projection, btn.axis,
+                            *m_controller->GetSlot(btn.axis), displaySize);
+    }
+
+    if (m_activeAxis.has_value() && m_controller->HasSlot(*m_activeAxis)) {
+        const scene::Axis axis = *m_activeAxis;
+        const auto slot = *m_controller->GetSlot(axis);
+
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
+        ImGuizmo::SetRect(0.0F, 0.0F, displaySize.x, displaySize.y);
+
+        glm::mat4 xform = MakeAxisGizmoTransform(axis, slot.offset);
+        const bool used = ImGuizmo::Manipulate(&m_view[0][0],
+                                               &m_projection[0][0],
+                                               AxisTranslateOp(axis),
+                                               ImGuizmo::WORLD,
+                                               &xform[0][0]);
+        if (used) {
+            SetSlotOffset(axis, ExtractAxisOffset(xform, axis));
+        }
+    }
 }
 
 }  // namespace bimeup::ui

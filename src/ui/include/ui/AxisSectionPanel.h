@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include <glm/glm.hpp>
+
 #include <ui/Panel.h>
 
 namespace bimeup::scene {
@@ -11,6 +13,15 @@ enum class SectionMode : unsigned char;
 }  // namespace bimeup::scene
 
 namespace bimeup::ui {
+
+// Identity matrix with translation = offset * axis_unit_vector. Input to
+// ImGuizmo::Manipulate for the axis-locked translate gizmo.
+glm::mat4 MakeAxisGizmoTransform(scene::Axis axis, float offset);
+
+// Read back the translation component of the gizmo transform along `axis`.
+// Ignores translations on the other two axes so SetSlotOffset never absorbs
+// stray motion.
+float ExtractAxisOffset(const glm::mat4& transform, scene::Axis axis);
 
 /// ImGui panel for axis-locked section planes (8.3). Owns a pointer to an
 /// external `scene::AxisSectionController` and exposes X/Y/Z toggles, per-axis
@@ -27,6 +38,13 @@ public:
     [[nodiscard]] scene::AxisSectionController* GetController() const {
         return m_controller;
     }
+
+    void SetCameraMatrices(const glm::mat4& view, const glm::mat4& projection) {
+        m_view = view;
+        m_projection = projection;
+    }
+    [[nodiscard]] const glm::mat4& GetViewMatrix() const { return m_view; }
+    [[nodiscard]] const glm::mat4& GetProjectionMatrix() const { return m_projection; }
 
     void SetActiveAxis(std::optional<scene::Axis> axis) { m_activeAxis = axis; }
     [[nodiscard]] std::optional<scene::Axis> ActiveAxis() const { return m_activeAxis; }
@@ -48,6 +66,8 @@ public:
 
 private:
     scene::AxisSectionController* m_controller = nullptr;
+    glm::mat4 m_view{1.0F};
+    glm::mat4 m_projection{1.0F};
     std::optional<scene::Axis> m_activeAxis;
     float m_offsetMin = -10.0F;
     float m_offsetMax = 10.0F;
