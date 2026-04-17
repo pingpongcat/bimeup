@@ -31,6 +31,7 @@
 #include <renderer/ViewportNavigator.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
+#include <scene/AxisSectionController.h>
 #include <scene/Measurement.h>
 #include <scene/Raycast.h>
 #include <scene/Scene.h>
@@ -38,6 +39,7 @@
 #include <scene/SceneNode.h>
 #include <scene/SectionCapGeometry.h>
 #include <tools/Log.h>
+#include <ui/AxisSectionPanel.h>
 #include <ui/ClipPlanesPanel.h>
 #include <ui/FirstPersonExitPanel.h>
 #include <ui/PlanViewPanel.h>
@@ -238,6 +240,7 @@ int main(int argc, char* argv[]) {
     descriptorSet.UpdateBuffer(1, lightingBuffer);
 
     bimeup::renderer::ClipPlaneManager clipPlaneManager;
+    bimeup::scene::AxisSectionController axisSectionController;
     bimeup::renderer::ClipPlanesUbo clipPlanesUbo = bimeup::renderer::PackClipPlanes(clipPlaneManager);
     bimeup::renderer::Buffer clipPlanesBuffer(device, bimeup::renderer::BufferType::Uniform,
                                               sizeof(bimeup::renderer::ClipPlanesUbo),
@@ -955,6 +958,7 @@ int main(int argc, char* argv[]) {
     auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
     auto renderQualityOwned = std::make_unique<bimeup::ui::RenderQualityPanel>();
     auto clipPlanesOwned = std::make_unique<bimeup::ui::ClipPlanesPanel>();
+    auto axisSectionOwned = std::make_unique<bimeup::ui::AxisSectionPanel>();
     auto planViewOwned = std::make_unique<bimeup::ui::PlanViewPanel>();
     auto typeVisibilityOwned = std::make_unique<bimeup::ui::TypeVisibilityPanel>();
     auto firstPersonExitOwned = std::make_unique<bimeup::ui::FirstPersonExitPanel>();
@@ -966,6 +970,7 @@ int main(int argc, char* argv[]) {
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
     auto* clipPlanesPanel = clipPlanesOwned.get();
+    auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
     auto* typeVisibilityPanel = typeVisibilityOwned.get();
     auto* firstPersonExitPanel = firstPersonExitOwned.get();
@@ -974,6 +979,19 @@ int main(int argc, char* argv[]) {
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
     clipPlanesPanel->SetManager(&clipPlaneManager);
+    axisSectionPanel->SetController(&axisSectionController);
+    {
+        auto axisBounds = ComputeSceneBounds(sceneResult->scene);
+        if (axisBounds.IsValid()) {
+            const glm::vec3 mn = axisBounds.GetMin();
+            const glm::vec3 mx = axisBounds.GetMax();
+            const float lo = std::min({mn.x, mn.y, mn.z});
+            const float hi = std::max({mx.x, mx.y, mx.z});
+            // Pad 10% so extreme offsets can push the plane just past the model.
+            const float pad = 0.1F * std::max(hi - lo, 1.0F);
+            axisSectionPanel->SetOffsetRange(lo - pad, hi + pad);
+        }
+    }
     planViewPanel->SetClipPlaneManager(&clipPlaneManager);
     planViewPanel->SetCamera(&camera);
     planViewPanel->SetLevels({
@@ -1083,6 +1101,7 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(measurementsOwned));
     uiManager.AddPanel(std::move(renderQualityOwned));
     uiManager.AddPanel(std::move(clipPlanesOwned));
+    uiManager.AddPanel(std::move(axisSectionOwned));
     uiManager.AddPanel(std::move(planViewOwned));
     uiManager.AddPanel(std::move(typeVisibilityOwned));
     uiManager.AddPanel(std::move(firstPersonExitOwned));
@@ -1358,7 +1377,8 @@ int main(int argc, char* argv[]) {
             bimeup::ui::Panel* mainPanels[] = {
                 toolbar,            hierarchyPanel,   propertyPanel,
                 overlay,            measurementsPanel, renderQualityPanel,
-                clipPlanesPanel,    planViewPanel,    typeVisibilityPanel,
+                clipPlanesPanel,    axisSectionPanel, planViewPanel,
+                typeVisibilityPanel,
             };
             if (firstPersonActive && !wasFirstPersonActive) {
                 savedVisibility.clear();
@@ -1383,6 +1403,7 @@ int main(int argc, char* argv[]) {
         gizmoProj[1][1] *= -1.0F;
         uiManager.SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         clipPlanesPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
+        axisSectionPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         uiManager.BeginFrame();
 
         // ImGuizmo view cube: top-right, 128 px square. Captures drags on the
@@ -1449,6 +1470,11 @@ int main(int argc, char* argv[]) {
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
 
+        // Push AxisSectionController slot state into the shared ClipPlaneManager
+        // before we pack it for the shader — the controller's plane entries carry
+        // sectionFill=true so the fill pipeline picks them up.
+        axisSectionController.SyncTo(clipPlaneManager);
+
         // Re-pack clip planes each frame; cheap, and 7.3d will mutate the manager from UI.
         clipPlanesUbo = bimeup::renderer::PackClipPlanes(clipPlaneManager);
         auto* clipMapped = static_cast<bimeup::renderer::ClipPlanesUbo*>(clipPlanesBuffer.Map());
@@ -1482,11 +1508,15 @@ int main(int argc, char* argv[]) {
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         const bool shaded = renderMode == bimeup::renderer::RenderMode::Shaded;
+        // SectionOnly mode: only the section-fill caps render; shaded +
+        // transparent scene passes are skipped entirely.
+        const bool sectionOnly = axisSectionController.AnySectionOnly();
         auto& opaquePipeline = shaded ? *shadedPipeline : *wireframePipeline;
-        opaquePipeline.Bind(cmd);
-        descriptorSet.Bind(cmd, opaquePipeline.GetLayout());
-
-        meshBuffer.Bind(cmd);
+        if (!sectionOnly) {
+            opaquePipeline.Bind(cmd);
+            descriptorSet.Bind(cmd, opaquePipeline.GetLayout());
+            meshBuffer.Bind(cmd);
+        }
 
         // Pass 1: opaque. In wireframe mode, everything goes through the wire
         // pipeline (line rasterization has no meaningful alpha bucket).
@@ -1495,13 +1525,15 @@ int main(int argc, char* argv[]) {
                 sceneResult->meshes[h].IsTransparent()) return true;
             return handlesWithAlphaOverride.count(h) > 0;
         };
-        for (const auto& [handle, transform] : drawCalls) {
-            if (shaded && needsTransparentPass(handle)) {
-                continue;
+        if (!sectionOnly) {
+            for (const auto& [handle, transform] : drawCalls) {
+                if (shaded && needsTransparentPass(handle)) {
+                    continue;
+                }
+                vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(glm::mat4), &transform);
+                meshBuffer.Draw(cmd, handle);
             }
-            vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(glm::mat4), &transform);
-            meshBuffer.Draw(cmd, handle);
         }
 
         // Section-fill caps: only rebuild/draw when at least one plane is
@@ -1549,7 +1581,7 @@ int main(int argc, char* argv[]) {
         // Pass 2: transparent (shaded mode only). Depth-test on, write off — so
         // blended fragments respect opaque depth but don't occlude each other.
         // No back-to-front sort yet; acceptable for glass panes that rarely overlap.
-        if (shaded) {
+        if (shaded && !sectionOnly) {
             transparentPipeline->Bind(cmd);
             descriptorSet.Bind(cmd, transparentPipeline->GetLayout());
             meshBuffer.Bind(cmd);
