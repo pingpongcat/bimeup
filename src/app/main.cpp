@@ -40,7 +40,6 @@
 #include <scene/SectionCapGeometry.h>
 #include <tools/Log.h>
 #include <ui/AxisSectionPanel.h>
-#include <ui/ClipPlanesPanel.h>
 #include <ui/FirstPersonExitPanel.h>
 #include <ui/PlanViewPanel.h>
 #include <ui/HierarchyPanel.h>
@@ -957,7 +956,6 @@ int main(int argc, char* argv[]) {
     auto overlayOwned = std::make_unique<bimeup::ui::ViewportOverlay>();
     auto measurementsOwned = std::make_unique<bimeup::ui::MeasurementsPanel>();
     auto renderQualityOwned = std::make_unique<bimeup::ui::RenderQualityPanel>();
-    auto clipPlanesOwned = std::make_unique<bimeup::ui::ClipPlanesPanel>();
     auto axisSectionOwned = std::make_unique<bimeup::ui::AxisSectionPanel>();
     auto planViewOwned = std::make_unique<bimeup::ui::PlanViewPanel>();
     auto typeVisibilityOwned = std::make_unique<bimeup::ui::TypeVisibilityPanel>();
@@ -969,7 +967,6 @@ int main(int argc, char* argv[]) {
     auto* overlay = overlayOwned.get();
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
-    auto* clipPlanesPanel = clipPlanesOwned.get();
     auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
     auto* typeVisibilityPanel = typeVisibilityOwned.get();
@@ -978,7 +975,6 @@ int main(int argc, char* argv[]) {
     typeVisibilityPanel->ApplyDefaults();
     measurementsPanel->SetTool(&measureTool);
     measurementsPanel->SetOnClearAll([&] { measureTool.ClearMeasurements(); });
-    clipPlanesPanel->SetManager(&clipPlaneManager);
     axisSectionPanel->SetController(&axisSectionController);
     {
         auto axisBounds = ComputeSceneBounds(sceneResult->scene);
@@ -1100,7 +1096,6 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(overlayOwned));
     uiManager.AddPanel(std::move(measurementsOwned));
     uiManager.AddPanel(std::move(renderQualityOwned));
-    uiManager.AddPanel(std::move(clipPlanesOwned));
     uiManager.AddPanel(std::move(axisSectionOwned));
     uiManager.AddPanel(std::move(planViewOwned));
     uiManager.AddPanel(std::move(typeVisibilityOwned));
@@ -1377,8 +1372,7 @@ int main(int argc, char* argv[]) {
             bimeup::ui::Panel* mainPanels[] = {
                 toolbar,            hierarchyPanel,   propertyPanel,
                 overlay,            measurementsPanel, renderQualityPanel,
-                clipPlanesPanel,    axisSectionPanel, planViewPanel,
-                typeVisibilityPanel,
+                axisSectionPanel,   planViewPanel,    typeVisibilityPanel,
             };
             if (firstPersonActive && !wasFirstPersonActive) {
                 savedVisibility.clear();
@@ -1402,7 +1396,6 @@ int main(int argc, char* argv[]) {
         glm::mat4 gizmoProj = camera.GetProjectionMatrix();
         gizmoProj[1][1] *= -1.0F;
         uiManager.SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
-        clipPlanesPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         axisSectionPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         uiManager.BeginFrame();
 

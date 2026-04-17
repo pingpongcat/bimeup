@@ -14,7 +14,11 @@ struct ClipPlane {
     glm::vec4 equation{0.0F, 1.0F, 0.0F, 0.0F};
     bool enabled{true};
     bool sectionFill{false};
-    glm::vec4 fillColor{0.6F, 0.6F, 0.6F, 1.0F};
+    // Per-plane tint multiplier for the section-fill pipeline. Default 1s so
+    // caps render at the element's own color (SectionCapGeometry does
+    // ownerColor * fillColor). 8.3e retired the UI surface that edited this;
+    // the field stays on the struct for potential future re-exposure.
+    glm::vec4 fillColor{1.0F, 1.0F, 1.0F, 1.0F};
 
     static ClipPlane FromPointNormal(const glm::vec3& point, const glm::vec3& normal);
 };

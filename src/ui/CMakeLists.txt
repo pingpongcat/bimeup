@@ -2,7 +2,6 @@ find_package(Vulkan REQUIRED)
 
 add_library(bimeup_ui STATIC
     src/AxisSectionPanel.cpp
-    src/ClipPlanesPanel.cpp
     src/FirstPersonExitPanel.cpp
     src/HierarchyPanel.cpp
     src/ImGuiContext.cpp

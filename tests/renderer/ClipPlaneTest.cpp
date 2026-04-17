@@ -115,11 +115,13 @@ TEST(ClipPlaneTest, TransformToPlane_RoundTripDiagonal) {
 }
 
 TEST(ClipPlaneTest, SectionFieldsDefaults) {
+    // 8.3e: fillColor default is (1,1,1,1) so SectionCapGeometry's
+    // ownerColor * plane.fillColor tint reduces to ownerColor.
     ClipPlane p{};
     EXPECT_FALSE(p.sectionFill);
-    EXPECT_FLOAT_EQ(p.fillColor.r, 0.6F);
-    EXPECT_FLOAT_EQ(p.fillColor.g, 0.6F);
-    EXPECT_FLOAT_EQ(p.fillColor.b, 0.6F);
+    EXPECT_FLOAT_EQ(p.fillColor.r, 1.0F);
+    EXPECT_FLOAT_EQ(p.fillColor.g, 1.0F);
+    EXPECT_FLOAT_EQ(p.fillColor.b, 1.0F);
     EXPECT_FLOAT_EQ(p.fillColor.a, 1.0F);
 }
 
@@ -133,9 +135,9 @@ TEST(ClipPlaneTest, TransformToPlane_ResetsSectionFieldsToDefaults) {
     glm::mat4 m = PlaneToTransform(original);
     ClipPlane back = TransformToPlane(m);
     EXPECT_FALSE(back.sectionFill);
-    EXPECT_FLOAT_EQ(back.fillColor.r, 0.6F);
-    EXPECT_FLOAT_EQ(back.fillColor.g, 0.6F);
-    EXPECT_FLOAT_EQ(back.fillColor.b, 0.6F);
+    EXPECT_FLOAT_EQ(back.fillColor.r, 1.0F);
+    EXPECT_FLOAT_EQ(back.fillColor.g, 1.0F);
+    EXPECT_FLOAT_EQ(back.fillColor.b, 1.0F);
     EXPECT_FLOAT_EQ(back.fillColor.a, 1.0F);
 }
 
