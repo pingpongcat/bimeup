@@ -38,6 +38,15 @@ inline std::optional<glm::vec2> ProjectWorldToScreen(
                      (0.5F - ndcY * 0.5F) * displaySize.y};
 }
 
+// Sign of the drag-handle bar direction along the axis. The bar extends
+// from the plane origin toward the material being cut away (opposite of the
+// kept side), so for CutFront / SectionOnly the bar points -axis and for
+// CutBack it points +axis. Parameterised on a bool so this stays math-only
+// (no enum dependency).
+inline float HandleBarSign(bool isCutBack) {
+    return isCutBack ? 1.0F : -1.0F;
+}
+
 // Invert a mouse-drag delta onto an axis that has been projected into screen
 // space. `screenAxisStart` / `screenAxisEnd` are the screen-space projections
 // of two world-space points 1 unit apart along the axis (so their delta is
@@ -132,26 +141,25 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
                            const glm::vec2& displaySize) {
     const glm::vec3 axisUnit = internal::AxisUnit(axis);
     const glm::vec3 origin3 = axisUnit * offset;
-    // "Kept" side sign — visual-only: the drag bar points where geometry is
-    // preserved, matching the old DrawDirectionMarker convention.
-    const float keptSign =
-        (mode == scene::SectionMode::CutBack) ? -1.0F : 1.0F;
+    // Bar points toward the cut-away side (opposite of the kept half).
+    const float barSign =
+        HandleBarSign(mode == scene::SectionMode::CutBack);
 
     const auto originOpt =
         ProjectWorldToScreen(view, projection, origin3, displaySize);
-    const auto keptTipOpt = ProjectWorldToScreen(
-        view, projection, origin3 + axisUnit * keptSign, displaySize);
+    const auto barTipOpt = ProjectWorldToScreen(
+        view, projection, origin3 + axisUnit * barSign, displaySize);
     const auto unitTipOpt = ProjectWorldToScreen(
         view, projection, origin3 + axisUnit, displaySize);
-    if (!originOpt.has_value() || !keptTipOpt.has_value() ||
+    if (!originOpt.has_value() || !barTipOpt.has_value() ||
         !unitTipOpt.has_value()) {
         return false;
     }
     const glm::vec2 originPx = *originOpt;
-    const glm::vec2 keptTipPx = *keptTipOpt;
+    const glm::vec2 barTipPx = *barTipOpt;
     const glm::vec2 unitTipPx = *unitTipOpt;
 
-    const glm::vec2 rawDir = keptTipPx - originPx;
+    const glm::vec2 rawDir = barTipPx - originPx;
     const float dirLen = glm::length(rawDir);
     if (dirLen < 8.0F) return false;  // axis nearly edge-on → skip
     const glm::vec2 dir = rawDir / dirLen;

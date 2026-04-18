@@ -198,8 +198,12 @@ VkSurfaceFormatKHR Swapchain::ChooseSurfaceFormat(
 
 VkPresentModeKHR Swapchain::ChoosePresentMode(
     const std::vector<VkPresentModeKHR>& modes) {
+    // Cap to display refresh rate (vsync) to avoid wasting compute. Prefer
+    // FIFO_RELAXED so a frame that misses a vblank tears and presents
+    // immediately instead of waiting a full refresh interval — the extra
+    // latency is what makes debug-mode orbiting feel jaggy under strict FIFO.
     for (const auto& mode : modes) {
-        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
             return mode;
         }
     }

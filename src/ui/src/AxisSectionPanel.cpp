@@ -16,10 +16,12 @@ struct AxisButton {
     scene::Axis axis;
 };
 
+// BIM convention: Z is vertical (height), Y is depth. The viewer's world is
+// Y-up, so the UI "Z" label maps to the world Y axis and "Y" maps to world Z.
 constexpr std::array<AxisButton, 3> kAxisButtons{{
     {"X", scene::Axis::X},
-    {"Y", scene::Axis::Y},
-    {"Z", scene::Axis::Z},
+    {"Y", scene::Axis::Z},
+    {"Z", scene::Axis::Y},
 }};
 
 }  // namespace

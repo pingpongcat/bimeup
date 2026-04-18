@@ -1257,9 +1257,8 @@ int main(int argc, char* argv[]) {
         planViewPanel->SetViewportAspect(aspect);
     };
 
-    // FPS tracking
+    // Frame-time tracking for per-frame dt (walking, etc.).
     double lastFrameTime = glfwGetTime();
-    float smoothedFps = 0.0F;
 
     // Main loop
     while (!window.ShouldClose()) {
@@ -1285,10 +1284,6 @@ int main(int argc, char* argv[]) {
         double now = glfwGetTime();
         double dt = now - lastFrameTime;
         lastFrameTime = now;
-        if (dt > 0.0) {
-            float instantFps = static_cast<float>(1.0 / dt);
-            smoothedFps = smoothedFps == 0.0F ? instantFps : (smoothedFps * 0.9F + instantFps * 0.1F);
-        }
 
         // First-person walking: WASD + arrows feed FPC.Move; FPC drives camera.
         // Polled here (not key callbacks) so held keys produce continuous motion.
@@ -1338,9 +1333,6 @@ int main(int argc, char* argv[]) {
         }
 
         // Sync overlay & toolbar state.
-        overlay->SetFps(smoothedFps);
-        overlay->SetCameraPosition(camera.GetPosition());
-        overlay->SetCameraForward(camera.GetForward());
         {
             auto [view, proj] = buildViewProj();
             // Always show the measurement layer when there's saved history,

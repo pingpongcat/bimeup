@@ -761,6 +761,7 @@ A second-pass UX that combines **7.3 (clipping planes)** and **7.5 (section fill
 | 8.3e | Retire `ui::ClipPlanesPanel` + `ColorEdit4` surface | Compile gate; no functional test |
 | 8.3f | Stretch — in-viewport mode-selector popup | Manual-verify |
 | 8.3g | Retire ImGuizmo; custom single-header `ui::AxisSectionGizmo` (drag bar + grab + F/S/B segmented switcher + (×) close). View cube swapped to `imoguizmo`. | Unit: `ProjectWorldToScreen` + `AxisDragDelta` math; gizmo is manual-verify |
+| 8.3h | UX polish: swap Y/Z button labels in `ui::AxisSectionPanel` so "Z" maps to world-Y (BIM users think Z = up); flip drag-handle bar to extend toward the cut-away side; cap present rate to display refresh via `VK_PRESENT_MODE_FIFO_RELAXED_KHR` (fallback FIFO); retire the FPS / camera-pos / small-axes debug overlay from `ui::ViewportOverlay` — keep only the measurement layer. | Manual-verify (UX + vsync); stale `ViewportOverlay` tests dropped |
 
 #### Expected API
 
