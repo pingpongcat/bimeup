@@ -27,6 +27,7 @@ add_library(bimeup_renderer STATIC
     src/OctNormal.cpp
     src/LinearDepth.cpp
     src/DepthLinearizePipeline.cpp
+    src/DepthMipPipeline.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

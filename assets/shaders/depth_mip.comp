@@ -1,0 +1,35 @@
+#version 450
+
+// Downsample one mip of the linear-depth pyramid to the next by taking the
+// minimum of each 2×2 source neighbourhood. Min is the SSAO-conservative
+// choice — the closer surface in a neighbourhood biases toward more
+// occlusion, matching the XeGTAO / Godot reference pyramid build.
+//
+// Input  (set 0, binding 0): source mip N as r32f sampler2D, layout
+//                            SHADER_READ_ONLY_OPTIMAL.
+// Output (set 0, binding 1): destination mip N+1 as r32f storage image.
+//
+// The caller binds a per-level descriptor set (pointing at mip N source /
+// mip N+1 dest) and dispatches with group count sized to the destination
+// mip (ceil(dstSize / 8) on each axis).
+
+layout(set = 0, binding = 0) uniform sampler2D srcMip;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstMip;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(dstMip);
+    if (dstCoord.x >= dstSize.x || dstCoord.y >= dstSize.y) {
+        return;
+    }
+
+    ivec2 srcBase = dstCoord * 2;
+    float d00 = texelFetch(srcMip, srcBase + ivec2(0, 0), 0).r;
+    float d10 = texelFetch(srcMip, srcBase + ivec2(1, 0), 0).r;
+    float d01 = texelFetch(srcMip, srcBase + ivec2(0, 1), 0).r;
+    float d11 = texelFetch(srcMip, srcBase + ivec2(1, 1), 0).r;
+    float dMin = min(min(d00, d10), min(d01, d11));
+    imageStore(dstMip, dstCoord, vec4(dMin, 0.0, 0.0, 0.0));
+}
