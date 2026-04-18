@@ -30,6 +30,7 @@ add_library(bimeup_renderer STATIC
     src/DepthMipPipeline.cpp
     src/SsaoKernel.cpp
     src/SsaoPipeline.cpp
+    src/SsaoBlurPipeline.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

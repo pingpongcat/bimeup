@@ -1,0 +1,76 @@
+#version 450
+
+// Separable edge-aware blur over the half-res R8 AO target from RP.5b's
+// `ssao_main.comp`. Runs twice per frame: horizontal then vertical, with
+// ping-ponged descriptor sets. 7-tap symmetric gaussian; depth-delta
+// rejection via the depth pyramid preserves contact shadows at geometry
+// edges that the main SSAO pass picked up but an isotropic blur would
+// smear.
+//
+// Inputs (set 0):
+//   binding 0: R8 AO input (combined-image-sampler, half-res)
+//   binding 1: linear depth pyramid (combined-image-sampler) — full-chain
+//              r32f; we sample mip 0 via `textureLod` for edge rejection.
+//   binding 2: R8 AO output (storage image, half-res — same size as input)
+//
+// Push constants: ivec2 direction + float edgeSharpness. Horizontal pass
+// pushes {1, 0}; vertical pushes {0, 1}. `edgeSharpness` scales the
+// per-metre falloff of the depth-delta rejection — higher values yield
+// crisper edges at the cost of leaving more AO noise in shallow gradients.
+
+layout(set = 0, binding = 0) uniform sampler2D aoIn;
+layout(set = 0, binding = 1) uniform sampler2D linearDepthPyramid;
+layout(set = 0, binding = 2, r8) uniform writeonly image2D aoOut;
+
+layout(push_constant) uniform Push {
+    ivec2 direction;
+    float edgeSharpness;
+} push;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// 7-tap symmetric gaussian (sigma ≈ 1.5). Weights normalised so the center
+// + 3 pairs of neighbours sum to 1 before any edge rejection kicks in;
+// post-rejection we renormalise by the actual accumulated weight.
+const float kCenterWeight = 0.265F;
+const float kOffsetWeights[3] = float[3](0.212F, 0.108F, 0.035F);
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(aoOut);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    // Half-res AO ↔ full-res depth: sampling mip 0 at the AO pixel centre
+    // gives the closest on-surface depth. Matches `ssao_main.comp`'s tap.
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    float centerDepth = textureLod(linearDepthPyramid, uv, 0.0).r;
+
+    float aoSum = texelFetch(aoIn, coord, 0).r * kCenterWeight;
+    float weightSum = kCenterWeight;
+
+    for (int i = 0; i < 3; ++i) {
+        int offset = i + 1;
+        float baseWeight = kOffsetWeights[i];
+        for (int s = -1; s <= 1; s += 2) {
+            ivec2 tapCoord = clamp(coord + (push.direction * offset * s),
+                                   ivec2(0), size - ivec2(1));
+            vec2 tapUv = (vec2(tapCoord) + 0.5) / vec2(size);
+            float tapDepth = textureLod(linearDepthPyramid, tapUv, 0.0).r;
+            // Depth-delta rejection: `exp2(-|Δd| * sharpness / max(d, ε))`
+            // makes sharpness ≈ a per-relative-unit falloff. Normalising by
+            // centre depth keeps the blur crisp at distance without over-
+            // rejecting at near ranges. ε guards against the sky-sentinel
+            // case where centre depth is the pyramid's `far` marker.
+            float relDelta = abs(centerDepth - tapDepth) / max(centerDepth, 0.01F);
+            float edgeWeight = exp2(-relDelta * push.edgeSharpness);
+            float w = baseWeight * edgeWeight;
+            aoSum += texelFetch(aoIn, tapCoord, 0).r * w;
+            weightSum += w;
+        }
+    }
+
+    float ao = aoSum / max(weightSum, 1e-4F);
+    imageStore(aoOut, coord, vec4(ao, 0.0, 0.0, 0.0));
+}
