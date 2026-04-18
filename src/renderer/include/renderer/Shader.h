@@ -12,7 +12,8 @@ class Device;
 
 enum class ShaderStage {
     Vertex,
-    Fragment
+    Fragment,
+    Compute
 };
 
 class Shader {

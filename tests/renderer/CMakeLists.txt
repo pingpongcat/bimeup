@@ -27,6 +27,7 @@ add_executable(renderer_tests
     TonemapPipelineTest.cpp
     OctNormalTest.cpp
     LinearDepthTest.cpp
+    DepthLinearizePipelineTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")

@@ -1,0 +1,34 @@
+#version 450
+
+// Linearise the main pass's non-linear depth attachment to view-space depth
+// (positive distance along -z). CPU mirror of `renderer::LinearizeDepth` in
+// renderer/LinearDepth.{h,cpp} — uses the same lerp-form denominator that
+// sidesteps single-precision drift at z_nl ≈ 1.
+//
+// Input (set 0, binding 0): the depth image sampled as a single-channel
+// float — post main pass, layout SHADER_READ_ONLY_OPTIMAL.
+// Output (set 0, binding 1): R16_SFLOAT or R32_SFLOAT storage image at the
+// same dimensions — mip-0 of the depth pyramid that RP.4c builds on top.
+
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D linearDepthOut;
+
+layout(push_constant) uniform Push {
+    float nearZ;
+    float farZ;
+} push;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(linearDepthOut);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    float z_nl = texelFetch(depthTex, coord, 0).r;
+    float lin = (push.nearZ * push.farZ) /
+                (push.farZ * (1.0 - z_nl) + push.nearZ * z_nl);
+    imageStore(linearDepthOut, coord, vec4(lin, 0.0, 0.0, 0.0));
+}

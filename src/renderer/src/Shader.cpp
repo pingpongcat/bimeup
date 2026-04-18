@@ -71,6 +71,9 @@ VkPipelineShaderStageCreateInfo Shader::GetStageInfo() const {
         case ShaderStage::Fragment:
             stageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
             break;
+        case ShaderStage::Compute:
+            stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            break;
     }
 
     return stageInfo;
