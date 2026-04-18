@@ -1,9 +1,9 @@
 add_executable(ui_tests
+    AxisSectionGizmoTest.cpp
     AxisSectionPanelTest.cpp
     FirstPersonExitPanelTest.cpp
     HierarchyPanelTest.cpp
     ImGuiContextTest.cpp
-    ImGuizmoIntegrationTest.cpp
     PanelTest.cpp
     PlanViewPanelTest.cpp
     PropertyPanelTest.cpp

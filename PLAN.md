@@ -760,6 +760,7 @@ A second-pass UX that combines **7.3 (clipping planes)** and **7.5 (section fill
 | 8.3d | `main.cpp` draw-loop skip when `AnySectionOnly()` | Manual-verify (UI path) |
 | 8.3e | Retire `ui::ClipPlanesPanel` + `ColorEdit4` surface | Compile gate; no functional test |
 | 8.3f | Stretch — in-viewport mode-selector popup | Manual-verify |
+| 8.3g | Retire ImGuizmo; custom single-header `ui::AxisSectionGizmo` (drag bar + grab + F/S/B segmented switcher + (×) close). View cube swapped to `imoguizmo`. | Unit: `ProjectWorldToScreen` + `AxisDragDelta` math; gizmo is manual-verify |
 
 #### Expected API
 

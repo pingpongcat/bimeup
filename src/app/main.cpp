@@ -54,7 +54,7 @@
 #include <ui/ViewportOverlay.h>
 
 #include <imgui.h>
-#include <ImGuizmo.h>
+#include <imoguizmo.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -1399,20 +1399,23 @@ int main(int argc, char* argv[]) {
         axisSectionPanel->SetCameraMatrices(camera.GetViewMatrix(), gizmoProj);
         uiManager.BeginFrame();
 
-        // ImGuizmo view cube: top-right, 128 px square. Captures drags on the
-        // cube and mutates the view matrix; we extract yaw/pitch back onto the
-        // orbit camera so the next frame's camera.GetViewMatrix() matches.
+        // Orientation gizmo (imoguizmo): top-right square. Click an axis
+        // marker to snap the view along that axis; pivotDistance equals the
+        // orbit distance so the pivot stays on the current target.
+        // axisLengthScale tuned for our 45° fov — the default 0.33 assumes a
+        // wider fov and pushes axis endpoints outside the rect.
         // Hidden during first-person mode so the exit button owns the corner.
         if (!firstPersonActive) {
             const auto ws = windowSize();
-            constexpr float kCubeSize = 128.0F;
-            const ImVec2 cubePos(ws.x - kCubeSize - 10.0F, 10.0F);
-            const ImVec2 cubeDim(kCubeSize, kCubeSize);
+            constexpr float kCubeSize = 96.0F;
+            ImOGuizmo::config.axisLengthScale = 0.15F;
+            ImOGuizmo::config.positiveRadiusScale = 0.10F;
+            ImOGuizmo::config.negativeRadiusScale = 0.07F;
+            ImOGuizmo::SetRect(ws.x - kCubeSize - 10.0F, 10.0F, kCubeSize);
+            ImOGuizmo::BeginFrame();
             glm::mat4 viewCopy = camera.GetViewMatrix();
-            ImGuizmo::ViewManipulate(&viewCopy[0][0], 8.0F,
-                                     cubePos, cubeDim, 0x10101010);
-            if (ImGuizmo::IsUsingViewManipulate()) {
-                // Forward in world space: negated third row of the view's upper-3x3.
+            if (ImOGuizmo::DrawGizmo(&viewCopy[0][0], &gizmoProj[0][0],
+                                     camera.GetDistance())) {
                 glm::vec3 forward{-viewCopy[0][2], -viewCopy[1][2], -viewCopy[2][2]};
                 const glm::vec2 yp = bimeup::renderer::YawPitchFromForward(forward);
                 camera.SetYawPitch(yp.x, yp.y);

@@ -51,6 +51,7 @@ public:
     [[nodiscard]] glm::mat4 GetProjectionMatrix() const;
     [[nodiscard]] glm::vec3 GetPosition() const;
     [[nodiscard]] glm::vec3 GetForward() const;
+    [[nodiscard]] float GetDistance() const { return m_distance; }
     [[nodiscard]] ProjectionMode GetProjectionMode() const { return m_projectionMode; }
     [[nodiscard]] bool IsOrthographic() const { return m_projectionMode == ProjectionMode::Orthographic; }
 

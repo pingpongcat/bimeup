@@ -3,7 +3,6 @@
 #include <ui/Panel.h>
 
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 #include <utility>
 
@@ -47,7 +46,6 @@ void UIManager::BeginFrame() {
         }
     }
     m_context.BeginFrame();
-    ImGuizmo::BeginFrame();
     for (auto& panel : m_panels) {
         if (panel->IsVisible()) {
             panel->OnDraw();
