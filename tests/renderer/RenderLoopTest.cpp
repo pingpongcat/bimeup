@@ -4,6 +4,8 @@
 #include <renderer/Device.h>
 #include <renderer/VulkanContext.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <span>
 
 #define GLFW_INCLUDE_NONE
@@ -202,7 +204,8 @@ TEST_F(RenderLoopTest, DepthPyramidBuiltDuringFrame) {
     // Exercises the full per-frame compute dispatch (linearize + 3 mip levels).
     // Validation layers + sanitizers guard barrier/sync mistakes.
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetProjectionNearFar(0.1F, 100.0F);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
@@ -215,6 +218,51 @@ TEST_F(RenderLoopTest, DepthPyramidSurvivesSampleCountChange) {
     for (uint32_t i = 0; i < imageCount; ++i) {
         EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE);
     }
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+// RP.5d — SSAO compute pass wired into RenderLoop: per-swap-image half-res
+// R8 AO target, main + 2 blur dispatches between the depth-pyramid build
+// and the tonemap pass, AO sampled by tonemap.frag and multiplied into the
+// HDR colour. MSAA path gates off (inherits the depth pyramid gate — no
+// pyramid means no SSAO inputs); AO image is cleared to 1.0 at creation so
+// the tonemap multiply stays a no-op when SSAO is skipped.
+TEST_F(RenderLoopTest, AoFormatIsR8Unorm) {
+    EXPECT_EQ(RenderLoop::AO_FORMAT, VK_FORMAT_R8_UNORM);
+}
+
+TEST_F(RenderLoopTest, AoViewProvidedPerSwapImage) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    ASSERT_GT(imageCount, 0u);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetAoImageView(i), VK_NULL_HANDLE)
+            << "AO view missing for swap image " << i;
+    }
+}
+
+TEST_F(RenderLoopTest, SsaoDispatchedDuringFrame) {
+    // Exercises the full per-frame compute chain (pyramid + SSAO main +
+    // 2 blur passes) under Vulkan validation.
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, SsaoSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetAoImageView(i), VK_NULL_HANDLE);
+    }
+    // SSAO is gated off under MSAA (mirrors the depth pyramid gate). Frame
+    // cycle must still succeed — tonemap samples the pre-cleared AO image.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

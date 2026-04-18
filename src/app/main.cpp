@@ -1451,6 +1451,9 @@ int main(int argc, char* argv[]) {
         *mapped = ubo;
         uboBuffer.Unmap();
 
+        // RP.5d — feed the SSAO UBO + depth-linearize push constants.
+        renderLoop.SetProjection(ubo.projection, camera.GetNearPlane(), camera.GetFarPlane());
+
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + key light direction, and (re)build the shadow map if resolution
         // or enabled-state changed.

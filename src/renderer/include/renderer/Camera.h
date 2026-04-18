@@ -54,6 +54,12 @@ public:
     [[nodiscard]] float GetDistance() const { return m_distance; }
     [[nodiscard]] ProjectionMode GetProjectionMode() const { return m_projectionMode; }
     [[nodiscard]] bool IsOrthographic() const { return m_projectionMode == ProjectionMode::Orthographic; }
+    [[nodiscard]] float GetNearPlane() const {
+        return m_projectionMode == ProjectionMode::Perspective ? m_perspNear : m_orthoNear;
+    }
+    [[nodiscard]] float GetFarPlane() const {
+        return m_projectionMode == ProjectionMode::Perspective ? m_perspFar : m_orthoFar;
+    }
 
 private:
     void UpdatePosition();

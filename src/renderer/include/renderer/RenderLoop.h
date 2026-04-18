@@ -3,6 +3,8 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
+#include <glm/glm.hpp>
+
 #include <array>
 #include <functional>
 #include <memory>
@@ -14,9 +16,12 @@ namespace bimeup::renderer {
 class Device;
 class Swapchain;
 class Shader;
+class Buffer;
 class TonemapPipeline;
 class DepthLinearizePipeline;
 class DepthMipPipeline;
+class SsaoPipeline;
+class SsaoBlurPipeline;
 
 class RenderLoop {
 public:
@@ -39,6 +44,11 @@ public:
     // levels). Matches the PLAN — enough range for SSAO's adaptive-radius
     // mip offset, not so many that the tail mips become 1×1 noise.
     static constexpr uint32_t DEPTH_PYRAMID_MIPS = 4;
+    // SSAO half-res AO output format (RP.5d). R8_UNORM — classic
+    // Chapman/LearnOpenGL AO is a single scalar; 8 bits is enough after the
+    // separable blur smooths away the hemisphere-sample noise. Sampled by
+    // the tonemap fragment shader and multiplied into the HDR colour.
+    static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir,
@@ -92,13 +102,19 @@ public:
     /// `textureLod`; downstream SSAO/SSIL will consume this in later RP
     /// tasks. Returns VK_NULL_HANDLE if the index is out of range.
     [[nodiscard]] VkImageView GetDepthPyramidView(uint32_t imageIndex) const;
+    /// Final post-blur AO target (R8_UNORM, half-res) for the given swap
+    /// image. Written by the RP.5d SSAO compute chain and sampled by the
+    /// tonemap fragment shader. Returns VK_NULL_HANDLE if the index is out
+    /// of range.
+    [[nodiscard]] VkImageView GetAoImageView(uint32_t imageIndex) const;
 
-    /// Camera near/far plane values, plumbed into the depth-linearize
-    /// compute shader's push constants so mip 0 of the pyramid matches the
-    /// CPU mirror `renderer::LinearizeDepth`. Defaults are a safe
-    /// (0.1, 10000) — call each frame from the main loop once the camera
-    /// projection is known.
-    void SetProjectionNearFar(float nearZ, float farZ);
+    /// Camera projection matrix + near/far plane values. Projection feeds
+    /// the SSAO UBO (mat4 proj + mat4 invProj) so view-space sample
+    /// positions project back to UV; near/far feed the depth-linearize
+    /// compute push constants so pyramid mip 0 matches the CPU mirror
+    /// `renderer::LinearizeDepth`. Call each frame after the camera has
+    /// been updated. Defaults are (identity, 0.1, 10000).
+    void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -134,6 +150,15 @@ private:
     void CleanupDepthPyramidResources();
     void CleanupDepthPyramidDescriptors();
     void BuildDepthPyramid(VkCommandBuffer cmd);
+    void CreateSsaoDescriptors();
+    void CreateSsaoPipelines();
+    void CreateSsaoResources();
+    void UpdateSsaoDescriptors();
+    void ClearAoImagesToWhite();
+    void UploadSsaoUbo(uint32_t imageIndex);
+    void RunSsao(VkCommandBuffer cmd);
+    void CleanupSsaoResources();
+    void CleanupSsaoDescriptors();
     void CleanupFrameResources();
     void CleanupTonemapDescriptors();
     void Cleanup();
@@ -218,6 +243,38 @@ private:
     VkExtent2D m_depthPyramidExtent = {0, 0};
     float m_nearZ = 0.1F;
     float m_farZ = 10000.0F;
+    glm::mat4 m_proj{1.0F};
+
+    // SSAO (RP.5d). Per swap image: two half-res R8_UNORM AO images
+    // ping-ponged by the blur (A = main output + vertical-blur output,
+    // B = horizontal-blur intermediate); one SsaoUbo with proj/invProj and
+    // the hemisphere kernel. The main descriptor set binds AO A as its
+    // storage-image output; the H-blur set reads A and writes B; the
+    // V-blur set reads B and writes A. A is sampled by the tonemap
+    // fragment shader at the end of each frame, so its final layout after
+    // `RunSsao` is SHADER_READ_ONLY_OPTIMAL; B stays in GENERAL between
+    // frames. Under MSAA the pyramid gate above applies — SSAO never
+    // dispatches; AO A stays at the init-time (1.0) clear so the tonemap
+    // multiply is a no-op.
+    std::vector<VkImage> m_aoImagesA;
+    std::vector<VkImage> m_aoImagesB;
+    std::vector<VmaAllocation> m_aoAllocationsA;
+    std::vector<VmaAllocation> m_aoAllocationsB;
+    std::vector<VkImageView> m_aoViewsA;
+    std::vector<VkImageView> m_aoViewsB;
+    VkExtent2D m_aoExtent = {0, 0};
+    VkSampler m_aoSampler = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<Buffer>> m_ssaoUbos;
+    VkDescriptorSetLayout m_ssaoMainSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssaoBlurSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_ssaoDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_ssaoMainSets;
+    std::vector<VkDescriptorSet> m_ssaoBlurSetsH;  // A → B
+    std::vector<VkDescriptorSet> m_ssaoBlurSetsV;  // B → A
+    std::unique_ptr<Shader> m_ssaoMainShader;
+    std::unique_ptr<Shader> m_ssaoBlurShader;
+    std::unique_ptr<SsaoPipeline> m_ssaoPipeline;
+    std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;

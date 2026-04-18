@@ -4,8 +4,13 @@
 // renderer/Tonemap.{h,cpp}. Negatives are clamped before the curve (the
 // rational form is non-monotonic below zero) and the result is clamped to
 // [0,1] since the sRGB swapchain does the final encode.
+//
+// RP.5d: multiply the half-res SSAO term (binding 1) into the HDR colour
+// before the curve. AO A is cleared to 1.0 at creation time and stays at
+// 1.0 when SSAO is gated off (MSAA), so this multiply is a no-op then.
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
+layout(set = 0, binding = 1) uniform sampler2D aoTexture;
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
@@ -22,5 +27,6 @@ vec3 aces(vec3 x) {
 
 void main() {
     vec3 hdr = texture(hdrTexture, inUv).rgb;
-    outColor = vec4(aces(hdr), 1.0);
+    float ao = texture(aoTexture, inUv).r;
+    outColor = vec4(aces(hdr * ao), 1.0);
 }

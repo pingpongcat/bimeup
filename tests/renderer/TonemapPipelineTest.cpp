@@ -63,10 +63,12 @@ protected:
         m_context = std::make_unique<VulkanContext>(true);
         m_device = std::make_unique<Device>(m_context->GetInstance());
         m_renderPass = CreateColorOnlyRenderPass(m_device->GetDevice());
+        // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO (RP.5d).
         m_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *m_device,
-            std::vector<LayoutBinding>{{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                        VK_SHADER_STAGE_FRAGMENT_BIT}});
+            std::vector<LayoutBinding>{
+                {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
+                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,

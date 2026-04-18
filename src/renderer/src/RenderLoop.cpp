@@ -1,14 +1,21 @@
 #include <renderer/RenderLoop.h>
+#include <renderer/Buffer.h>
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
 #include <renderer/Shader.h>
+#include <renderer/SsaoBlurPipeline.h>
+#include <renderer/SsaoKernel.h>
+#include <renderer/SsaoPipeline.h>
 #include <renderer/Swapchain.h>
 #include <renderer/TonemapPipeline.h>
 #include <tools/Log.h>
 
+#include <glm/gtc/matrix_inverse.hpp>
+
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -36,6 +43,12 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateDepthPyramidPipelines();
     CreateDepthPyramidResources();
     UpdateDepthPyramidDescriptors();
+    CreateSsaoDescriptors();
+    CreateSsaoPipelines();
+    CreateSsaoResources();
+    UpdateSsaoDescriptors();
+    ClearAoImagesToWhite();
+    UpdateTonemapDescriptors();  // re-run so the AO binding points at the freshly created images
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
@@ -114,6 +127,10 @@ bool RenderLoop::EndFrame() {
     // tonemap pass. No-op under MSAA (shader needs sampler2DMS); non-MSAA
     // path dispatches linearize then three mip downsamples with barriers.
     BuildDepthPyramid(cmd);
+
+    // RP.5d — SSAO main + separable blur, also gated off under MSAA.
+    // Produces the half-res AO target that the tonemap fragment samples.
+    RunSsao(cmd);
 
     // Begin the tonemap/present pass targeting the swapchain image.
     VkRenderPassBeginInfo presentInfo{};
@@ -248,7 +265,15 @@ VkImageView RenderLoop::GetDepthPyramidView(uint32_t imageIndex) const {
     return m_depthPyramidSampledViews[imageIndex];
 }
 
-void RenderLoop::SetProjectionNearFar(float nearZ, float farZ) {
+VkImageView RenderLoop::GetAoImageView(uint32_t imageIndex) const {
+    if (imageIndex >= m_aoViewsA.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return m_aoViewsA[imageIndex];
+}
+
+void RenderLoop::SetProjection(const glm::mat4& proj, float nearZ, float farZ) {
+    m_proj = proj;
     m_nearZ = nearZ;
     m_farZ = farZ;
 }
@@ -274,9 +299,12 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateDepthResources();
     CreateFramebuffers();
     CreateDepthPyramidResources();
+    CreateSsaoResources();
     CreateTonemapPipeline();
-    UpdateTonemapDescriptors();
     UpdateDepthPyramidDescriptors();
+    UpdateSsaoDescriptors();
+    ClearAoImagesToWhite();
+    UpdateTonemapDescriptors();
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
     }
@@ -289,8 +317,11 @@ void RenderLoop::RecreateForSwapchain() {
     CreateDepthResources();
     CreateFramebuffers();
     CreateDepthPyramidResources();
-    UpdateTonemapDescriptors();
+    CreateSsaoResources();
     UpdateDepthPyramidDescriptors();
+    UpdateSsaoDescriptors();
+    ClearAoImagesToWhite();
+    UpdateTonemapDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -779,16 +810,22 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Two bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8).
+    // tonemap.frag multiplies the AO scalar into the HDR colour before ACES.
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
                                     &m_tonemapSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create tonemap descriptor set layout");
@@ -798,7 +835,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount;
+    poolSize.descriptorCount = imageCount * 2;  // HDR + AO per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -825,25 +862,47 @@ void RenderLoop::CreateTonemapDescriptors() {
 
 void RenderLoop::UpdateTonemapDescriptors() {
     for (uint32_t i = 0; i < m_tonemapDescriptorSets.size(); ++i) {
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = m_hdrImageViews[i];
-        imageInfo.sampler = m_hdrSampler;
+        VkDescriptorImageInfo hdrInfo{};
+        hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        hdrInfo.imageView = m_hdrImageViews[i];
+        hdrInfo.sampler = m_hdrSampler;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_tonemapDescriptorSets[i];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(m_device.GetDevice(), 1, &write, 0, nullptr);
+        // AO binding — may be null on first call (pool created before SSAO
+        // resources exist); ctor/resize path re-runs UpdateTonemapDescriptors
+        // after CreateSsaoResources + ClearAoImagesToWhite so the binding
+        // ends up pointing at a valid SHADER_READ_ONLY_OPTIMAL image before
+        // the first frame dispatches.
+        VkDescriptorImageInfo aoInfo{};
+        aoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        aoInfo.imageView = i < m_aoViewsA.size() ? m_aoViewsA[i] : VK_NULL_HANDLE;
+        aoInfo.sampler = m_aoSampler;
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_tonemapDescriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &hdrInfo;
+
+        uint32_t writeCount = 1;
+        if (aoInfo.imageView != VK_NULL_HANDLE && aoInfo.sampler != VK_NULL_HANDLE) {
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = m_tonemapDescriptorSets[i];
+            writes[1].dstBinding = 1;
+            writes[1].descriptorCount = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].pImageInfo = &aoInfo;
+            writeCount = 2;
+        }
+        vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);
     }
 }
 
 void RenderLoop::CleanupFrameResources() {
     VkDevice device = m_device.GetDevice();
 
+    CleanupSsaoResources();
     CleanupDepthPyramidResources();
 
     for (auto fb : m_framebuffers) {
@@ -945,10 +1004,15 @@ void RenderLoop::Cleanup() {
     m_depthMipPipeline.reset();
     m_depthLinearizeShader.reset();
     m_depthMipShader.reset();
+    m_ssaoPipeline.reset();
+    m_ssaoBlurPipeline.reset();
+    m_ssaoMainShader.reset();
+    m_ssaoBlurShader.reset();
 
     CleanupFrameResources();
     CleanupTonemapDescriptors();
     CleanupDepthPyramidDescriptors();
+    CleanupSsaoDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
@@ -1296,6 +1360,678 @@ void RenderLoop::CleanupDepthPyramidDescriptors() {
     if (m_depthPyramidSampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_depthPyramidSampler, nullptr);
         m_depthPyramidSampler = VK_NULL_HANDLE;
+    }
+}
+
+namespace {
+
+struct SsaoUboLayout {
+    glm::mat4 proj;
+    glm::mat4 invProj;
+    glm::vec4 kernel[SsaoPipeline::kKernelSize];
+};
+
+}  // namespace
+
+void RenderLoop::CreateSsaoDescriptors() {
+    // Linear sampler for the half-res AO target — tonemap samples at full
+    // res so bilinear upsample keeps the AO edges smooth. Also used for the
+    // blur's AO input; the blur uses texelFetch (unfiltered) internally so
+    // filter mode doesn't matter for blur, but edge-clamp is critical.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_aoSampler) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create AO sampler");
+    }
+
+    // Main set layout: depth pyramid (CIS), normal G-buffer (CIS),
+    // SsaoUbo (UBO), AO output (STORAGE_IMAGE). Matches SsaoPipeline docs.
+    std::array<VkDescriptorSetLayoutBinding, 4> mainBindings{};
+    mainBindings[0].binding = 0;
+    mainBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    mainBindings[0].descriptorCount = 1;
+    mainBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[1].binding = 1;
+    mainBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    mainBindings[1].descriptorCount = 1;
+    mainBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[2].binding = 2;
+    mainBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    mainBindings[2].descriptorCount = 1;
+    mainBindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[3].binding = 3;
+    mainBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    mainBindings[3].descriptorCount = 1;
+    mainBindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo mainLayoutInfo{};
+    mainLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    mainLayoutInfo.bindingCount = static_cast<uint32_t>(mainBindings.size());
+    mainLayoutInfo.pBindings = mainBindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &mainLayoutInfo, nullptr,
+                                    &m_ssaoMainSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSAO main descriptor set layout");
+    }
+
+    // Blur set layout: AO input (CIS), depth pyramid (CIS), AO output (STORAGE_IMAGE).
+    std::array<VkDescriptorSetLayoutBinding, 3> blurBindings{};
+    blurBindings[0].binding = 0;
+    blurBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    blurBindings[0].descriptorCount = 1;
+    blurBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    blurBindings[1].binding = 1;
+    blurBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    blurBindings[1].descriptorCount = 1;
+    blurBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    blurBindings[2].binding = 2;
+    blurBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    blurBindings[2].descriptorCount = 1;
+    blurBindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo blurLayoutInfo{};
+    blurLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    blurLayoutInfo.bindingCount = static_cast<uint32_t>(blurBindings.size());
+    blurLayoutInfo.pBindings = blurBindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &blurLayoutInfo, nullptr,
+                                    &m_ssaoBlurSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSAO blur descriptor set layout");
+    }
+
+    // Pool: per swap image, 1 main set + 2 blur sets (H, V). Sized from
+    // the per-set descriptor types.
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    const uint32_t mainSets = imageCount;
+    const uint32_t blurSets = imageCount * 2;
+    const uint32_t totalSets = mainSets + blurSets;
+
+    std::array<VkDescriptorPoolSize, 3> sizes{};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[0].descriptorCount = (mainSets * 2) + (blurSets * 2);  // main: 2 CIS; blur: 2 CIS
+    sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    sizes[1].descriptorCount = mainSets;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    sizes[2].descriptorCount = mainSets + blurSets;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = totalSets;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(sizes.size());
+    poolInfo.pPoolSizes = sizes.data();
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_ssaoDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSAO descriptor pool");
+    }
+
+    // Allocate: main sets first, then blur H, then blur V.
+    std::vector<VkDescriptorSetLayout> mainLayouts(imageCount, m_ssaoMainSetLayout);
+    VkDescriptorSetAllocateInfo mainAlloc{};
+    mainAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    mainAlloc.descriptorPool = m_ssaoDescriptorPool;
+    mainAlloc.descriptorSetCount = imageCount;
+    mainAlloc.pSetLayouts = mainLayouts.data();
+    m_ssaoMainSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &mainAlloc,
+                                 m_ssaoMainSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSAO main descriptor sets");
+    }
+
+    std::vector<VkDescriptorSetLayout> blurLayouts(imageCount, m_ssaoBlurSetLayout);
+    VkDescriptorSetAllocateInfo blurAlloc{};
+    blurAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    blurAlloc.descriptorPool = m_ssaoDescriptorPool;
+    blurAlloc.descriptorSetCount = imageCount;
+    blurAlloc.pSetLayouts = blurLayouts.data();
+    m_ssaoBlurSetsH.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &blurAlloc,
+                                 m_ssaoBlurSetsH.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSAO blur H descriptor sets");
+    }
+    m_ssaoBlurSetsV.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &blurAlloc,
+                                 m_ssaoBlurSetsV.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSAO blur V descriptor sets");
+    }
+}
+
+void RenderLoop::CreateSsaoPipelines() {
+    m_ssaoMainShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/ssao_main.comp.spv");
+    m_ssaoBlurShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/ssao_blur.comp.spv");
+    m_ssaoPipeline = std::make_unique<SsaoPipeline>(
+        m_device, *m_ssaoMainShader, m_ssaoMainSetLayout);
+    m_ssaoBlurPipeline = std::make_unique<SsaoBlurPipeline>(
+        m_device, *m_ssaoBlurShader, m_ssaoBlurSetLayout);
+}
+
+void RenderLoop::CreateSsaoResources() {
+    VkExtent2D fullExtent = m_swapchain.GetExtent();
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    // Half-res, rounded up so odd swapchain sizes still produce a valid
+    // non-zero extent and every full-res pixel has a corresponding AO tap.
+    m_aoExtent = {
+        std::max(1U, (fullExtent.width + 1U) / 2U),
+        std::max(1U, (fullExtent.height + 1U) / 2U)};
+
+    m_aoImagesA.assign(imageCount, VK_NULL_HANDLE);
+    m_aoImagesB.assign(imageCount, VK_NULL_HANDLE);
+    m_aoAllocationsA.assign(imageCount, VK_NULL_HANDLE);
+    m_aoAllocationsB.assign(imageCount, VK_NULL_HANDLE);
+    m_aoViewsA.assign(imageCount, VK_NULL_HANDLE);
+    m_aoViewsB.assign(imageCount, VK_NULL_HANDLE);
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = AO_FORMAT;
+        imageInfo.extent = {m_aoExtent.width, m_aoExtent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // STORAGE for compute writes; SAMPLED for the blur + tonemap reads;
+        // TRANSFER_DST for the init-time vkCmdClearColorImage that seeds
+        // AO A at 1.0 under MSAA (so tonemap's multiply is a no-op when
+        // SSAO is gated off).
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_aoImagesA[i], &m_aoAllocationsA[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create AO A image");
+        }
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_aoImagesB[i], &m_aoAllocationsB[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create AO B image");
+        }
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = AO_FORMAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        viewInfo.image = m_aoImagesA[i];
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
+                              &m_aoViewsA[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create AO A view");
+        }
+        viewInfo.image = m_aoImagesB[i];
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
+                              &m_aoViewsB[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create AO B view");
+        }
+    }
+
+    // UBO per swap image — proj/invProj refresh each frame, kernel once.
+    m_ssaoUbos.clear();
+    m_ssaoUbos.reserve(imageCount);
+    const auto kernel = GenerateHemisphereKernel(SsaoPipeline::kKernelSize, 0);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        auto ubo = std::make_unique<Buffer>(
+            m_device, BufferType::Uniform, sizeof(SsaoUboLayout), nullptr);
+        auto* mapped = static_cast<SsaoUboLayout*>(ubo->Map());
+        mapped->proj = m_proj;
+        mapped->invProj = glm::inverse(m_proj);
+        for (std::size_t k = 0; k < kernel.size(); ++k) {
+            mapped->kernel[k] = glm::vec4(kernel[k], 0.0F);
+        }
+        ubo->Unmap();
+        m_ssaoUbos.push_back(std::move(ubo));
+    }
+}
+
+void RenderLoop::UpdateSsaoDescriptors() {
+    const uint32_t imageCount = static_cast<uint32_t>(m_ssaoMainSets.size());
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        // --- Main set: pyramid(CIS), normal(CIS), ubo(UBO), aoA(STORAGE_IMAGE).
+        VkDescriptorImageInfo pyramidInfo{};
+        pyramidInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;  // pyramid stays in GENERAL across compute reads
+        pyramidInfo.imageView = m_depthPyramidSampledViews[i];
+        pyramidInfo.sampler = m_depthPyramidSampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_normalImageViews[i];
+        normalInfo.sampler = m_depthPyramidSampler;  // nearest/clamp — fine for the oct-packed normal
+
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_ssaoUbos[i]->GetBuffer();
+        uboInfo.offset = 0;
+        uboInfo.range = sizeof(SsaoUboLayout);
+
+        VkDescriptorImageInfo aoAOutInfo{};
+        aoAOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aoAOutInfo.imageView = m_aoViewsA[i];
+
+        std::array<VkWriteDescriptorSet, 4> mainWrites{};
+        mainWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[0].dstSet = m_ssaoMainSets[i];
+        mainWrites[0].dstBinding = 0;
+        mainWrites[0].descriptorCount = 1;
+        mainWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mainWrites[0].pImageInfo = &pyramidInfo;
+        mainWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[1].dstSet = m_ssaoMainSets[i];
+        mainWrites[1].dstBinding = 1;
+        mainWrites[1].descriptorCount = 1;
+        mainWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mainWrites[1].pImageInfo = &normalInfo;
+        mainWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[2].dstSet = m_ssaoMainSets[i];
+        mainWrites[2].dstBinding = 2;
+        mainWrites[2].descriptorCount = 1;
+        mainWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        mainWrites[2].pBufferInfo = &uboInfo;
+        mainWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[3].dstSet = m_ssaoMainSets[i];
+        mainWrites[3].dstBinding = 3;
+        mainWrites[3].descriptorCount = 1;
+        mainWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        mainWrites[3].pImageInfo = &aoAOutInfo;
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(mainWrites.size()), mainWrites.data(),
+                               0, nullptr);
+
+        // --- Blur H: read A (GENERAL), depth pyramid, write B.
+        VkDescriptorImageInfo aoA_InGeneral{};
+        aoA_InGeneral.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aoA_InGeneral.imageView = m_aoViewsA[i];
+        aoA_InGeneral.sampler = m_aoSampler;
+
+        VkDescriptorImageInfo aoBOut{};
+        aoBOut.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aoBOut.imageView = m_aoViewsB[i];
+
+        std::array<VkWriteDescriptorSet, 3> hWrites{};
+        hWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        hWrites[0].dstSet = m_ssaoBlurSetsH[i];
+        hWrites[0].dstBinding = 0;
+        hWrites[0].descriptorCount = 1;
+        hWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        hWrites[0].pImageInfo = &aoA_InGeneral;
+        hWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        hWrites[1].dstSet = m_ssaoBlurSetsH[i];
+        hWrites[1].dstBinding = 1;
+        hWrites[1].descriptorCount = 1;
+        hWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        hWrites[1].pImageInfo = &pyramidInfo;
+        hWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        hWrites[2].dstSet = m_ssaoBlurSetsH[i];
+        hWrites[2].dstBinding = 2;
+        hWrites[2].descriptorCount = 1;
+        hWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        hWrites[2].pImageInfo = &aoBOut;
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(hWrites.size()), hWrites.data(),
+                               0, nullptr);
+
+        // --- Blur V: read B (GENERAL), depth pyramid, write A.
+        VkDescriptorImageInfo aoB_InGeneral{};
+        aoB_InGeneral.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aoB_InGeneral.imageView = m_aoViewsB[i];
+        aoB_InGeneral.sampler = m_aoSampler;
+
+        VkDescriptorImageInfo aoAOutV{};
+        aoAOutV.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aoAOutV.imageView = m_aoViewsA[i];
+
+        std::array<VkWriteDescriptorSet, 3> vWrites{};
+        vWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        vWrites[0].dstSet = m_ssaoBlurSetsV[i];
+        vWrites[0].dstBinding = 0;
+        vWrites[0].descriptorCount = 1;
+        vWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        vWrites[0].pImageInfo = &aoB_InGeneral;
+        vWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        vWrites[1].dstSet = m_ssaoBlurSetsV[i];
+        vWrites[1].dstBinding = 1;
+        vWrites[1].descriptorCount = 1;
+        vWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        vWrites[1].pImageInfo = &pyramidInfo;
+        vWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        vWrites[2].dstSet = m_ssaoBlurSetsV[i];
+        vWrites[2].dstBinding = 2;
+        vWrites[2].descriptorCount = 1;
+        vWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        vWrites[2].pImageInfo = &aoAOutV;
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(vWrites.size()), vWrites.data(),
+                               0, nullptr);
+    }
+}
+
+void RenderLoop::ClearAoImagesToWhite() {
+    // One-shot command: transition every AO image UNDEFINED → TRANSFER_DST,
+    // clear to (1,0,0,0) so the multiply-composite is a no-op when SSAO is
+    // gated off (MSAA), then transition to SHADER_READ_ONLY_OPTIMAL so the
+    // tonemap descriptor can sample it immediately.
+    if (m_aoImagesA.empty()) {
+        return;
+    }
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(m_device.GetDevice(), &allocInfo, &cmd) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate AO-clear command buffer");
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    std::vector<VkImage> allImages;
+    allImages.reserve(m_aoImagesA.size() + m_aoImagesB.size());
+    for (VkImage img : m_aoImagesA) { allImages.push_back(img); }
+    for (VkImage img : m_aoImagesB) { allImages.push_back(img); }
+
+    std::vector<VkImageMemoryBarrier> toTransferDst;
+    toTransferDst.reserve(allImages.size());
+    for (VkImage img : allImages) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.baseMipLevel = 0;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.baseArrayLayer = 0;
+        b.subresourceRange.layerCount = 1;
+        toTransferDst.push_back(b);
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         static_cast<uint32_t>(toTransferDst.size()), toTransferDst.data());
+
+    VkClearColorValue clearValue{};
+    clearValue.float32[0] = 1.0F;
+    clearValue.float32[1] = 0.0F;
+    clearValue.float32[2] = 0.0F;
+    clearValue.float32[3] = 0.0F;
+    VkImageSubresourceRange range{};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.baseMipLevel = 0;
+    range.levelCount = 1;
+    range.baseArrayLayer = 0;
+    range.layerCount = 1;
+    for (VkImage img : allImages) {
+        vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &clearValue, 1, &range);
+    }
+
+    // AO A → SHADER_READ_ONLY_OPTIMAL (sampled by tonemap frag).
+    // AO B → GENERAL (next frame's H-blur expects it in GENERAL as its CIS
+    // source and STORAGE_IMAGE dest — both reachable from GENERAL).
+    std::vector<VkImageMemoryBarrier> finalBarriers;
+    finalBarriers.reserve(allImages.size());
+    for (size_t i = 0; i < m_aoImagesA.size(); ++i) {
+        VkImageMemoryBarrier b = toTransferDst[i];
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        finalBarriers.push_back(b);
+    }
+    for (size_t i = 0; i < m_aoImagesB.size(); ++i) {
+        VkImageMemoryBarrier b = toTransferDst[m_aoImagesA.size() + i];
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        finalBarriers.push_back(b);
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr,
+                         static_cast<uint32_t>(finalBarriers.size()), finalBarriers.data());
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_device.GetGraphicsQueue());
+    vkFreeCommandBuffers(m_device.GetDevice(), m_commandPool, 1, &cmd);
+}
+
+void RenderLoop::UploadSsaoUbo(uint32_t imageIndex) {
+    if (imageIndex >= m_ssaoUbos.size()) {
+        return;
+    }
+    // Only the matrices change per frame — kernel stays from the ctor write.
+    auto* mapped = static_cast<SsaoUboLayout*>(m_ssaoUbos[imageIndex]->Map());
+    mapped->proj = m_proj;
+    mapped->invProj = glm::inverse(m_proj);
+    m_ssaoUbos[imageIndex]->Unmap();
+}
+
+void RenderLoop::RunSsao(VkCommandBuffer cmd) {
+    // MSAA path: SSAO inputs (pyramid, normal G-buffer) are either gated off
+    // or resolved in shapes the compute shaders don't support cleanly.
+    // Tonemap samples the pre-cleared (1.0) AO so the multiply is a no-op.
+    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
+        return;
+    }
+
+    const uint32_t i = m_currentImageIndex;
+    UploadSsaoUbo(i);
+
+    // Transition AO A from SHADER_READ_ONLY (tonemap ended last frame) → GENERAL for compute write.
+    // Transition AO B from GENERAL (prior frame's V-blur output layout) → GENERAL (no-op, but still barrier for W→R/R→W hazards).
+    // On the very first frame after ClearAoImagesToWhite, A is in SHADER_READ_ONLY and B is in GENERAL; same story.
+    {
+        std::array<VkImageMemoryBarrier, 2> barriers{};
+        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].image = m_aoImagesA[i];
+        barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barriers[0].subresourceRange.levelCount = 1;
+        barriers[0].subresourceRange.layerCount = 1;
+
+        barriers[1] = barriers[0];
+        barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[1].image = m_aoImagesB[i];
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+            static_cast<uint32_t>(barriers.size()), barriers.data());
+    }
+
+    // --- Main SSAO: depth pyramid + normal → AO A.
+    m_ssaoPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssaoPipeline->GetLayout(), 0, 1,
+                            &m_ssaoMainSets[i], 0, nullptr);
+    SsaoPipeline::PushConstants mainPush{0.5F, 0.025F, 1.0F, 1.5F};
+    vkCmdPushConstants(cmd, m_ssaoPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(mainPush), &mainPush);
+    vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);
+
+    // Barrier: AO A write → AO A read (H blur's CIS source).
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_aoImagesA[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+
+    // --- Blur H: A → B.
+    m_ssaoBlurPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssaoBlurPipeline->GetLayout(), 0, 1,
+                            &m_ssaoBlurSetsH[i], 0, nullptr);
+    SsaoBlurPipeline::PushConstants hPush{1, 0, 4.0F};
+    vkCmdPushConstants(cmd, m_ssaoBlurPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(hPush), &hPush);
+    vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);
+
+    // Barrier: AO B write → AO B read (V blur source).
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_aoImagesB[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+
+    // Before the V-blur writes AO A again, make its prior read (H-blur
+    // source) available to the coming write. Without this, the H-blur read
+    // and V-blur write of A would be a RAW hazard — currently hidden only
+    // because the H-blur samples A but writes B.
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_aoImagesA[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+
+    // --- Blur V: B → A.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssaoBlurPipeline->GetLayout(), 0, 1,
+                            &m_ssaoBlurSetsV[i], 0, nullptr);
+    SsaoBlurPipeline::PushConstants vPush{0, 1, 4.0F};
+    vkCmdPushConstants(cmd, m_ssaoBlurPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(vPush), &vPush);
+    vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);
+
+    // Final: AO A → SHADER_READ_ONLY_OPTIMAL for the tonemap fragment sample.
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_aoImagesA[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+}
+
+void RenderLoop::CleanupSsaoResources() {
+    VkDevice device = m_device.GetDevice();
+    for (size_t i = 0; i < m_aoViewsA.size(); ++i) {
+        if (m_aoViewsA[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_aoViewsA[i], nullptr);
+        }
+        if (m_aoImagesA[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_aoImagesA[i], m_aoAllocationsA[i]);
+        }
+    }
+    for (size_t i = 0; i < m_aoViewsB.size(); ++i) {
+        if (m_aoViewsB[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_aoViewsB[i], nullptr);
+        }
+        if (m_aoImagesB[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_aoImagesB[i], m_aoAllocationsB[i]);
+        }
+    }
+    m_aoViewsA.clear();
+    m_aoViewsB.clear();
+    m_aoImagesA.clear();
+    m_aoImagesB.clear();
+    m_aoAllocationsA.clear();
+    m_aoAllocationsB.clear();
+    m_ssaoUbos.clear();
+}
+
+void RenderLoop::CleanupSsaoDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_ssaoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_ssaoDescriptorPool, nullptr);
+        m_ssaoDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_ssaoMainSets.clear();
+    m_ssaoBlurSetsH.clear();
+    m_ssaoBlurSetsV.clear();
+    if (m_ssaoMainSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_ssaoMainSetLayout, nullptr);
+        m_ssaoMainSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_ssaoBlurSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_ssaoBlurSetLayout, nullptr);
+        m_ssaoBlurSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_aoSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_aoSampler, nullptr);
+        m_aoSampler = VK_NULL_HANDLE;
     }
 }
 
