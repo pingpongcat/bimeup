@@ -787,6 +787,72 @@ namespace bimeup::scene {
 }
 ```
 
+### 8.4 Addendum — Stability + UX bundle (added 2026-04-18)
+
+A bundle of small hardening + polish fixes observed on top of the Stage 8 deliverables. Not a coherent feature — grouped here because they share a single session and all land as sibling sub-tasks under the previously-dropped 8.4 slot.
+
+#### Motivation
+
+- **poly2tri crash**: dragging an axis-section gizmo eventually fed numerically degenerate polylines into `poly2tri::Sweep::FlipEdgeEvent`, which recursed into itself + `FlipScanEdgeEvent` until the stack blew. Stack overflow is not a C++ exception, so `scene::TriangulatePolygon`'s `try/catch → EarClipTriangulate` fallback never fired.
+- **Axis-section UX gaps surfaced while using 8.3**: selection was still live under the gizmo, default mode didn't match BIM mental model on vertical/depth axes, gizmo drag could push the plane past the model, all three axes used the same colour, close glyph looked off-centre.
+- **PoV mode marker**: ghosted non-slab geometry at 0.2 alpha was still too visible; hover disk disappeared behind walls/stairs.
+- **Device pick**: reported picking integrated Radeon despite a discrete NVIDIA being present.
+
+#### Tasks
+
+| # | Task | Test |
+|---|------|------|
+| 8.4a | Patch `external/poly2tri/poly2tri/sweep/sweep.cc`: thread-local recursion-depth guard in `FlipEdgeEvent`/`FlipScanEdgeEvent`, throw `std::runtime_error` past 2048 frames so `scene::TriangulatePolygon`'s existing `EarClipTriangulate` fallback fires. | Manual-verify (reproduce pre-patch crash by hammering the section gizmo under ASan) |
+| 8.4b | `main.cpp`: gate `core::PickElement` (left-click) + `core::HoverElement` on `axisSectionController.SlotCount() == 0` so selection is suppressed while any axis-section slot is active. | Manual-verify (UI gate) |
+| 8.4c | `AxisSectionPanel::ToggleAxis` reads a per-axis default mode from `kAxisButtons`: X → `CutFront`, Y/Z → `CutBack`. | Existing panel tests stay green |
+| 8.4d | `AxisSectionPanel` stores `glm::vec3 m_offsetMin/Max` + new `SetOffsetRange(vec3, vec3)` overload + `OffsetMin(Axis)/OffsetMax(Axis)`; old `(float,float)` signature preserved for backward-compat. Slider + gizmo-drag writeback clamp against per-axis range. `main.cpp` seeds from `AABB.GetMin()/GetMax()` with 10% per-axis padding. | Existing tests unchanged; manual-verify gizmo clamp |
+| 8.4e | `AxisSectionGizmo.hpp` `DrawAxisHandle`: per-axis base colour (X=red, Y=blue, Z=green — CG convention; UI label mapping = world axis per 8.3h). `SectionOnly` still overrides to amber. Close "x" glyph nudged up 1.5 px. | Manual-verify (visual) |
+| 8.4f | PoV polish: `ApplyPointOfViewAlpha(scene, 0.08F)` (was 0.2F); `DiskMarkerPipeline::depthCompareOp = VK_COMPARE_OP_ALWAYS` so the hover disk draws through ghosted geometry. | Manual-verify |
+| 8.4g | `Device::PickPhysicalDevice` logs every enumerated `VkPhysicalDevice` (name, type, score, disqualification reason) + final selection. `Device::RateDevice`: discrete=100000, integrated=1000, virtual=100, cpu=10; `+1 per GiB` of `DEVICE_LOCAL` VRAM as discrete-vs-discrete tiebreaker. | Manual-verify (log + selection on hybrid hardware) |
+
+#### Expected API changes
+
+```cpp
+// src/ui/include/ui/AxisSectionPanel.h
+void SetOffsetRange(float minVal, float maxVal);          // backward-compat
+void SetOffsetRange(const glm::vec3& min, const glm::vec3& max);
+float OffsetMin(scene::Axis axis) const;
+float OffsetMax(scene::Axis axis) const;
+```
+
+```cpp
+// external/poly2tri/poly2tri/sweep/sweep.cc — internal only
+thread_local int g_bimeup_flip_depth;                      // private, anon ns
+// throws std::runtime_error once depth > 2048
+```
+
+## Stage 9 — Ray Tracing (Optional Advanced Rendering)
+
+**Goal**: Vulkan ray tracing pipeline for high-quality rendering mode. Ambient occlusion, reflections, soft shadows.
+
+**Sessions**: 2–3
+
+### Modules involved
+- `renderer/` (RT pipeline, acceleration structures)
+- `scene/` (BLAS/TLAS management)
+
+### Tasks
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| 9.1 | Check RT support at runtime, create acceleration structures (BLAS per mesh) | Unit test: AS builds for test mesh, handle valid | `src/renderer/AccelerationStructure.h` |
+| 9.2 | Build TLAS from scene instances | Unit test: TLAS contains correct number of instances | TLAS management |
+| 9.3 | Create ray tracing pipeline (ray generation, closest hit, miss shaders) | Unit test: pipeline creates, shader binding table valid | RT pipeline in renderer/ |
+| 9.4 | Implement RT ambient occlusion | Visual test: AO darkens corners and crevices | AO shader |
+| 9.5 | Implement RT soft shadows (single directional light) | Visual test: soft shadow edges | Shadow shader |
+| 9.6 | Implement RT reflections on glossy surfaces | Visual test: reflective materials show reflections | Reflection shader |
+| 9.7 | Implement hybrid rendering — rasterize primary, RT for AO/shadows | Benchmark: acceptable frame time with RT effects | Hybrid pipeline |
+| 9.8 | Toggle between rasterized and RT modes via UI | UI button switches mode, scene re-renders | Mode switching |
+
+---
+
+## Stage 10 — VR Integration
+
 **Goal**: Full VR support — stereoscopic rendering, tracked controllers, teleport, object selection, in-VR UI.
 
 **Sessions**: 3–4
@@ -801,17 +867,17 @@ namespace bimeup::scene {
 
 | # | Task | Test | Output |
 |---|------|------|--------|
-| 9.1 | Add OpenXR-SDK submodule, create `vr/VRSystem` — session lifecycle | Unit test: system initializes (or reports no HMD gracefully), creates session, destroys | `src/vr/include/vr/VRSystem.h` |
-| 9.2 | Implement `vr/VRSwapchain` — stereoscopic swapchain management | Unit test: swapchain creates with correct eye resolution | `src/vr/include/vr/VRSwapchain.h` |
-| 9.3 | Implement stereo rendering — render scene to left + right eye views | Visual test: VR headset shows stereo scene | Stereo pipeline |
-| 9.4 | Implement `vr/VRInput` — controller tracking, button state | Unit test: input system reports controller poses, button events | `src/vr/include/vr/VRInput.h` |
-| 9.5 | Implement teleport movement — arc ray + trigger to move | Visual test: teleport arc visible, movement works | Teleport in vr/ |
-| 9.6 | Implement VR ray interaction — controller ray → element selection | Integration test: ray from controller → hits element → selection event fires | Ray interaction in vr/ |
-| 9.7 | Implement VR UI panels — ImGui rendered to texture, placed in 3D space | Visual test: UI panel visible in VR, interactable with controller | VR UI in ui/ |
-| 9.8 | Implement VR comfort features — vignette on movement, snap turning | Configuration options in config | Comfort settings |
-| 9.9 | Implement scale model — grab + scale gesture to resize entire scene | Visual test: pinch gesture scales model | Scale interaction |
+| 10.1 | Add OpenXR-SDK submodule, create `vr/VRSystem` — session lifecycle | Unit test: system initializes (or reports no HMD gracefully), creates session, destroys | `src/vr/include/vr/VRSystem.h` |
+| 10.2 | Implement `vr/VRSwapchain` — stereoscopic swapchain management | Unit test: swapchain creates with correct eye resolution | `src/vr/include/vr/VRSwapchain.h` |
+| 10.3 | Implement stereo rendering — render scene to left + right eye views | Visual test: VR headset shows stereo scene | Stereo pipeline |
+| 10.4 | Implement `vr/VRInput` — controller tracking, button state | Unit test: input system reports controller poses, button events | `src/vr/include/vr/VRInput.h` |
+| 10.5 | Implement teleport movement — arc ray + trigger to move | Visual test: teleport arc visible, movement works | Teleport in vr/ |
+| 10.6 | Implement VR ray interaction — controller ray → element selection | Integration test: ray from controller → hits element → selection event fires | Ray interaction in vr/ |
+| 10.7 | Implement VR UI panels — ImGui rendered to texture, placed in 3D space | Visual test: UI panel visible in VR, interactable with controller | VR UI in ui/ |
+| 10.8 | Implement VR comfort features — vignette on movement, snap turning | Configuration options in config | Comfort settings |
+| 10.9 | Implement scale model — grab + scale gesture to resize entire scene | Visual test: pinch gesture scales model | Scale interaction |
 
-### Expected APIs after Stage 9
+### Expected APIs after Stage 10
 
 ```cpp
 // vr/include/vr/VRSystem.h
@@ -843,31 +909,6 @@ namespace bimeup::vr {
     };
 }
 ```
-
----
-
-## Stage 10 — Ray Tracing (Optional Advanced Rendering)
-
-**Goal**: Vulkan ray tracing pipeline for high-quality rendering mode. Ambient occlusion, reflections, soft shadows.
-
-**Sessions**: 2–3
-
-### Modules involved
-- `renderer/` (RT pipeline, acceleration structures)
-- `scene/` (BLAS/TLAS management)
-
-### Tasks
-
-| # | Task | Test | Output |
-|---|------|------|--------|
-| 10.1 | Check RT support at runtime, create acceleration structures (BLAS per mesh) | Unit test: AS builds for test mesh, handle valid | `src/renderer/AccelerationStructure.h` |
-| 10.2 | Build TLAS from scene instances | Unit test: TLAS contains correct number of instances | TLAS management |
-| 10.3 | Create ray tracing pipeline (ray generation, closest hit, miss shaders) | Unit test: pipeline creates, shader binding table valid | RT pipeline in renderer/ |
-| 10.4 | Implement RT ambient occlusion | Visual test: AO darkens corners and crevices | AO shader |
-| 10.5 | Implement RT soft shadows (single directional light) | Visual test: soft shadow edges | Shadow shader |
-| 10.6 | Implement RT reflections on glossy surfaces | Visual test: reflective materials show reflections | Reflection shader |
-| 10.7 | Implement hybrid rendering — rasterize primary, RT for AO/shadows | Benchmark: acceptable frame time with RT effects | Hybrid pipeline |
-| 10.8 | Toggle between rasterized and RT modes via UI | UI button switches mode, scene re-renders | Mode switching |
 
 ---
 
@@ -916,10 +957,10 @@ Stage 5: Core App & Selection  │            │
     │                          │            │
     ├───────────┐              │            │
     ▼           ▼              │            │
-Stage 6: UI    Stage 9: VR ◄──┘            │
-    │           │                           │
-    ▼           │                           │
-Stage 7: BIM   │            Stage 10: RT ◄──┘
+Stage 6: UI    Stage 10: VR ◄──┘            │
+    │           │                            │
+    ▼           │                            │
+Stage 7: BIM   │            Stage 9: RT ◄──┘
 Features       │            (optional)
     │           │               │
     ▼           │               │
@@ -934,7 +975,7 @@ Performance    │               │
 ```
 
 **Critical path**: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 11
-**Parallel tracks**: VR (Stage 9) can start after Stage 4+5. RT (Stage 10) can start after Stage 3.
+**Parallel tracks**: RT (Stage 9) can start after Stage 3. VR (Stage 10) can start after Stage 4+5.
 
 ---
 
@@ -992,8 +1033,8 @@ TEST(Renderer_Camera, Orbit_PositiveDelta_RotatesRight)
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | IfcOpenShell C++ API is hard to integrate | Stage 4 delayed | Alternative: use web-ifc C++ core directly (already studied). Fallback: STEP parser + manual geometry |
-| Vulkan ray tracing not available on target GPU | Stage 10 blocked | RT is optional. Detect at runtime, fall back to rasterization |
-| OpenXR runtime not available | Stage 9 blocked | VR is compile-time optional (`BIMEUP_ENABLE_VR`). Desktop works without it |
+| Vulkan ray tracing not available on target GPU | Stage 9 blocked | RT is optional. Detect at runtime, fall back to rasterization |
+| OpenXR runtime not available | Stage 10 blocked | VR is compile-time optional (`BIMEUP_ENABLE_VR`). Desktop works without it |
 | Large IFC files cause OOM | Performance issues | Stage 8 addresses: lazy loading, streaming, LOD |
 | ImGui Vulkan backend conflicts with main render pass | UI rendering broken | Use separate render pass for ImGui. Well-documented approach |
 

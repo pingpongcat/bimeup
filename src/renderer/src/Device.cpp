@@ -82,21 +82,37 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
-    int bestScore = -1;
+    auto typeName = [](VkPhysicalDeviceType t) {
+        switch (t) {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return "discrete";
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return "virtual";
+            case VK_PHYSICAL_DEVICE_TYPE_CPU:            return "cpu";
+            default:                                     return "other";
+        }
+    };
+
+    long long bestScore = -1;
     for (const auto& device : devices) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(device, &props);
+
         uint32_t graphicsFamily = 0;
-        if (!FindGraphicsQueueFamily(device, graphicsFamily)) {
-            continue;
-        }
-
-        if (surface != VK_NULL_HANDLE) {
+        const bool hasGraphics = FindGraphicsQueueFamily(device, graphicsFamily);
+        bool hasPresent = true;
+        if (hasGraphics && surface != VK_NULL_HANDLE) {
             uint32_t presentFamily = 0;
-            if (!FindPresentQueueFamily(device, surface, presentFamily)) {
-                continue;
-            }
+            hasPresent = FindPresentQueueFamily(device, surface, presentFamily);
         }
 
-        int score = RateDevice(device);
+        const long long score =
+            (hasGraphics && hasPresent) ? RateDevice(device) : -1;
+        LOG_INFO("Vulkan device: {} ({}) score={}{}", props.deviceName,
+                 typeName(props.deviceType), score,
+                 (!hasGraphics ? "  [no graphics queue]"
+                  : !hasPresent ? "  [no present queue]"
+                                : ""));
+
         if (score > bestScore) {
             bestScore = score;
             m_physicalDevice = device;
@@ -115,7 +131,8 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
     if (bimeup::tools::Log::GetLogger()) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-        LOG_INFO("Selected GPU: {}", props.deviceName);
+        LOG_INFO("Selected GPU: {} ({})", props.deviceName,
+                 typeName(props.deviceType));
     }
 }
 
@@ -171,12 +188,27 @@ int Device::RateDevice(VkPhysicalDevice device) {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(device, &props);
 
+    // Strong preference for discrete GPUs on hybrid systems (Optimus/PRIME):
+    // dedicated VRAM + full throughput beats integrated in every realistic
+    // BIM-viewer workload. Among multiple discretes, tiebreak by local VRAM.
     int score = 0;
-    if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-        score += 1000;
-    } else if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
-        score += 100;
+    switch (props.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   score = 100000; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: score = 1000;   break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    score = 100;    break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:            score = 10;     break;
+        default:                                     score = 1;      break;
     }
+
+    VkPhysicalDeviceMemoryProperties mem{};
+    vkGetPhysicalDeviceMemoryProperties(device, &mem);
+    VkDeviceSize localHeapBytes = 0;
+    for (uint32_t i = 0; i < mem.memoryHeapCount; ++i) {
+        if (mem.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            localHeapBytes += mem.memoryHeaps[i].size;
+        }
+    }
+    score += static_cast<int>(localHeapBytes >> 30);  // +1 per GiB of VRAM
 
     return score;
 }

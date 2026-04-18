@@ -43,9 +43,13 @@ DiskMarkerPipeline::DiskMarkerPipeline(const Device& device,
     config.polygonMode = VK_POLYGON_MODE_FILL;
     config.cullMode = VK_CULL_MODE_NONE;
     config.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    // Draw on top of everything so the PoV hover marker stays visible even
+    // when the cursor floats through other geometry (walls, transparent
+    // panes, ghosted non-slab elements). Depth write stays off so the disk
+    // doesn't shadow-occlude later passes.
     config.depthTestEnable = true;
     config.depthWriteEnable = false;
-    config.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     config.alphaBlendEnable = true;
     config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
     config.colorAttachmentCount = 1;

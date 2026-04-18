@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 9 — VR Integration
-## Current Task: 9.1 OpenXR session lifecycle
+## Current Stage: 9 — Ray Tracing
+## Current Task: 9.1 Acceleration structures (BLAS)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -154,7 +154,7 @@
 - [x] N.1d Axis snaps — `Camera::SetAxisView(AxisView)` + numpad 1/3/7 (Ctrl = opposite side) for Front/Back/Right/Left/Top/Bottom
 
 ## Stage 8 — Loading Responsiveness & Memory
-Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 (indirect drawing) dropped — they target city/campus scale, not compact buildings (see PLAN.md "Scope decisions"). Reopen if a campus model appears.
+Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 (indirect drawing) dropped — they target city/campus scale, not compact buildings (see PLAN.md "Scope decisions"). Reopen if a campus model appears. The 8.4 slot is repurposed 2026-04-18 for a stability + UX bundle (axis-section, PoV, device-pick).
 
 - [x] 8.1 Async IFC loading with progress + cancel (`ifc::AsyncLoader` — worker-thread `LoadAsync` returns `std::future<std::unique_ptr<IfcModel>>`, progress emitted at "starting"/"parsing"/"done" boundaries, atomic cancel flag sampled at every boundary; serializes by joining any prior in-flight load. 7 unit tests cover worker-thread execution, monotonic 0→100 progress, null-callback safety, invalid-path → nullptr, cancel-flag toggling, cancel-during-progress → nullptr, and second-load resetting the flag. Not yet wired into `main.cpp` — that lands with 8.2 loading modal.)
 - [x] 8.2 Loading modal in `app/` (ImGui overlay, % + phase + Cancel — `main.cpp` startup refactored: UIManager + ImGui backend now init *before* the IFC load so a centred ImGui modal renders each frame while `ifc::AsyncLoader` parses on a worker thread. Modal shows file path, current phase ("starting"/"parsing"/"done"), a 0–100 progress bar driven by `std::atomic<float>`, and a Cancel button that flips to "(cancelling…)" once pressed. Window-close during load triggers Cancel + clean shutdown. Local minimal `recreateSwapchainForLoading` lambda handles resize during the modal phase without depending on scene/camera. Ifc model construction moved into a `unique_ptr` returned from the future; `ifcModel` is now a reference into it for the rest of `main`. No new unit tests — the change is pure UI integration on top of 8.1's already-tested AsyncLoader; manual verification deferred to the user. 48/48 ifc tests still pass.)
@@ -169,27 +169,36 @@ Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 
   - [x] 8.3g Retire ImGuizmo entirely + custom `ui::AxisSectionGizmo` (single-header, imoguizmo-style). View cube swapped to `imoguizmo` (`external/imoguizmo` submodule; `ImOGuizmo::DrawGizmo` at 96 px rect with tuned `axisLengthScale=0.15`, `positiveRadiusScale=0.10`, `negativeRadiusScale=0.07`; new `Camera::GetDistance()` getter for pivot). New `src/ui/include/ui/AxisSectionGizmo.hpp` with pure-math helpers (`ProjectWorldToScreen`, `AxisDragDelta` — 10 unit tests in `AxisSectionGizmoTest.cpp`) and the inline `DrawAxisHandle` ImGui entry point: drag bar along projected axis → grab circle → screen-horizontal segmented `|F|S|B|` button group (RoundCornersLeft/None/Right + black-alpha separators between pills) → (×) close raised 18 px above the B-pill right edge. Drag math uses finite-difference screen projection + `AxisDragDelta` inversion with 8 px minimum-screen-length guard. `AxisSectionPanel` rewritten: dropped `ImGuizmo::Manipulate`, `DrawModeContextPopup` (8.3f), the direction marker, the active-axis radio/gizmo concept (+ `SetActiveAxis`/`ActiveAxis`/`PruneActiveIfMissing`), and the `MakeAxisGizmoTransform`/`ExtractAxisOffset`/`ProjectPlaneOriginToScreen` helpers; panel is now just X/Y/Z toggle buttons + per-slot offset slider, one gizmo per active slot. `UIManager` no longer calls `ImGuizmo::BeginFrame`; `main.cpp` drops `ImGuizmo.h`; `external/CMakeLists.txt` drops `ImGuizmo.cpp` + include dir. `external/ImGuizmo` submodule removed (`git rm`). 20 ImGuizmo-tied tests removed (ActiveAxis×3, TogglingActivates/ClearsActive×2, PruneActiveIfMissing×3, MakeAxisGizmoTransform×3, ExtractAxisOffset×3, ProjectPlaneOriginToScreen×4, ControllerSwitchClearsActiveAxis, ImGuizmoIntegrationTest). Full `ctest --output-on-failure` — 274/274 pass.
   - [x] 8.3h UX polish bundle. `AxisSectionPanel` "Y"/"Z" button labels swapped so "Z" maps to `Axis::Y` and "Y" to `Axis::Z` — BIM users think Z = vertical, but the viewer world is Y-up; internal `Axis` enum + `MakeAxisEquation` + gizmo `AxisUnit` are untouched. `ui::HandleBarSign(bool isCutBack)` added to `AxisSectionGizmo.hpp`; `DrawAxisHandle` now extends the drag bar from the plane anchor toward the cut-away side instead of the kept side. `renderer::Swapchain::ChoosePresentMode` dropped the MAILBOX preference and now prefers `VK_PRESENT_MODE_FIFO_RELAXED_KHR` with `FIFO_KHR` fallback — caps present rate to display refresh (~144 Hz vs. previous 600+) while allowing late frames to tear through the vblank boundary instead of doubling frame time to 72 Hz (fixes the debug-mode orbit jitter that surfaced when vsync was first enabled). `ui::ViewportOverlay` trimmed to the measurement layer only: the ImGui host window is gone and with it the FPS readout, camera position/forward readouts, the small XYZ axes gizmo, and the visibility toggles + setters/getters (`SetFps`, `GetFps`, `SetCameraPosition`, `GetCameraPosition`, `SetCameraForward`, `GetCameraForward`, `SetFpsCounterVisible`, `IsFpsCounterVisible`, `SetCameraInfoVisible`, `IsCameraInfoVisible`, `SetAxesGizmoVisible`, `IsAxesGizmoVisible`, plus the `DrawAxesGizmo` helper and its per-frame member state). `main.cpp` drops the now-unused `smoothedFps` smoothing + `overlay->SetFps/SetCameraPosition/SetCameraForward` calls. `ViewportOverlayTest` stripped to two surviving tests (`HasPanelName`, `IsAPanel`) — 9 obsolete tests removed. Small GUI tweaks — no new unit tests per user request (manual-verify).
 
+- [x] 8.4 Stability + UX bundle (axis-section, PoV, device-pick — 2026-04-18)
+  - [x] 8.4a poly2tri stack-overflow guard. Section-view capping under drag can feed poly2tri numerically-degenerate polylines (near-duplicate points that survive the 10 µm quantise dedup, near-collinear triples) that drive `Sweep::FlipEdgeEvent` / `Sweep::FlipScanEdgeEvent` into mutual infinite recursion — visible as an ASan-aborted stack overflow, which is not a C++ exception and therefore slips past the existing `try/catch` in `scene::TriangulatePolygon`. Patched `external/poly2tri/poly2tri/sweep/sweep.cc`: added an anonymous-namespace `thread_local int g_bimeup_flip_depth` counter + RAII `BimeupFlipDepthGuard` that increments on entry to both Flip* functions, decrements on exit, and `throw std::runtime_error("poly2tri: FlipEdgeEvent recursion limit exceeded")` once depth exceeds 2048. The caller's existing `catch (const std::exception&)` → `EarClipTriangulate` fallback now fires on pathological input instead of the process aborting. No upstream API change; pre-existing clang-tidy `misc-no-recursion` warnings on the upstream recursive chain resurface because the file was touched but are unchanged behaviour.
+  - [x] 8.4b Selection disabled during section view. `src/app/main.cpp` — left-click `core::PickElement` and hover `core::HoverElement` are both gated on `axisSectionController.SlotCount() == 0`, so clicks/hover don't select or highlight elements while any axis-section slot is active. Drop every slot (via panel toggle or gizmo ×) to re-enable selection. No new tests — small UI gate, manual-verify.
+  - [x] 8.4c Per-axis default section mode. `AxisSectionPanel.cpp` — `kAxisButtons` table extended with a `defaultMode` per button; new `DefaultModeFor(axis)` reads it. UI "X" still creates `CutFront`; UI "Y" (world Z) and UI "Z" (world Y) now create `CutBack` on first click so the kept half sits toward the viewer by default (matches the vertical-slab and depth-slab mental model). `ToggleAxis` reads the default via `DefaultModeFor`. Existing `AxisSectionPanelTest` suite stays green (none of the tests pinned the default mode).
+  - [x] 8.4d Per-axis offset clamp from scene AABB. Root cause: `AxisSectionPanel::SetOffsetRange(float, float)` stored one scalar min/max and `main.cpp` seeded it with the global span across x/y/z, so a wide-short-thin model let the vertical plane slide across the whole diagonal. Fix: panel now stores `glm::vec3 m_offsetMin/m_offsetMax` with a new `SetOffsetRange(const glm::vec3&, const glm::vec3&)` overload + `OffsetMin(Axis)/OffsetMax(Axis)` accessors; old `(float,float)` signature preserved (fills all three axes) so existing tests stay unchanged. Slider (`ImGui::SliderFloat`) and gizmo-drag writeback (`std::clamp`) both use the per-axis range. `main.cpp` now seeds `axisSectionPanel->SetOffsetRange(mn - pad, mx + pad)` where `pad = 0.1F * max(mx - mn, vec3(1))` — per-axis 10% padding. Decision: left `ComputeSceneBounds` unchanged (walks every node with valid bounds including IfcSite, IfcSpace, IfcBuildingStorey etc.) — user flagged this as a useful signal that off-screen geometry exists, not a bug. 27/27 ui tests + bimeup link green.
+  - [x] 8.4e Per-axis gizmo colours (CG convention, mode-override retained). `AxisSectionGizmo.hpp` `DrawAxisHandle` — `axisColor` now selects a per-axis base colour: `Axis::X` → red `(230,70,70)`, `Axis::Y` → blue `(80,140,240)` (world-Y, UI "Z"), `Axis::Z` → green `(80,220,120)` (world-Z, UI "Y"). `SectionMode::SectionOnly` still overrides to amber `(255,200,64)` across all axes as a mode cue so cut-through state reads at a glance. Close-button "x" glyph nudged up 1.5 px in the red circle to fix optical-centre drift (lowercase x has more visual mass below its geometric centre).
+  - [x] 8.4f PoV marker + ghosting polish. `main.cpp` — `ApplyPointOfViewAlpha(scene, 0.2F)` → `0.08F`: non-slab types fade to ~8% so the slab cursor target dominates (`IfcWindow` default 0.4 from `DefaultTypeAlphaOverrides` is untouched via the PoV exclusion set). `renderer::DiskMarkerPipeline` — `depthCompareOp` changed from `VK_COMPARE_OP_LESS_OR_EQUAL` to `VK_COMPARE_OP_ALWAYS` so the hover disk draws on top of the ghosted geometry regardless of wall/stair occlusion; depth-write stays off so the disk doesn't shadow later passes.
+  - [x] 8.4g Vulkan device-pick robustness + telemetry. `Device::PickPhysicalDevice` now logs each enumerated `VkPhysicalDevice` with `deviceName`, `deviceType` (discrete/integrated/virtual/cpu/other), computed score, and the disqualification reason when `hasGraphics`/`hasPresent` fails, plus a final `Selected GPU: <name> (<type>)` line — makes it obvious whether a dedicated GPU is visible to the Vulkan loader at all vs. merely outranked. `Device::RateDevice` widened the discrete-vs-integrated gap to 100× (discrete=100000, integrated=1000, virtual=100, cpu=10) and adds `+1 per GiB` of device-local `VK_MEMORY_HEAP_DEVICE_LOCAL_BIT` VRAM as a discrete-vs-discrete tiebreaker. If a hybrid Linux PRIME machine still picks integrated after this change, the log confirms the NVIDIA GPU isn't enumerated (driver/ICD issue, launch with `__NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia`).
 
-## Stage 9 — VR Integration
-- [ ] 9.1 OpenXR session lifecycle
-- [ ] 9.2 Stereoscopic swapchain
-- [ ] 9.3 Stereo rendering
-- [ ] 9.4 Controller tracking + input
-- [ ] 9.5 Teleport movement
-- [ ] 9.6 VR ray interaction
-- [ ] 9.7 VR UI panels
-- [ ] 9.8 VR comfort features
-- [ ] 9.9 Scale model gesture
 
-## Stage 10 — Ray Tracing
-- [ ] 10.1 Acceleration structures (BLAS)
-- [ ] 10.2 Build TLAS
-- [ ] 10.3 RT pipeline + SBT
-- [ ] 10.4 RT ambient occlusion
-- [ ] 10.5 RT soft shadows
-- [ ] 10.6 RT reflections
-- [ ] 10.7 Hybrid rendering
-- [ ] 10.8 Toggle RT/rasterized via UI
+## Stage 9 — Ray Tracing
+- [ ] 9.1 Acceleration structures (BLAS)
+- [ ] 9.2 Build TLAS
+- [ ] 9.3 RT pipeline + SBT
+- [ ] 9.4 RT ambient occlusion
+- [ ] 9.5 RT soft shadows
+- [ ] 9.6 RT reflections
+- [ ] 9.7 Hybrid rendering
+- [ ] 9.8 Toggle RT/rasterized via UI
+
+## Stage 10 — VR Integration
+- [ ] 10.1 OpenXR session lifecycle
+- [ ] 10.2 Stereoscopic swapchain
+- [ ] 10.3 Stereo rendering
+- [ ] 10.4 Controller tracking + input
+- [ ] 10.5 Teleport movement
+- [ ] 10.6 VR ray interaction
+- [ ] 10.7 VR UI panels
+- [ ] 10.8 VR comfort features
+- [ ] 10.9 Scale model gesture
 
 ## Stage 11 — Polish & Release
 - [ ] 11.1 Drag-and-drop file loading

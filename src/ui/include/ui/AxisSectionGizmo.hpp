@@ -281,7 +281,10 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
                                           : IM_COL32(120, 50, 50, 255);
         dl->AddCircleFilled(ImVec2{xPx.x, xPx.y}, 9.0F, bg);
         const ImVec2 ts = ImGui::CalcTextSize("x");
-        dl->AddText(ImVec2{xPx.x - ts.x * 0.5F, xPx.y - ts.y * 0.5F},
+        // Nudge the glyph up ~1.5px: the lowercase 'x' has more visual mass
+        // below its geometric centre, so pure half-height centring looks
+        // optically low inside the circle.
+        dl->AddText(ImVec2{xPx.x - ts.x * 0.5F, xPx.y - ts.y * 0.5F - 1.5F},
                     IM_COL32_WHITE, "x");
     }
     if (closeBtn.pressed) {
@@ -292,9 +295,22 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
     // --- Drag bar + origin dot + grab circle ---
     {
         ImDrawList* dl = ImGui::GetForegroundDrawList();
+        // Per-axis color (CG convention). UI labels "Y" and "Z" are swapped
+        // relative to the internal `Axis` enum (BIM convention, see
+        // AxisSectionPanel.cpp kAxisButtons), so world Axis::Y is the UI "Z"
+        // (blue / vertical) and world Axis::Z is the UI "Y" (green / depth).
+        // SectionOnly overrides to amber across all axes as a mode cue.
+        const ImU32 perAxisColor = [axis]() -> ImU32 {
+            switch (axis) {
+                case scene::Axis::X: return IM_COL32(230, 70, 70, 255);   // red
+                case scene::Axis::Y: return IM_COL32(80, 140, 240, 255);  // blue
+                case scene::Axis::Z: return IM_COL32(80, 220, 120, 255);  // green
+            }
+            return IM_COL32(80, 220, 120, 255);
+        }();
         const ImU32 axisColor = (mode == scene::SectionMode::SectionOnly)
-                                    ? IM_COL32(255, 200, 64, 255)   // amber
-                                    : IM_COL32(80, 220, 120, 255);  // green
+                                    ? IM_COL32(255, 200, 64, 255)  // amber
+                                    : perAxisColor;
         dl->AddLine(ImVec2{originPx.x, originPx.y},
                     ImVec2{grabPx.x, grabPx.y}, axisColor, 2.5F);
         dl->AddCircleFilled(ImVec2{originPx.x, originPx.y}, 3.5F, axisColor);

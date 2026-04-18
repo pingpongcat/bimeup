@@ -35,8 +35,11 @@ public:
     [[nodiscard]] const glm::mat4& GetProjectionMatrix() const { return m_projection; }
 
     void SetOffsetRange(float minVal, float maxVal);
-    [[nodiscard]] float OffsetMin() const { return m_offsetMin; }
-    [[nodiscard]] float OffsetMax() const { return m_offsetMax; }
+    void SetOffsetRange(const glm::vec3& minVec, const glm::vec3& maxVec);
+    [[nodiscard]] float OffsetMin() const { return m_offsetMin.x; }
+    [[nodiscard]] float OffsetMax() const { return m_offsetMax.x; }
+    [[nodiscard]] float OffsetMin(scene::Axis axis) const;
+    [[nodiscard]] float OffsetMax(scene::Axis axis) const;
 
     void ToggleAxis(scene::Axis axis);
     void SetSlotMode(scene::Axis axis, scene::SectionMode mode);
@@ -46,8 +49,8 @@ private:
     scene::AxisSectionController* m_controller = nullptr;
     glm::mat4 m_view{1.0F};
     glm::mat4 m_projection{1.0F};
-    float m_offsetMin = -10.0F;
-    float m_offsetMax = 10.0F;
+    glm::vec3 m_offsetMin{-10.0F};
+    glm::vec3 m_offsetMax{10.0F};
 };
 
 }  // namespace bimeup::ui

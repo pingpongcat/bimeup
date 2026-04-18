@@ -4,6 +4,7 @@
 #include <scene/AxisSectionController.h>
 #include <ui/AxisSectionGizmo.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 
@@ -14,15 +15,25 @@ namespace {
 struct AxisButton {
     const char* label;
     scene::Axis axis;
+    scene::SectionMode defaultMode;
 };
 
 // BIM convention: Z is vertical (height), Y is depth. The viewer's world is
 // Y-up, so the UI "Z" label maps to the world Y axis and "Y" maps to world Z.
+// Vertical + depth planes default to CutBack so the "kept" half sits toward
+// the viewer on first add; the horizontal X plane keeps CutFront.
 constexpr std::array<AxisButton, 3> kAxisButtons{{
-    {"X", scene::Axis::X},
-    {"Y", scene::Axis::Z},
-    {"Z", scene::Axis::Y},
+    {"X", scene::Axis::X, scene::SectionMode::CutFront},
+    {"Y", scene::Axis::Z, scene::SectionMode::CutBack},
+    {"Z", scene::Axis::Y, scene::SectionMode::CutBack},
 }};
+
+scene::SectionMode DefaultModeFor(scene::Axis axis) {
+    for (const auto& btn : kAxisButtons) {
+        if (btn.axis == axis) return btn.defaultMode;
+    }
+    return scene::SectionMode::CutFront;
+}
 
 }  // namespace
 
@@ -35,8 +46,32 @@ void AxisSectionPanel::SetController(scene::AxisSectionController* controller) {
 }
 
 void AxisSectionPanel::SetOffsetRange(float minVal, float maxVal) {
-    m_offsetMin = minVal;
-    m_offsetMax = maxVal;
+    m_offsetMin = glm::vec3{minVal};
+    m_offsetMax = glm::vec3{maxVal};
+}
+
+void AxisSectionPanel::SetOffsetRange(const glm::vec3& minVec,
+                                      const glm::vec3& maxVec) {
+    m_offsetMin = minVec;
+    m_offsetMax = maxVec;
+}
+
+namespace {
+int AxisIndex(scene::Axis axis) {
+    switch (axis) {
+        case scene::Axis::X: return 0;
+        case scene::Axis::Y: return 1;
+        case scene::Axis::Z: return 2;
+    }
+    return 0;
+}
+}  // namespace
+
+float AxisSectionPanel::OffsetMin(scene::Axis axis) const {
+    return m_offsetMin[AxisIndex(axis)];
+}
+float AxisSectionPanel::OffsetMax(scene::Axis axis) const {
+    return m_offsetMax[AxisIndex(axis)];
 }
 
 void AxisSectionPanel::ToggleAxis(scene::Axis axis) {
@@ -44,7 +79,7 @@ void AxisSectionPanel::ToggleAxis(scene::Axis axis) {
     if (m_controller->HasSlot(axis)) {
         m_controller->ClearSlot(axis);
     } else {
-        m_controller->SetSlot(axis, {0.0F, scene::SectionMode::CutFront});
+        m_controller->SetSlot(axis, {0.0F, DefaultModeFor(axis)});
     }
 }
 
@@ -102,7 +137,8 @@ void AxisSectionPanel::OnDraw() {
         float offset = slot.offset;
         char label[32];
         std::snprintf(label, sizeof(label), "%s offset", btn.label);
-        if (ImGui::SliderFloat(label, &offset, m_offsetMin, m_offsetMax, "%.3f")) {
+        if (ImGui::SliderFloat(label, &offset, OffsetMin(btn.axis),
+                               OffsetMax(btn.axis), "%.3f")) {
             SetSlotOffset(btn.axis, offset);
         }
         ImGui::PopID();
@@ -130,8 +166,12 @@ void AxisSectionPanel::OnDraw() {
         if (changed) {
             if (!open) {
                 m_controller->ClearSlot(btn.axis);
-            } else if (offset != slot.offset || mode != slot.mode) {
-                m_controller->SetSlot(btn.axis, {offset, mode});
+            } else {
+                offset = std::clamp(offset, OffsetMin(btn.axis),
+                                    OffsetMax(btn.axis));
+                if (offset != slot.offset || mode != slot.mode) {
+                    m_controller->SetSlot(btn.axis, {offset, mode});
+                }
             }
         }
     }

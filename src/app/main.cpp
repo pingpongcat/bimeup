@@ -775,7 +775,7 @@ int main(int argc, char* argv[]) {
                                  fpc.GetPosition().x, fpc.GetPosition().y, fpc.GetPosition().z);
                     }
                 }
-            } else {
+            } else if (axisSectionController.SlotCount() == 0) {
                 auto [view, proj] = buildViewProj();
                 bimeup::core::PickElement(sp, windowSize(), view, proj, sceneResult->scene,
                                           sceneResult->meshes, eventBus,
@@ -858,7 +858,7 @@ int main(int argc, char* argv[]) {
                         hoverDiskNormal = n;
                     }
                 }
-            } else {
+            } else if (axisSectionController.SlotCount() == 0) {
                 bimeup::core::HoverElement(sp, windowSize(), view, proj, sceneResult->scene,
                                            sceneResult->meshes, eventBus);
             }
@@ -981,11 +981,12 @@ int main(int argc, char* argv[]) {
         if (axisBounds.IsValid()) {
             const glm::vec3 mn = axisBounds.GetMin();
             const glm::vec3 mx = axisBounds.GetMax();
-            const float lo = std::min({mn.x, mn.y, mn.z});
-            const float hi = std::max({mx.x, mx.y, mx.z});
-            // Pad 10% so extreme offsets can push the plane just past the model.
-            const float pad = 0.1F * std::max(hi - lo, 1.0F);
-            axisSectionPanel->SetOffsetRange(lo - pad, hi + pad);
+            // Per-axis bounds: a wide-short-thin model shouldn't let the
+            // vertical plane slide across the whole diagonal. Pad each axis
+            // by 10% of its own span.
+            const glm::vec3 span = glm::max(mx - mn, glm::vec3(1.0F));
+            const glm::vec3 pad = 0.1F * span;
+            axisSectionPanel->SetOffsetRange(mn - pad, mx + pad);
         }
     }
     planViewPanel->SetClipPlaneManager(&clipPlaneManager);
@@ -1157,7 +1158,7 @@ int main(int argc, char* argv[]) {
                 measurementVisibilitySnapshot.push_back(r.visible);
             }
             measureTool.SetAllVisibility(false);
-            bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.2F);
+            bimeup::scene::ApplyPointOfViewAlpha(sceneResult->scene, 0.08F);
         } else {
             bimeup::scene::ClearPointOfViewAlpha(sceneResult->scene);
             firstPersonActive = false;
