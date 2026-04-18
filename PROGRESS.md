@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: 9 — Ray Tracing
-## Current Task: 9.1 Acceleration structures (BLAS)
+## Current Stage: RP — Render Polish (non-RT beauty pass)
+## Current Task: RP.1 Hemisphere sky ambient
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -178,6 +178,20 @@ Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 
   - [x] 8.4f PoV marker + ghosting polish. `main.cpp` — `ApplyPointOfViewAlpha(scene, 0.2F)` → `0.08F`: non-slab types fade to ~8% so the slab cursor target dominates (`IfcWindow` default 0.4 from `DefaultTypeAlphaOverrides` is untouched via the PoV exclusion set). `renderer::DiskMarkerPipeline` — `depthCompareOp` changed from `VK_COMPARE_OP_LESS_OR_EQUAL` to `VK_COMPARE_OP_ALWAYS` so the hover disk draws on top of the ghosted geometry regardless of wall/stair occlusion; depth-write stays off so the disk doesn't shadow later passes.
   - [x] 8.4g Vulkan device-pick robustness + telemetry. `Device::PickPhysicalDevice` now logs each enumerated `VkPhysicalDevice` with `deviceName`, `deviceType` (discrete/integrated/virtual/cpu/other), computed score, and the disqualification reason when `hasGraphics`/`hasPresent` fails, plus a final `Selected GPU: <name> (<type>)` line — makes it obvious whether a dedicated GPU is visible to the Vulkan loader at all vs. merely outranked. `Device::RateDevice` widened the discrete-vs-integrated gap to 100× (discrete=100000, integrated=1000, virtual=100, cpu=10) and adds `+1 per GiB` of device-local `VK_MEMORY_HEAP_DEVICE_LOCAL_BIT` VRAM as a discrete-vs-discrete tiebreaker. If a hybrid Linux PRIME machine still picks integrated after this change, the log confirms the NVIDIA GPU isn't enumerated (driver/ICD issue, launch with `__NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia`).
 
+
+## Stage RP — Render Polish (non-RT beauty pass)
+Inserted 2026-04-18 before Stage 9 (RT). Goal: lift the forward renderer to a Godot-editor-viewport look using only rasterization + screen-space effects. This is the permanent fallback path for GPUs without RT support, so everything here must run on the existing Vulkan 1.x feature set. Reference shaders: `../godot-feature-updated_screen_space_shaders/ssao.glsl` + `ssil.glsl` (Intel XeGTAO family, clayjohn's Vulkan+compute port). See PLAN.md "Stage RP" for scope decisions, dependency graph, and expected APIs.
+
+- [ ] RP.1 Hemisphere sky ambient (3-tone zenith/horizon/ground, replaces flat `LightingUBO.ambient`)
+- [ ] RP.2 Post-process framework — HDR offscreen target (R16G16B16A16_SFLOAT) + ACES tonemap resolve pass; unhooks the main render pass from the swapchain
+- [ ] RP.3 MRT normal G-buffer — R16G16_SNORM octahedron-packed view-space normal attached to the main pass; `basic.frag` emits it alongside colour
+- [ ] RP.4 Linear depth + depth pyramid — per-frame compute pass that linearises the main depth attachment and builds a 4-mip chain (inputs for SSAO/SSIL)
+- [ ] RP.5 SSAO compute pass — port Godot/Intel `ssao.glsl` (adaptive-base + main + separable blur); composite via multiply into tonemap. Panel: enable / quality / radius / intensity / shadow power
+- [ ] RP.6 Selection + hover outline — single-bit stencil written in main pass, Sobel-on-id + depth-discontinuity screen-space outline pass; replaces fill-only vertex-colour highlight
+- [ ] RP.7 SSIL compute pass — port Godot/Intel `ssil.glsl` (one-bounce indirect colour from previous-frame HDR + reprojection); composite add before tonemap. Panel: enable / radius / intensity / normal-rejection
+- [ ] RP.8 FXAA post — single fullscreen pass between outline and swapchain blit. Panel: enable + quality (LOW/HIGH)
+- [ ] RP.9 Depth fog — `FogSettings` (colour + start/end) in LightingUBO tail, applied in tonemap frag. Panel: enable / colour / range
+- [ ] RP.10 Small-kernel bloom — 3-mip dual-filter downsample/upsample + threshold + composite in tonemap. Panel: enable / threshold / intensity
 
 ## Stage 9 — Ray Tracing
 - [ ] 9.1 Acceleration structures (BLAS)

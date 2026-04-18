@@ -107,11 +107,13 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
 
         const long long score =
             (hasGraphics && hasPresent) ? RateDevice(device) : -1;
-        LOG_INFO("Vulkan device: {} ({}) score={}{}", props.deviceName,
-                 typeName(props.deviceType), score,
-                 (!hasGraphics ? "  [no graphics queue]"
-                  : !hasPresent ? "  [no present queue]"
-                                : ""));
+        if (bimeup::tools::Log::GetLogger()) {
+            LOG_INFO("Vulkan device: {} ({}) score={}{}", props.deviceName,
+                     typeName(props.deviceType), score,
+                     (!hasGraphics ? "  [no graphics queue]"
+                      : !hasPresent ? "  [no present queue]"
+                                    : ""));
+        }
 
         if (score > bestScore) {
             bestScore = score;

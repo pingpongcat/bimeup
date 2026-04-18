@@ -826,6 +826,143 @@ thread_local int g_bimeup_flip_depth;                      // private, anon ns
 // throws std::runtime_error once depth > 2048
 ```
 
+## Stage RP — Render Polish (non-RT beauty pass)
+
+**Goal**: Lift the forward renderer from "lit + shadowed" to a Godot-editor-viewport look, using only rasterization + screen-space effects. This is the permanent fallback path when ray tracing isn't available (no RTX, Vulkan 1.1-only, headless CI, low-VRAM GPUs) — so everything here must run on any GPU that supports the existing renderer.
+
+**Reference**: Intel XeGTAO-family SSAO + its SSIL variant from `../godot-feature-updated_screen_space_shaders/` (Godot 4.4 `ssao.glsl` / `ssil.glsl`, clayjohn's Vulkan+compute port).
+
+**Sessions**: 5–8 (several sub-tasks are independent; can be interleaved with other work)
+
+### Motivation
+
+- Flat `vec3 ambient` leaves slabs and ceilings identical — no "ground vs sky" read in interior views.
+- No SSAO means corners/crevices/window-wall junctions look pasted on.
+- B8G8R8A8_UNORM swapchain write is doing implicit gamma, so lighting math accumulates in sRGB-ish space — looks muddy in shadowed areas.
+- Selection is fill-only (vertex-color override) — hard to read through transparency and ghosted PoV mode.
+- A proper HDR+tonemap+post-process framework is also a prerequisite for RT later: RT's output has to land somewhere with enough dynamic range.
+
+### Scope decisions (2026-04-18)
+
+**In scope:**
+- HDR render target + ACES/AgX tonemap pass (prerequisite for everything else)
+- MRT normal attachment (prerequisite for SSAO/SSIL/outlines)
+- Depth pyramid (prerequisite for SSAO/SSIL)
+- SSAO (Intel XeGTAO port) — the single biggest visible lift
+- SSIL (Intel XeGTAO SSIL port) — one-bounce indirect colour, the "Godot look" closer
+- Hemisphere sky ambient (3-tone: zenith / horizon / ground) replacing flat ambient
+- Screen-space outline for selected + hovered elements
+- FXAA post (on top of MSAA)
+- Depth-based fog
+- Small-kernel bloom
+
+**Out of scope:**
+- Full PBR / textured materials — IFC meshes are flat-colored; adds complexity with no visible gain on our asset class.
+- SSR — interior BIM scenes rarely have large mirror-like surfaces worth the cost.
+- Deferred shading — our scale doesn't need it; stay forward.
+- TAA — overkill relative to FXAA on flat-shaded scenes; revisit if we add PBR/specular later.
+- Volumetric fog, SDFGI, VoxelGI — out of budget; SSIL is the indirect-light story here.
+
+### Modules involved
+- `renderer/` (post-process framework, new compute pipelines, MRT attachment, depth pyramid, tonemap)
+- `ui/` (RenderQualityPanel — sliders for each new effect)
+- `assets/shaders/` (new GLSL: tonemap, ssao, ssil, outline, fxaa, fog, bloom; updates to `basic.frag`)
+
+### Tasks
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.1 | Hemisphere sky ambient — replace `LightingUBO.ambient` (vec3) with `skyZenith` + `skyHorizon` + `skyGround` (3× vec3) blended by `dot(n, up)`. Panel colour pickers for each. | Unit: C++ mirror `ComputeHemisphereAmbient(n, zenith, horizon, ground)` matches shader maths on cardinal normals (±X/±Y/±Z). | `renderer::Lighting.h`, `basic.frag`, panel |
+| RP.2 | Post-process framework — off-screen HDR colour attachment (R16G16B16A16_SFLOAT), main-pass render targets unhooked from swapchain, final tonemap pass (ACES-fitted) blits to sRGB swapchain. `BIMEUP_ENABLE_HDR` default on, off = direct swapchain write (fallback for debug). | Unit: ACES curve at known HDR values (0, 0.18, 1.0, 10.0) matches reference; pipeline-build test for tonemap. | `renderer/PostProcessChain.{h,cpp}`, `tonemap.{vert,frag}` |
+| RP.3 | MRT normal G-buffer — add R16G16_SNORM (octahedron-packed) normal attachment to the main render pass, `basic.frag` emits `outNormal`. Prepares inputs for SSAO/SSIL/outline. | Unit: C++ mirror `OctPackNormal` / `OctUnpackNormal` round-trip on sphere samples; pipeline-build test for updated `basic` pipeline with 2 colour attachments. | `basic.frag`, updated `RenderLoop::CreateRenderPass` |
+| RP.4 | Linear depth + depth pyramid — one-off per-frame compute pass that reads the main depth attachment, linearises to view space, and builds a mip chain (R16_SFLOAT or R32_SFLOAT, 4 mips). Helper `ReconstructViewPosFromDepth(uv, linearDepth, invViewProj)`. | Unit: `LinearizeDepth(nonLinear, near, far)` + `ReconstructViewPos` mirrors on known projections. | `renderer/DepthPyramid.{h,cpp}`, `depth_linearize.comp`, `depth_mip.comp` |
+| RP.5 | SSAO compute pass — port Godot/Intel `ssao.glsl` (adaptive-base + main). Inputs: depth pyramid, normal attachment. Output: R8 AO term at half-res. Separable blur. Composite via multiply in tonemap pass (or a cheap `ssao_composite.frag`). Panel: enable / quality preset (0–3) / radius / intensity / shadow power. | Unit: hemisphere-kernel + edge-packing helpers have C++ mirrors tested on known inputs; pipeline-build test for SSAO compute + blur. Visual: contact darkening at slab/wall junctions, corners, window reveals on `sample_house.ifc`. | `renderer/SsaoPass.{h,cpp}`, `ssao_main.comp`, `ssao_blur.comp`, `ssao_composite.frag` |
+| RP.6 | Selection outline — new graphics pass after tonemap, samples normal + depth + a single-bit "selected/hovered" stencil written during the main pass (write `1` for selected, `2` for hovered). Sobel-on-id + depth-discontinuity fallback; 2-px outline, configurable colour. | Unit: `SobelMagnitude` + `EdgeFromStencil` helpers on a known 3×3 patch. Visual: crisp outline around selected/hovered element that reads through transparency and PoV ghosting. | `renderer/OutlinePass.{h,cpp}`, `outline.frag` |
+| RP.7 | SSIL compute pass — port Godot/Intel `ssil.glsl`. Inputs: depth pyramid, normal attachment, previous-frame HDR colour, reprojection matrix. Output: R16G16B16A16 indirect colour at half-res. Separable blur. Composite: add to `lit` before tonemap. Panel: enable / radius / intensity / normal-rejection amount. | Unit: reprojection matrix helper + normal-rejection weight on known inputs. Visual: coloured bleed (red wall → grey floor tint, wooden floor → white ceiling tint) on `sample_house.ifc`. | `renderer/SsilPass.{h,cpp}`, `ssil_main.comp`, `ssil_blur.comp` |
+| RP.8 | FXAA post — single compute/fullscreen-fragment pass between outline and swapchain blit. Panel toggle + "quality" (LOW/HIGH). | Unit: luminance calc matches reference; pipeline-build test. Visual: subpixel shimmer on slab edges is gone at MSAA=1. | `renderer/FxaaPass.{h,cpp}`, `fxaa.frag` |
+| RP.9 | Depth fog — additive fragment work inside tonemap pass, `fogColour` + `fogStart` + `fogEnd` + `fogEnabled` in the LightingUBO tail. Panel: enable, colour, distance range. | Unit: `ComputeFog(viewZ, start, end)` mirror. Visual: gentle distance fade improves depth perception on `Ifc2x3_SampleCastle.ifc`. | `tonemap.frag`, `renderer/Lighting.h` |
+| RP.10 | Small-kernel bloom — 3-mip downsample + Kawase/dual-filter blur + composite in tonemap. Only triggers on HDR pixels > `bloomThreshold` (defaults: threshold 1.0, intensity 0.04 — subtle). Panel toggle + threshold + intensity. | Unit: downsample/upsample weight helpers. Visual: soft glow around sunlit windows / artificial lights when we add them. | `renderer/BloomPass.{h,cpp}`, `bloom_down.frag`, `bloom_up.frag` |
+
+### Expected APIs after Stage RP
+
+```cpp
+// renderer/include/renderer/PostProcessChain.h
+namespace bimeup::renderer {
+    struct PostProcessSettings {
+        bool ssaoEnabled = true;
+        int  ssaoQuality = 2;     // 0=lowest … 3=adaptive
+        float ssaoRadius = 0.5f;
+        float ssaoIntensity = 1.5f;
+        float ssaoShadowPower = 1.5f;
+
+        bool ssilEnabled = false;   // off by default — HDR+SSAO is already a big win
+        float ssilRadius = 1.0f;
+        float ssilIntensity = 0.5f;
+        float ssilNormalRejection = 1.0f;
+
+        bool outlineEnabled = true;
+        glm::vec3 outlineColor{1.0f, 0.6f, 0.1f};
+        float outlineThickness = 2.0f;
+
+        bool fxaaEnabled = true;
+        int   fxaaQuality = 1;      // 0=LOW, 1=HIGH
+
+        bool fogEnabled = false;
+        glm::vec3 fogColor{0.5f, 0.55f, 0.6f};
+        float fogStart = 20.0f;
+        float fogEnd = 120.0f;
+
+        bool bloomEnabled = false;
+        float bloomThreshold = 1.0f;
+        float bloomIntensity = 0.04f;
+    };
+
+    class PostProcessChain {
+    public:
+        PostProcessChain(const Device&, VkExtent2D, VkFormat hdrFormat);
+        void Resize(VkExtent2D);
+        // Records compute + fragment passes between the main pass and the swapchain blit.
+        void Record(VkCommandBuffer, const CameraUbo&, const PostProcessSettings&);
+        VkImage  GetHdrTarget()    const;
+        VkImageView GetHdrTargetView() const;
+    };
+}
+
+// renderer/include/renderer/Lighting.h  (additions)
+struct HemisphereAmbient {
+    glm::vec3 zenith{0.55f, 0.60f, 0.70f};
+    glm::vec3 horizon{0.60f, 0.60f, 0.60f};
+    glm::vec3 ground{0.25f, 0.22f, 0.20f};
+};
+
+struct FogSettings {
+    bool enabled = false;
+    glm::vec3 color{0.55f, 0.60f, 0.70f};
+    float start = 20.0f;
+    float end   = 120.0f;
+};
+
+glm::vec3 ComputeHemisphereAmbient(const glm::vec3& normal,
+                                   const HemisphereAmbient& sky);
+```
+
+### Stage RP task ordering
+
+RP.1 (sky ambient) has no renderer-architecture dependency — ship it first for an immediate visible win. RP.2 (HDR framework) unlocks everything after. RP.3/4 prepare SSAO inputs. RP.5 is the big-ticket task. RP.6 (outlines) can land in parallel with RP.5 once RP.3 is done. RP.7 (SSIL) is the heavyweight; treat as its own gate. RP.8/9/10 are independent polish tasks that can land in any order after RP.2.
+
+```
+RP.1 ── stand-alone
+RP.2 ── unlocks → RP.8, RP.9, RP.10
+        │
+        └── RP.3 ── unlocks → RP.5, RP.6
+                         │
+                         └── RP.4 ── required for → RP.5, RP.7
+                                         │
+                                         └── RP.5 ── required for → RP.7
+```
+
+---
+
 ## Stage 9 — Ray Tracing (Optional Advanced Rendering)
 
 **Goal**: Vulkan ray tracing pipeline for high-quality rendering mode. Ambient occlusion, reflections, soft shadows.
@@ -1052,8 +1189,9 @@ TEST(Renderer_Camera, Orbit_PositiveDelta_RotatesRight)
 | 6. UI | 2–3 | 12–18 |
 | 7. BIM Features | 3–4 | 15–22 |
 | 8. Performance | 2–3 | 17–25 |
-| 9. VR | 3–4 | 20–29 |
-| 10. Ray Tracing | 2–3 | 22–32 |
-| 11. Polish & Release | 2–3 | 24–35 |
+| RP. Render Polish | 5–8 | 22–33 |
+| 9. Ray Tracing | 2–3 | 24–36 |
+| 10. VR | 3–4 | 27–40 |
+| 11. Polish & Release | 2–3 | 29–43 |
 
 **Total: ~24–35 sessions**
