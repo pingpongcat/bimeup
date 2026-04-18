@@ -13,7 +13,9 @@ layout(set = 0, binding = 1) uniform LightingUBO {
     vec4 fillColorEnabled;
     vec4 rimDirectionIntensity;
     vec4 rimColorEnabled;
-    vec4 ambient;
+    vec4 skyZenith;
+    vec4 skyHorizon;
+    vec4 skyGround;
     mat4 lightSpaceMatrix;
     vec4 shadowParams;  // x=enabled, y=bias, z=pcfRadius, w=1/resolution
 } lights;
@@ -30,6 +32,16 @@ vec3 lambertContribution(vec3 n, vec4 dirI, vec4 colE) {
     vec3 toLight = normalize(-dirI.xyz);
     float ndotl = max(dot(n, toLight), 0.0);
     return colE.rgb * (dirI.w * ndotl * enabled);
+}
+
+// 3-tone hemisphere ambient sampled by dot(n, +Y). Mirrors
+// bimeup::renderer::ComputeHemisphereAmbient on the CPU.
+vec3 hemisphereAmbient(vec3 n) {
+    float t = n.y;
+    if (t >= 0.0) {
+        return mix(lights.skyHorizon.rgb, lights.skyZenith.rgb, t);
+    }
+    return mix(lights.skyHorizon.rgb, lights.skyGround.rgb, -t);
 }
 
 // 3x3 PCF mirror of bimeup::renderer::ComputePcfShadow. Returns visibility in
@@ -75,7 +87,7 @@ void main() {
     vec3 n = normalize(fragNormalWorld);
     if (!gl_FrontFacing) n = -n;  // Light back faces correctly (double-sided rendering).
 
-    vec3 lit = lights.ambient.rgb;
+    vec3 lit = hemisphereAmbient(n);
 
     // Shadow only attenuates the key light; fill and rim stay unshadowed for now.
     vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);

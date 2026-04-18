@@ -11,6 +11,13 @@ namespace bimeup::ui {
 
 namespace {
 
+void DrawSkyColor(const char* label, glm::vec3& c) {
+    std::array<float, 3> rgb{c.r, c.g, c.b};
+    if (ImGui::ColorEdit3(label, rgb.data())) {
+        c = glm::vec3(rgb[0], rgb[1], rgb[2]);
+    }
+}
+
 void DrawDirectionalLight(const char* label, renderer::DirectionalLight& light) {
     ImGui::PushID(label);
     ImGui::Checkbox(label, &light.enabled);
@@ -51,11 +58,10 @@ void RenderQualityPanel::OnDraw() {
         DrawDirectionalLight("Rim", m_settings.lighting.rim);
         ImGui::Separator();
 
-        std::array<float, 3> amb{m_settings.lighting.ambient.r, m_settings.lighting.ambient.g,
-                                 m_settings.lighting.ambient.b};
-        if (ImGui::ColorEdit3("Ambient", amb.data())) {
-            m_settings.lighting.ambient = glm::vec3(amb[0], amb[1], amb[2]);
-        }
+        ImGui::TextUnformatted("Sky ambient (hemisphere)");
+        DrawSkyColor("Zenith", m_settings.lighting.sky.zenith);
+        DrawSkyColor("Horizon", m_settings.lighting.sky.horizon);
+        DrawSkyColor("Ground", m_settings.lighting.sky.ground);
 
         if (ImGui::Button("Reset to defaults")) {
             m_settings.lighting = renderer::MakeDefaultLighting();

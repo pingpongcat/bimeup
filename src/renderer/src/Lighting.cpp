@@ -1,5 +1,6 @@
 #include <renderer/Lighting.h>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
 #include <algorithm>
@@ -27,7 +28,7 @@ LightingScene MakeDefaultLighting() {
     s.rim.intensity = 0.35F;
     s.rim.enabled = true;
 
-    s.ambient = glm::vec3(0.08F, 0.09F, 0.10F);
+    s.sky = HemisphereAmbient{};
     return s;
 }
 
@@ -41,7 +42,9 @@ LightingUbo PackLighting(const LightingScene& scene) {
     packLight(scene.key, ubo.keyDirectionIntensity, ubo.keyColorEnabled);
     packLight(scene.fill, ubo.fillDirectionIntensity, ubo.fillColorEnabled);
     packLight(scene.rim, ubo.rimDirectionIntensity, ubo.rimColorEnabled);
-    ubo.ambient = glm::vec4(scene.ambient, 0.0F);
+    ubo.skyZenith = glm::vec4(scene.sky.zenith, 0.0F);
+    ubo.skyHorizon = glm::vec4(scene.sky.horizon, 0.0F);
+    ubo.skyGround = glm::vec4(scene.sky.ground, 0.0F);
 
     ubo.lightSpaceMatrix = scene.shadow.lightSpaceMatrix;
     const float invRes = scene.shadow.mapResolution > 0
@@ -60,6 +63,14 @@ glm::vec3 ComputeLambert(const DirectionalLight& light, const glm::vec3& normal)
     glm::vec3 toLight = -light.direction;
     float ndotl = std::max(0.0F, glm::dot(glm::normalize(normal), glm::normalize(toLight)));
     return light.color * (light.intensity * ndotl);
+}
+
+glm::vec3 ComputeHemisphereAmbient(const glm::vec3& normal, const HemisphereAmbient& sky) {
+    const float t = glm::normalize(normal).y;
+    if (t >= 0.0F) {
+        return glm::mix(sky.horizon, sky.zenith, t);
+    }
+    return glm::mix(sky.horizon, sky.ground, -t);
 }
 
 float ComputePcfShadow(const glm::mat4& lightSpaceMatrix,

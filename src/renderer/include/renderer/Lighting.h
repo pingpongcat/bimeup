@@ -22,18 +22,26 @@ struct ShadowSettings {
     glm::mat4 lightSpaceMatrix{1.0F};         // world → light clip space
 };
 
+// 3-tone hemisphere ambient: sampled along dot(normal, +Y world-up). +Y picks
+// `zenith`, -Y picks `ground`, horizontal normals pick `horizon`.
+struct HemisphereAmbient {
+    glm::vec3 zenith{0.55F, 0.60F, 0.70F};
+    glm::vec3 horizon{0.60F, 0.60F, 0.60F};
+    glm::vec3 ground{0.25F, 0.22F, 0.20F};
+};
+
 struct LightingScene {
     DirectionalLight key;
     DirectionalLight fill;
     DirectionalLight rim;
-    glm::vec3 ambient{0.08F, 0.09F, 0.10F};
+    HemisphereAmbient sky{};
     ShadowSettings shadow{};
 };
 
 // std140-packed UBO that mirrors the GLSL LightingUBO.
 // Layout: each DirectionalLight → (vec4 directionIntensity, vec4 colorEnabled),
-// then vec4 ambient, mat4 lightSpaceMatrix, vec4 shadowParams
-// (x=enabled, y=bias, z=pcfRadius, w=1/resolution).
+// then vec4 skyZenith, vec4 skyHorizon, vec4 skyGround, mat4 lightSpaceMatrix,
+// vec4 shadowParams (x=enabled, y=bias, z=pcfRadius, w=1/resolution).
 struct LightingUbo {
     glm::vec4 keyDirectionIntensity;
     glm::vec4 keyColorEnabled;
@@ -41,12 +49,14 @@ struct LightingUbo {
     glm::vec4 fillColorEnabled;
     glm::vec4 rimDirectionIntensity;
     glm::vec4 rimColorEnabled;
-    glm::vec4 ambient;
+    glm::vec4 skyZenith;
+    glm::vec4 skyHorizon;
+    glm::vec4 skyGround;
     glm::mat4 lightSpaceMatrix;
     glm::vec4 shadowParams;
 };
 
-static_assert(sizeof(LightingUbo) == 192, "LightingUbo must match std140 layout");
+static_assert(sizeof(LightingUbo) == 224, "LightingUbo must match std140 layout");
 
 LightingScene MakeDefaultLighting();
 LightingUbo PackLighting(const LightingScene& scene);
@@ -55,6 +65,10 @@ LightingUbo PackLighting(const LightingScene& scene);
 // given world-space normal. Mirrors the fragment-shader math so unit tests can
 // verify lighting behavior without a GPU.
 glm::vec3 ComputeLambert(const DirectionalLight& light, const glm::vec3& normal);
+
+// 3-tone hemisphere ambient sampled by dot(normalize(normal), +Y). Mirrors the
+// fragment-shader math so unit tests can verify behaviour on the CPU.
+glm::vec3 ComputeHemisphereAmbient(const glm::vec3& normal, const HemisphereAmbient& sky);
 
 // 3x3 PCF shadow visibility in [0, 1]. Returns 1.0 when the shaded point is lit,
 // 0.0 when fully occluded, and a fraction in between when only some PCF taps are

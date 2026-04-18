@@ -8,9 +8,11 @@
 #include <array>
 #include <cmath>
 
+using bimeup::renderer::ComputeHemisphereAmbient;
 using bimeup::renderer::ComputeLambert;
 using bimeup::renderer::ComputePcfShadow;
 using bimeup::renderer::DirectionalLight;
+using bimeup::renderer::HemisphereAmbient;
 using bimeup::renderer::LightingUbo;
 using bimeup::renderer::MakeDefaultLighting;
 using bimeup::renderer::PackLighting;
@@ -104,9 +106,10 @@ TEST(LightingTest, LambertScalesWithIntensity) {
 }
 
 TEST(LightingTest, PackedUboMatchesStd140Size) {
-    // std140: 3 × (vec4 dirIntensity + vec4 colorEnabled) + vec4 ambient = 112 bytes
-    // + mat4 lightSpaceMatrix (64) + vec4 shadowParams (16) = 192 bytes
-    EXPECT_EQ(sizeof(LightingUbo), 192U);
+    // std140: 3 × (vec4 dirIntensity + vec4 colorEnabled) = 96 bytes
+    // + 3 × vec4 (skyZenith, skyHorizon, skyGround) = 48 bytes
+    // + mat4 lightSpaceMatrix (64) + vec4 shadowParams (16) = 224 bytes
+    EXPECT_EQ(sizeof(LightingUbo), 224U);
 }
 
 TEST(LightingTest, PackLightingPreservesDirectionAndIntensity) {
@@ -159,6 +162,81 @@ TEST(LightingTest, PackLightingPreservesLightSpaceMatrix) {
     EXPECT_NEAR(ubo.lightSpaceMatrix[1][1], 2.0F, kEps);
     EXPECT_NEAR(ubo.lightSpaceMatrix[2][2], 2.0F, kEps);
     EXPECT_NEAR(ubo.lightSpaceMatrix[3][3], 2.0F, kEps);
+}
+
+// --- ComputeHemisphereAmbient: cardinal-normal sanity + lerp behaviour. -------
+
+TEST(HemisphereAmbientTest, ZenithWhenNormalPointsUp) {
+    HemisphereAmbient sky{glm::vec3(0.2F, 0.4F, 0.9F), glm::vec3(0.5F, 0.5F, 0.5F),
+                          glm::vec3(0.1F, 0.08F, 0.06F)};
+    glm::vec3 a = ComputeHemisphereAmbient(glm::vec3(0.0F, 1.0F, 0.0F), sky);
+    EXPECT_NEAR(a.r, sky.zenith.r, kEps);
+    EXPECT_NEAR(a.g, sky.zenith.g, kEps);
+    EXPECT_NEAR(a.b, sky.zenith.b, kEps);
+}
+
+TEST(HemisphereAmbientTest, GroundWhenNormalPointsDown) {
+    HemisphereAmbient sky{glm::vec3(0.2F, 0.4F, 0.9F), glm::vec3(0.5F, 0.5F, 0.5F),
+                          glm::vec3(0.1F, 0.08F, 0.06F)};
+    glm::vec3 a = ComputeHemisphereAmbient(glm::vec3(0.0F, -1.0F, 0.0F), sky);
+    EXPECT_NEAR(a.r, sky.ground.r, kEps);
+    EXPECT_NEAR(a.g, sky.ground.g, kEps);
+    EXPECT_NEAR(a.b, sky.ground.b, kEps);
+}
+
+TEST(HemisphereAmbientTest, HorizonForCardinalHorizontalNormals) {
+    HemisphereAmbient sky{glm::vec3(0.2F, 0.4F, 0.9F), glm::vec3(0.5F, 0.55F, 0.6F),
+                          glm::vec3(0.1F, 0.08F, 0.06F)};
+    const std::array<glm::vec3, 4> horiz{glm::vec3(1.0F, 0.0F, 0.0F),
+                                         glm::vec3(-1.0F, 0.0F, 0.0F),
+                                         glm::vec3(0.0F, 0.0F, 1.0F),
+                                         glm::vec3(0.0F, 0.0F, -1.0F)};
+    for (const glm::vec3& n : horiz) {
+        glm::vec3 a = ComputeHemisphereAmbient(n, sky);
+        EXPECT_NEAR(a.r, sky.horizon.r, kEps);
+        EXPECT_NEAR(a.g, sky.horizon.g, kEps);
+        EXPECT_NEAR(a.b, sky.horizon.b, kEps);
+    }
+}
+
+TEST(HemisphereAmbientTest, MidwayBetweenHorizonAndZenith) {
+    HemisphereAmbient sky{glm::vec3(1.0F), glm::vec3(0.0F), glm::vec3(0.5F)};
+    // 45° upward: n.y = sqrt(2)/2 ≈ 0.707 → lerp horizon→zenith by 0.707.
+    glm::vec3 n = glm::normalize(glm::vec3(1.0F, 1.0F, 0.0F));
+    glm::vec3 a = ComputeHemisphereAmbient(n, sky);
+    const float t = n.y;
+    EXPECT_NEAR(a.r, t, kEps);
+    EXPECT_NEAR(a.g, t, kEps);
+    EXPECT_NEAR(a.b, t, kEps);
+}
+
+TEST(HemisphereAmbientTest, NormalizesInput) {
+    HemisphereAmbient sky{glm::vec3(1.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F),
+                          glm::vec3(0.0F, 0.0F, 1.0F)};
+    glm::vec3 a1 = ComputeHemisphereAmbient(glm::vec3(0.0F, 1.0F, 0.0F), sky);
+    glm::vec3 a2 = ComputeHemisphereAmbient(glm::vec3(0.0F, 7.3F, 0.0F), sky);
+    EXPECT_NEAR(a1.r, a2.r, kEps);
+    EXPECT_NEAR(a1.g, a2.g, kEps);
+    EXPECT_NEAR(a1.b, a2.b, kEps);
+}
+
+TEST(LightingTest, PackLightingEncodesSkyColors) {
+    auto scene = MakeDefaultLighting();
+    scene.sky.zenith = glm::vec3(0.1F, 0.2F, 0.3F);
+    scene.sky.horizon = glm::vec3(0.4F, 0.5F, 0.6F);
+    scene.sky.ground = glm::vec3(0.7F, 0.8F, 0.9F);
+
+    auto ubo = PackLighting(scene);
+
+    EXPECT_NEAR(ubo.skyZenith.r, 0.1F, kEps);
+    EXPECT_NEAR(ubo.skyZenith.g, 0.2F, kEps);
+    EXPECT_NEAR(ubo.skyZenith.b, 0.3F, kEps);
+    EXPECT_NEAR(ubo.skyHorizon.r, 0.4F, kEps);
+    EXPECT_NEAR(ubo.skyHorizon.g, 0.5F, kEps);
+    EXPECT_NEAR(ubo.skyHorizon.b, 0.6F, kEps);
+    EXPECT_NEAR(ubo.skyGround.r, 0.7F, kEps);
+    EXPECT_NEAR(ubo.skyGround.g, 0.8F, kEps);
+    EXPECT_NEAR(ubo.skyGround.b, 0.9F, kEps);
 }
 
 // --- ComputePcfShadow: 3x3 PCF visibility [0,1]. 1=lit, 0=fully in shadow. -----

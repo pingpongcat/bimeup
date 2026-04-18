@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: RP — Render Polish (non-RT beauty pass)
-## Current Task: RP.1 Hemisphere sky ambient
+## Current Task: RP.2 Post-process framework (HDR offscreen + ACES tonemap)
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
@@ -182,7 +182,7 @@ Re-scoped 2026-04-17. Original 8.2 (BVH), 8.3 (frustum culling), 8.4 (LOD), 8.5 
 ## Stage RP — Render Polish (non-RT beauty pass)
 Inserted 2026-04-18 before Stage 9 (RT). Goal: lift the forward renderer to a Godot-editor-viewport look using only rasterization + screen-space effects. This is the permanent fallback path for GPUs without RT support, so everything here must run on the existing Vulkan 1.x feature set. Reference shaders: `../godot-feature-updated_screen_space_shaders/ssao.glsl` + `ssil.glsl` (Intel XeGTAO family, clayjohn's Vulkan+compute port). See PLAN.md "Stage RP" for scope decisions, dependency graph, and expected APIs.
 
-- [ ] RP.1 Hemisphere sky ambient (3-tone zenith/horizon/ground, replaces flat `LightingUBO.ambient`)
+- [x] RP.1 Hemisphere sky ambient — `renderer::HemisphereAmbient{zenith, horizon, ground}` replaces flat `LightingScene::ambient`; `ComputeHemisphereAmbient(n, sky)` blends by `normalize(n).y` (t≥0 → mix(horizon, zenith, t); t<0 → mix(horizon, ground, -t)) and has a matching GLSL `hemisphereAmbient` in `basic.frag`. `LightingUbo` grew 192 → 224 bytes (dropped `vec4 ambient`, added `vec4 skyZenith/Horizon/Ground`); shader UBO layout kept in sync. `RenderQualityPanel` "Three-point lighting" header now exposes three `ColorEdit3` pickers (Zenith/Horizon/Ground) under a "Sky ambient (hemisphere)" label in place of the single "Ambient" picker; `Reset to defaults` still resets via `MakeDefaultLighting()`. 6 new unit tests in `LightingTest.cpp` (`HemisphereAmbientTest.*` on ±X/±Y/±Z cardinal normals + midway 45° lerp + input-normalisation + `PackLightingEncodesSkyColors`); existing `PackedUboMatchesStd140Size` bumped 192 → 224. Full renderer module ctest (`ctest -R renderer`) 1/1 pass (407 s including Vulkan integration) and ui module ctest 27/27 pass.
 - [ ] RP.2 Post-process framework — HDR offscreen target (R16G16B16A16_SFLOAT) + ACES tonemap resolve pass; unhooks the main render pass from the swapchain
 - [ ] RP.3 MRT normal G-buffer — R16G16_SNORM octahedron-packed view-space normal attached to the main pass; `basic.frag` emits it alongside colour
 - [ ] RP.4 Linear depth + depth pyramid — per-frame compute pass that linearises the main depth attachment and builds a 4-mip chain (inputs for SSAO/SSIL)
