@@ -454,20 +454,21 @@ int main(int argc, char* argv[]) {
     // Double-sided rendering so clip-plane-exposed interior faces are visible.
     pipelineConfig.cullMode = VK_CULL_MODE_NONE;
 
-    // Main render pass is MRT (scene HDR + R16G16_SNORM normal G-buffer).
-    // All scene pipelines must therefore have `colorAttachmentCount = 2`.
-    // `basic.frag` currently emits only `outColor`, so attachment 1 is left
-    // untouched (writeMask=0 via disableSecondaryColorWrites) and keeps the
-    // (0,0) clear value — which decodes to +Z through the oct-normal helper.
-    // RP.3d will flip the flag off on shaded/wireframe once the shader starts
-    // writing the view-space normal.
+    // Main render pass is MRT (scene HDR + R16G16_SNORM normal G-buffer +
+    // R8_UINT outline stencil G-buffer). All scene pipelines must therefore
+    // have `colorAttachmentCount = 3`. `basic.frag` writes all three outputs
+    // (colour, oct-packed normal, stencil id — the last one is 0u until RP.6d
+    // plumbs selection state), so `disableSecondaryColorWrites` is OFF for
+    // the shaded/wireframe/transparent pipelines. Overlay pipelines
+    // (section-fill, disk-marker) still mask attachments 1 and 2 so they
+    // don't stomp the normal + stencil clear values.
     auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
                               std::unique_ptr<bimeup::renderer::Pipeline>& wire,
                               std::unique_ptr<bimeup::renderer::Pipeline>& transparent) {
         pipelineConfig.renderPass = renderLoop.GetRenderPass();
         pipelineConfig.rasterizationSamples = renderLoop.GetSampleCount();
-        pipelineConfig.colorAttachmentCount = 2;
-        pipelineConfig.disableSecondaryColorWrites = true;
+        pipelineConfig.colorAttachmentCount = 3;
+        pipelineConfig.disableSecondaryColorWrites = false;
         pipelineConfig.polygonMode =
             bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
         pipelineConfig.alphaBlendEnable = false;
@@ -500,13 +501,13 @@ int main(int argc, char* argv[]) {
     // referenced by section_fill.vert; unused bindings are harmless.
     std::unique_ptr<bimeup::renderer::SectionFillPipeline> sectionFillPipeline;
     auto buildSectionFillPipeline = [&] {
-        // Targets the MRT main pass — declare 2 colour attachments but mask
-        // writes to attachment 1 so the normal G-buffer stays at its clear
-        // value under section-fill triangles.
+        // Targets the MRT main pass — declare 3 colour attachments but mask
+        // writes to attachments 1 and 2 so the normal + stencil G-buffers
+        // stay at their clear values under section-fill triangles.
         sectionFillPipeline = std::make_unique<bimeup::renderer::SectionFillPipeline>(
             device, sectionFillVertShader, sectionFillFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(), renderLoop.GetSampleCount(),
-            /*colorAttachmentCount=*/2, /*disableSecondaryColorWrites=*/true);
+            /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildSectionFillPipeline();
 
@@ -521,7 +522,7 @@ int main(int argc, char* argv[]) {
             device, diskMarkerVertShader, diskMarkerFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(),
             renderLoop.GetSampleCount(),
-            /*colorAttachmentCount=*/2, /*disableSecondaryColorWrites=*/true);
+            /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildDiskMarkerPipeline();
     bimeup::renderer::DiskMarkerBuffer diskMarkerBuffer(device);

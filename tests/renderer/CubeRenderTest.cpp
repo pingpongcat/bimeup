@@ -197,10 +197,10 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     pipelineConfig.pushConstantRanges = {pushRange};
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
-    // RenderLoop's main pass is MRT (scene HDR + normal G-buffer).
-    // The cube shader only writes location 0 so mask out the normal slot.
-    pipelineConfig.colorAttachmentCount = 2;
-    pipelineConfig.disableSecondaryColorWrites = true;
+    // RenderLoop's main pass is MRT (HDR + normal G-buffer + stencil id).
+    // basic.frag writes all three, so keep the secondary writes enabled.
+    pipelineConfig.colorAttachmentCount = 3;
+    pipelineConfig.disableSecondaryColorWrites = false;
 
     Pipeline pipeline(*m_device, vertShader, fragShader, pipelineConfig);
 

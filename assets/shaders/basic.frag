@@ -7,6 +7,10 @@ layout(location = 3) in vec3 fragNormalView;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outNormal;
+// RP.6c outline stencil id. 0 = background, 1 = selected, 2 = hovered.
+// Currently emits 0 unconditionally — RP.6d plumbs selection/hover state in
+// via a push constant so this value actually tracks the UI selection.
+layout(location = 2) out uint outStencilId;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
     vec4 keyDirectionIntensity;
@@ -109,6 +113,9 @@ void main() {
 
     // MRT normal G-buffer for SSAO / SSIL / outlines. R16G16_SNORM target.
     outNormal = octPackNormal(nView);
+    // Outline stencil id — 0 until RP.6d replaces this with a push-constant
+    // value driven by selection/hover state.
+    outStencilId = 0u;
 
     vec3 lit = hemisphereAmbient(n);
 

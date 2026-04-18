@@ -114,14 +114,22 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresNormalOutputAtLocation1) {
 
     bool hasLoc0 = false;
     bool hasLoc1 = false;
+    bool hasLoc2 = false;
     for (uint32_t id : outputIds) {
         auto it = idToLocation.find(id);
         if (it == idToLocation.end()) continue;
         if (it->second == 0) hasLoc0 = true;
         if (it->second == 1) hasLoc1 = true;
+        if (it->second == 2) hasLoc2 = true;
     }
     EXPECT_TRUE(hasLoc0) << "basic.frag missing colour output at location 0";
     EXPECT_TRUE(hasLoc1) << "basic.frag missing oct-packed normal output at location 1";
+    // RP.6c contract: basic.frag emits a third output — the outline-stencil id
+    // (R8_UINT, 0/1/2 for background/selected/hovered). Selection wiring
+    // arrives in RP.6d; for now the shader writes 0u unconditionally so the
+    // MRT attachment gets the expected value. Kept in the same shader-output
+    // test so an accidental `out` removal fails one test, not three.
+    EXPECT_TRUE(hasLoc2) << "basic.frag missing outline-stencil output at location 2";
 }
 
 TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {

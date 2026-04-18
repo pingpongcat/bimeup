@@ -36,6 +36,12 @@ public:
     // attachment untouched (disableSecondaryColorWrites) don't corrupt
     // SSAO/SSIL sampling downstream.
     static constexpr VkFormat NORMAL_FORMAT = VK_FORMAT_R16G16_SNORM;
+    // Outline stencil G-buffer format (RP.6c). Single-channel unsigned 8-bit
+    // integer — 0 = background, 1 = selected, 2 = hovered. Attachment 2 of
+    // the main render pass. Sampled by `outline.frag` (RP.6b) as a
+    // `usampler2D`. Clear value is 0 so unwritten pixels fall into the
+    // background category.
+    static constexpr VkFormat STENCIL_FORMAT = VK_FORMAT_R8_UINT;
     // Depth pyramid format — view-space linear depth, single-channel float.
     // Used by the RP.4c/d depth_linearize + depth_mip compute chain and
     // sampled by downstream SSAO/SSIL in RP.5/RP.7.
@@ -96,6 +102,11 @@ public:
     /// SSAO / SSIL / outline passes in later RP tasks. Returns VK_NULL_HANDLE
     /// only if the index is out of range.
     [[nodiscard]] VkImageView GetNormalImageView(uint32_t imageIndex) const;
+    /// View into the single-sample outline-stencil G-buffer (R8_UINT) for the
+    /// given swap image index (same index domain as `GetCurrentImageIndex()`).
+    /// Bound by the RP.6b outline pass as a `usampler2D`. Returns VK_NULL_HANDLE
+    /// only if the index is out of range.
+    [[nodiscard]] VkImageView GetStencilImageView(uint32_t imageIndex) const;
     /// Full-mip-chain sampled view of the depth pyramid for the given swap
     /// image index (R32_SFLOAT, mips 0..DEPTH_PYRAMID_MIPS-1 of view-space
     /// linear depth). Bind with a mipmap-aware sampler and select mips via
@@ -205,6 +216,16 @@ private:
     VkImage m_normalMsaaImage = VK_NULL_HANDLE;
     VkImageView m_normalMsaaImageView = VK_NULL_HANDLE;
     VmaAllocation m_normalMsaaAllocation = VK_NULL_HANDLE;
+    // Per-swapchain-image outline-stencil G-buffer target (R8_UINT).
+    // Written by `basic.frag` at layout(location=2) and sampled by the RP.6b
+    // outline pass. Same shape as the normal G-buffer: single-sample target,
+    // transient MSAA sibling when m_samples > 1x.
+    std::vector<VkImage> m_stencilImages;
+    std::vector<VkImageView> m_stencilImageViews;
+    std::vector<VmaAllocation> m_stencilAllocations;
+    VkImage m_stencilMsaaImage = VK_NULL_HANDLE;
+    VkImageView m_stencilMsaaImageView = VK_NULL_HANDLE;
+    VmaAllocation m_stencilMsaaAllocation = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkFramebuffer> m_framebuffers;
     std::vector<VkFramebuffer> m_presentFramebuffers;

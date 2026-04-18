@@ -94,11 +94,13 @@ bool RenderLoop::BeginFrame() {
 
     // Clear values indexed to match CreateRenderPass:
     //   [0] scene colour, [1] normal ((0,0) → +Z after oct-decode),
-    //   [2] depth, [3..4] resolve targets (DONT_CARE → filler).
-    std::array<VkClearValue, 5> clearValues{};
+    //   [2] outline stencil id (0 = background), [3] depth,
+    //   [4..6] resolve targets (DONT_CARE → filler).
+    std::array<VkClearValue, 7> clearValues{};
     clearValues[0].color = m_clearColor;
     clearValues[1].color = VkClearColorValue{{0.0F, 0.0F, 0.0F, 0.0F}};
-    clearValues[2].depthStencil = {1.0F, 0};
+    clearValues[2].color.uint32[0] = 0u;  // R8_UINT — integer clear path
+    clearValues[3].depthStencil = {1.0F, 0};
 
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -251,6 +253,13 @@ VkRenderPass RenderLoop::GetPresentRenderPass() const {
     return m_presentRenderPass;
 }
 
+VkImageView RenderLoop::GetStencilImageView(uint32_t imageIndex) const {
+    if (imageIndex >= m_stencilImageViews.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return m_stencilImageViews[imageIndex];
+}
+
 VkImageView RenderLoop::GetNormalImageView(uint32_t imageIndex) const {
     if (imageIndex >= m_normalImageViews.size()) {
         return VK_NULL_HANDLE;
@@ -380,13 +389,14 @@ void RenderLoop::CreateRenderPass() {
     m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
     const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
-    // Attachment layout (MRT for RP.3c — scene colour + oct-packed normal G-buffer):
-    //   Non-MSAA: [0] HDR colour, [1] normal, [2] depth.
-    //   MSAA:     [0] HDR colour MSAA, [1] normal MSAA, [2] depth,
-    //             [3] HDR resolve, [4] normal resolve.
-    // Final layouts on the sampled targets (HDR + normal resolve) are
-    // SHADER_READ_ONLY_OPTIMAL so the tonemap pass (and future SSAO/SSIL)
-    // can bind them straight as samplers.
+    // Attachment layout (MRT — scene colour + oct-packed normal G-buffer +
+    // outline stencil id):
+    //   Non-MSAA: [0] HDR colour, [1] normal, [2] stencil id, [3] depth.
+    //   MSAA:     [0] HDR MSAA, [1] normal MSAA, [2] stencil MSAA, [3] depth,
+    //             [4] HDR resolve, [5] normal resolve, [6] stencil resolve.
+    // Final layouts on the sampled single-sample targets (HDR + normal +
+    // stencil resolve) are SHADER_READ_ONLY_OPTIMAL so tonemap / SSAO / SSIL /
+    // outline can bind them straight as samplers.
 
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = HDR_FORMAT;
@@ -411,6 +421,18 @@ void RenderLoop::CreateRenderPass() {
     normalAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     normalAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription stencilAttachment{};
+    stencilAttachment.format = STENCIL_FORMAT;
+    stencilAttachment.samples = m_samples;
+    stencilAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    stencilAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                             : VK_ATTACHMENT_STORE_OP_STORE;
+    stencilAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    stencilAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    stencilAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    stencilAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = m_depthFormat;
@@ -448,17 +470,29 @@ void RenderLoop::CreateRenderPass() {
     normalResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     normalResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    std::array<VkAttachmentReference, 2> colorRefs{};
+    VkAttachmentDescription stencilResolveAttachment{};
+    stencilResolveAttachment.format = STENCIL_FORMAT;
+    stencilResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    stencilResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    stencilResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    stencilResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    stencilResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    stencilResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    stencilResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    std::array<VkAttachmentReference, 3> colorRefs{};
     colorRefs[0] = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     colorRefs[1] = {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    colorRefs[2] = {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 2;
+    depthRef.attachment = 3;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    std::array<VkAttachmentReference, 2> resolveRefs{};
-    resolveRefs[0] = {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    resolveRefs[1] = {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    std::array<VkAttachmentReference, 3> resolveRefs{};
+    resolveRefs[0] = {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    resolveRefs[1] = {5, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    resolveRefs[2] = {6, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -492,13 +526,13 @@ void RenderLoop::CreateRenderPass() {
     dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    std::array<VkAttachmentDescription, 5> attachments = {
-        colorAttachment, normalAttachment, depthAttachment,
-        hdrResolveAttachment, normalResolveAttachment};
+    std::array<VkAttachmentDescription, 7> attachments = {
+        colorAttachment, normalAttachment, stencilAttachment, depthAttachment,
+        hdrResolveAttachment, normalResolveAttachment, stencilResolveAttachment};
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = multisampled ? 5U : 3U;
+    rpInfo.attachmentCount = multisampled ? 7U : 4U;
     rpInfo.pAttachments = attachments.data();
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
@@ -567,6 +601,9 @@ void RenderLoop::CreateHdrResources() {
     m_normalImages.assign(imageCount, VK_NULL_HANDLE);
     m_normalImageViews.assign(imageCount, VK_NULL_HANDLE);
     m_normalAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_stencilImages.assign(imageCount, VK_NULL_HANDLE);
+    m_stencilImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_stencilAllocations.assign(imageCount, VK_NULL_HANDLE);
 
     for (uint32_t i = 0; i < imageCount; ++i) {
         VkImageCreateInfo imageInfo{};
@@ -621,6 +658,23 @@ void RenderLoop::CreateHdrResources() {
         if (vkCreateImageView(m_device.GetDevice(), &normalView, nullptr,
                               &m_normalImageViews[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create normal G-buffer image view");
+        }
+
+        // Outline stencil G-buffer — same shape as the normal target.
+        // SAMPLED so the RP.6b outline pass can read via `usampler2D`.
+        VkImageCreateInfo stencilInfo = imageInfo;
+        stencilInfo.format = STENCIL_FORMAT;
+        if (vmaCreateImage(m_device.GetAllocator(), &stencilInfo, &allocInfo,
+                           &m_stencilImages[i], &m_stencilAllocations[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create stencil G-buffer image");
+        }
+
+        VkImageViewCreateInfo stencilView = viewInfo;
+        stencilView.image = m_stencilImages[i];
+        stencilView.format = STENCIL_FORMAT;
+        if (vkCreateImageView(m_device.GetDevice(), &stencilView, nullptr,
+                              &m_stencilImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create stencil G-buffer image view");
         }
     }
 }
@@ -720,6 +774,24 @@ void RenderLoop::CreateDepthResources() {
                               &m_normalMsaaImageView) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create MSAA normal image view");
         }
+
+        // Multisampled outline-stencil G-buffer (transient, resolved into the
+        // per-swap-image stencil target each frame).
+        VkImageCreateInfo stencilMsaaInfo = colorInfo;
+        stencilMsaaInfo.format = STENCIL_FORMAT;
+        if (vmaCreateImage(m_device.GetAllocator(), &stencilMsaaInfo, &allocInfo,
+                           &m_stencilMsaaImage, &m_stencilMsaaAllocation,
+                           nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create MSAA stencil image");
+        }
+
+        VkImageViewCreateInfo stencilMsaaView = colorView;
+        stencilMsaaView.image = m_stencilMsaaImage;
+        stencilMsaaView.format = STENCIL_FORMAT;
+        if (vkCreateImageView(m_device.GetDevice(), &stencilMsaaView, nullptr,
+                              &m_stencilMsaaImageView) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create MSAA stencil image view");
+        }
     }
 }
 
@@ -733,22 +805,26 @@ void RenderLoop::CreateFramebuffers() {
 
     for (size_t i = 0; i < swapImageViews.size(); ++i) {
         // Main (HDR) framebuffer — attachment order must match CreateRenderPass:
-        //   non-MSAA: [hdr, normal, depth]
-        //   MSAA:     [hdr MSAA, normal MSAA, depth, hdr resolve, normal resolve]
-        std::array<VkImageView, 5> attachments{};
+        //   non-MSAA: [hdr, normal, stencil, depth]
+        //   MSAA:     [hdr MSAA, normal MSAA, stencil MSAA, depth,
+        //              hdr resolve, normal resolve, stencil resolve]
+        std::array<VkImageView, 7> attachments{};
         uint32_t count = 0;
         if (multisampled) {
             attachments[0] = m_colorImageView;
             attachments[1] = m_normalMsaaImageView;
-            attachments[2] = m_depthImageView;
-            attachments[3] = m_hdrImageViews[i];
-            attachments[4] = m_normalImageViews[i];
-            count = 5;
+            attachments[2] = m_stencilMsaaImageView;
+            attachments[3] = m_depthImageView;
+            attachments[4] = m_hdrImageViews[i];
+            attachments[5] = m_normalImageViews[i];
+            attachments[6] = m_stencilImageViews[i];
+            count = 7;
         } else {
             attachments[0] = m_hdrImageViews[i];
             attachments[1] = m_normalImageViews[i];
-            attachments[2] = m_depthImageView;
-            count = 3;
+            attachments[2] = m_stencilImageViews[i];
+            attachments[3] = m_depthImageView;
+            count = 4;
         }
 
         VkFramebufferCreateInfo fbInfo{};
@@ -952,6 +1028,17 @@ void RenderLoop::CleanupFrameResources() {
         m_normalMsaaAllocation = VK_NULL_HANDLE;
     }
 
+    if (m_stencilMsaaImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_stencilMsaaImageView, nullptr);
+        m_stencilMsaaImageView = VK_NULL_HANDLE;
+    }
+
+    if (m_stencilMsaaImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_stencilMsaaImage, m_stencilMsaaAllocation);
+        m_stencilMsaaImage = VK_NULL_HANDLE;
+        m_stencilMsaaAllocation = VK_NULL_HANDLE;
+    }
+
     for (size_t i = 0; i < m_hdrImages.size(); ++i) {
         if (m_hdrImageViews[i] != VK_NULL_HANDLE) {
             vkDestroyImageView(device, m_hdrImageViews[i], nullptr);
@@ -975,6 +1062,19 @@ void RenderLoop::CleanupFrameResources() {
     m_normalImages.clear();
     m_normalImageViews.clear();
     m_normalAllocations.clear();
+
+    for (size_t i = 0; i < m_stencilImages.size(); ++i) {
+        if (m_stencilImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_stencilImageViews[i], nullptr);
+        }
+        if (m_stencilImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_stencilImages[i],
+                            m_stencilAllocations[i]);
+        }
+    }
+    m_stencilImages.clear();
+    m_stencilImageViews.clear();
+    m_stencilAllocations.clear();
 }
 
 void RenderLoop::CleanupTonemapDescriptors() {

@@ -178,6 +178,37 @@ TEST_F(RenderLoopTest, NormalGBufferSurvivesSampleCountChange) {
     m_renderLoop->WaitIdle();
 }
 
+// RP.6c — MRT outline stencil G-buffer: the main render pass has a third
+// R8_UINT colour attachment per swap image (0 = background, 1 = selected,
+// 2 = hovered). Sampled by the RP.6b outline fragment shader. Layout mirrors
+// the normal G-buffer — per-swap-image single-sample target + a transient
+// MSAA attachment when m_samples > 1x.
+TEST_F(RenderLoopTest, StencilFormatIsR8Uint) {
+    EXPECT_EQ(RenderLoop::STENCIL_FORMAT, VK_FORMAT_R8_UINT);
+}
+
+TEST_F(RenderLoopTest, StencilGBufferImageViewsProvidedPerSwapImage) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    ASSERT_GT(imageCount, 0u);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE)
+            << "stencil G-buffer view missing for swap image " << i;
+    }
+}
+
+TEST_F(RenderLoopTest, StencilGBufferSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE);
+    }
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
 // RP.4d — Linear depth + depth pyramid: a 4-mip R32_SFLOAT pyramid per swap
 // image, built by a compute pass between the main HDR pass and the tonemap
 // pass. MSAA path gates off for now (shader needs sampler2DMS; can be added
