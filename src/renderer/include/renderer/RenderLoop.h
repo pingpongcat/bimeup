@@ -1,5 +1,7 @@
 #pragma once
 
+#include <renderer/OutlinePipeline.h>
+
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -126,6 +128,18 @@ public:
     /// `renderer::LinearizeDepth`. Call each frame after the camera has
     /// been updated. Defaults are (identity, 0.1, 10000).
     void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
+
+    /// RP.6d — selection/hover outline pass parameters. The outline draw is
+    /// recorded inside the present pass between the tonemap fullscreen tri
+    /// and the in-present-pass callback (where ImGui lands), so the outline
+    /// composes over the tonemapped image but underneath UI overlays. When
+    /// `enabled` is false (or when MSAA is on — the depth-pyramid input is
+    /// gated off in that mode) the draw is skipped and the swapchain image
+    /// is unaffected. Push constants drive the panel-tweakable knobs
+    /// (selected/hover colours, tap thickness in pixels, depth-edge cutoff);
+    /// the texelSize field should be (1/width, 1/height) in pixels — caller
+    /// updates per-frame so resize lands cleanly.
+    void SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled);
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -170,6 +184,10 @@ private:
     void RunSsao(VkCommandBuffer cmd);
     void CleanupSsaoResources();
     void CleanupSsaoDescriptors();
+    void CreateOutlineDescriptors();
+    void CreateOutlinePipeline();
+    void UpdateOutlineDescriptors();
+    void CleanupOutlineDescriptors();
     void CleanupFrameResources();
     void CleanupTonemapDescriptors();
     void Cleanup();
@@ -296,6 +314,26 @@ private:
     std::unique_ptr<Shader> m_ssaoBlurShader;
     std::unique_ptr<SsaoPipeline> m_ssaoPipeline;
     std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
+
+    // Outline pass (RP.6d). Per swap image: one combined descriptor set
+    // sampling (binding 0 = stencil id R8_UINT usampler2D, binding 1 =
+    // depth pyramid mip 0 sampler2D). One sampler shared across both
+    // bindings (linear, CLAMP_TO_EDGE, maxLod = 0.25 — clamped to mip 0
+    // for the depth tap). Pipeline targets the present pass; rebuilt on
+    // sample-count change alongside the tonemap pipeline. Push-constant
+    // values + the enable toggle come from the panel via SetOutlineParams.
+    // The pass is skipped under MSAA — the depth pyramid is gated off in
+    // that mode and the outline shader's depth-discontinuity fallback
+    // would otherwise sample an undefined image.
+    std::unique_ptr<Shader> m_outlineVertShader;
+    std::unique_ptr<Shader> m_outlineFragShader;
+    std::unique_ptr<OutlinePipeline> m_outlinePipeline;
+    VkSampler m_outlineSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_outlineSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_outlineDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_outlineDescriptorSets;
+    OutlinePipeline::PushConstants m_outlinePush{};
+    bool m_outlineEnabled = false;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;

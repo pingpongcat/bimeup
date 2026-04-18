@@ -81,6 +81,27 @@ void RenderQualityPanel::OnDraw() {
         ImGui::NewLine();
     }
 
+    if (ImGui::CollapsingHeader("Selection outline")) {
+        auto& outline = m_settings.outline;
+        ImGui::Checkbox("Enabled", &outline.enabled);
+
+        ImGui::BeginDisabled(!outline.enabled);
+        std::array<float, 4> sel{outline.selectedColor.r, outline.selectedColor.g,
+                                 outline.selectedColor.b, outline.selectedColor.a};
+        if (ImGui::ColorEdit4("Selected", sel.data())) {
+            outline.selectedColor = glm::vec4(sel[0], sel[1], sel[2], sel[3]);
+        }
+        std::array<float, 4> hov{outline.hoverColor.r, outline.hoverColor.g,
+                                 outline.hoverColor.b, outline.hoverColor.a};
+        if (ImGui::ColorEdit4("Hover", hov.data())) {
+            outline.hoverColor = glm::vec4(hov[0], hov[1], hov[2], hov[3]);
+        }
+        ImGui::SliderFloat("Thickness (px)", &outline.thickness, 1.0F, 6.0F, "%.1f");
+        ImGui::SliderFloat("Depth edge (m)", &outline.depthEdgeThreshold, 0.001F, 1.0F,
+                           "%.3f");
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Shadows")) {
         auto& shadow = m_settings.lighting.shadow;
         ImGui::Checkbox("Enabled", &shadow.enabled);

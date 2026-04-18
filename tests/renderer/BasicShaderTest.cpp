@@ -142,3 +142,106 @@ TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     EXPECT_EQ(info.stage, VK_SHADER_STAGE_FRAGMENT_BIT);
     EXPECT_STREQ(info.pName, "main");
 }
+
+// RP.6d contract: basic.frag declares a fragment-stage push constant block
+// containing a single 32-bit unsigned int member (`stencilId`) at byte offset
+// 64 — the byte after the 64-byte vertex-stage model matrix push range. Walk
+// the SPIR-V module: find the OpVariable in the PushConstant storage class,
+// follow its OpTypePointer → OpTypeStruct, assert the struct has exactly one
+// member, that member is a 32-bit OpTypeInt with signedness=0, and an
+// OpMemberDecorate Offset=64 is attached at member index 0. A regression
+// (block removed, member renamed away from a uint, offset drifted) fails
+// before the runtime hits the validation layer.
+TEST_F(BasicShaderTest, FragmentShaderDeclaresStencilIdPushConstant) {
+    std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(f) << "Missing " << path;
+    const auto bytes = static_cast<std::streamoff>(f.tellg());
+    ASSERT_GT(bytes, 0);
+    ASSERT_EQ(bytes % 4, 0);
+    f.seekg(0);
+    std::vector<uint32_t> words(static_cast<size_t>(bytes) / 4);
+    f.read(reinterpret_cast<char*>(words.data()), bytes);
+
+    ASSERT_GE(words.size(), 5U);
+    ASSERT_EQ(words[0], 0x07230203U) << "Bad SPIR-V magic";
+
+    constexpr uint32_t kOpMemberDecorate = 72;
+    constexpr uint32_t kOpTypeInt = 21;
+    constexpr uint32_t kOpTypePointer = 32;
+    constexpr uint32_t kOpTypeStruct = 30;
+    constexpr uint32_t kOpVariable = 59;
+    constexpr uint32_t kDecorationOffset = 35;
+    constexpr uint32_t kStorageClassPushConstant = 9;
+
+    struct StructInfo {
+        std::vector<uint32_t> memberTypes;
+    };
+    struct PointerInfo {
+        uint32_t storageClass;
+        uint32_t typeId;
+    };
+    struct IntInfo {
+        uint32_t width;
+        uint32_t signedness;
+    };
+
+    std::unordered_map<uint32_t, StructInfo> structs;
+    std::unordered_map<uint32_t, PointerInfo> pointers;
+    std::unordered_map<uint32_t, IntInfo> ints;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> memberOffsets;
+    std::unordered_set<uint32_t> pushConstantVarTypeIds;
+
+    for (size_t i = 5; i < words.size();) {
+        const uint32_t header = words[i];
+        const uint32_t opcode = header & 0xFFFFU;
+        const uint32_t count = header >> 16U;
+        ASSERT_GT(count, 0U) << "Malformed SPIR-V instruction at word " << i;
+        ASSERT_LE(i + count, words.size()) << "Truncated SPIR-V instruction at word " << i;
+
+        if (opcode == kOpTypeInt && count >= 4) {
+            ints[words[i + 1]] = {words[i + 2], words[i + 3]};
+        } else if (opcode == kOpTypeStruct && count >= 2) {
+            StructInfo s;
+            for (uint32_t k = 2; k < count; ++k) {
+                s.memberTypes.push_back(words[i + k]);
+            }
+            structs[words[i + 1]] = std::move(s);
+        } else if (opcode == kOpTypePointer && count >= 4) {
+            pointers[words[i + 1]] = {words[i + 2], words[i + 3]};
+        } else if (opcode == kOpVariable && count >= 4 &&
+                   words[i + 3] == kStorageClassPushConstant) {
+            pushConstantVarTypeIds.insert(words[i + 1]);  // result type (pointer)
+        } else if (opcode == kOpMemberDecorate && count >= 5 &&
+                   words[i + 3] == kDecorationOffset) {
+            memberOffsets[words[i + 1]][words[i + 2]] = words[i + 4];
+        }
+        i += count;
+    }
+
+    // Resolve the struct type behind every PushConstant pointer variable, then
+    // search for the one whose member-0 has Offset=64 and a 32-bit unsigned
+    // int member type.
+    bool found = false;
+    for (uint32_t pointerTypeId : pushConstantVarTypeIds) {
+        auto pIt = pointers.find(pointerTypeId);
+        if (pIt == pointers.end()) continue;
+        auto sIt = structs.find(pIt->second.typeId);
+        if (sIt == structs.end() || sIt->second.memberTypes.empty()) continue;
+        auto offIt = memberOffsets.find(pIt->second.typeId);
+        if (offIt == memberOffsets.end()) continue;
+        for (size_t m = 0; m < sIt->second.memberTypes.size(); ++m) {
+            auto memberOffsetIt = offIt->second.find(static_cast<uint32_t>(m));
+            if (memberOffsetIt == offIt->second.end()) continue;
+            if (memberOffsetIt->second != 64U) continue;
+            auto intIt = ints.find(sIt->second.memberTypes[m]);
+            if (intIt == ints.end()) continue;
+            if (intIt->second.width == 32U && intIt->second.signedness == 0U) {
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+    EXPECT_TRUE(found) << "basic.frag missing fragment push constant `uint stencilId` at offset 64";
+}

@@ -189,12 +189,22 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
+    // RP.6d — basic.frag declares a fragment-stage push constant block
+    // (`uint stencilId`) at offset 64. Pipelines binding basic.frag must
+    // declare the matching range or validation flags the shader/layout
+    // mismatch. The cube test stands in as the renderer-side regression
+    // guard for the layout shape main.cpp uses.
+    VkPushConstantRange fragPushRange{};
+    fragPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragPushRange.offset = 64;
+    fragPushRange.size = sizeof(uint32_t);
+
     PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderPass;
     pipelineConfig.vertexBindings = {binding};
     pipelineConfig.vertexAttributes = {attrs.begin(), attrs.end()};
     pipelineConfig.descriptorSetLayouts = {dsLayout.GetLayout()};
-    pipelineConfig.pushConstantRanges = {pushRange};
+    pipelineConfig.pushConstantRanges = {pushRange, fragPushRange};
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
     // RenderLoop's main pass is MRT (HDR + normal G-buffer + stencil id).
@@ -231,6 +241,12 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     glm::mat4 model(1.0F);
     vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(glm::mat4), &model);
+    // Push the RP.6d fragment-stage stencil id. Value 1 maps to "selected"
+    // in the outline pass — exercising the non-zero path catches a missing
+    // fragment range in the pipeline layout under validation.
+    uint32_t stencilId = 1U;
+    vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+                       64, sizeof(stencilId), &stencilId);
 
     VkBuffer vb = vertexBuffer.GetBuffer();
     VkDeviceSize offset = 0;

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <renderer/OutlinePipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/Swapchain.h>
 #include <renderer/Device.h>
@@ -294,6 +295,55 @@ TEST_F(RenderLoopTest, SsaoSurvivesSampleCountChange) {
     }
     // SSAO is gated off under MSAA (mirrors the depth pyramid gate). Frame
     // cycle must still succeed — tonemap samples the pre-cleared AO image.
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+namespace {
+
+bimeup::renderer::OutlinePipeline::PushConstants MakeDefaultOutlinePush() {
+    bimeup::renderer::OutlinePipeline::PushConstants pc{};
+    pc.selectedColor = glm::vec4(1.0F, 0.6F, 0.1F, 1.0F);
+    pc.hoverColor = glm::vec4(0.2F, 0.7F, 1.0F, 0.8F);
+    pc.texelSize = glm::vec2(1.0F / 800.0F, 1.0F / 600.0F);
+    pc.thickness = 2.0F;
+    pc.depthEdgeThreshold = 0.05F;
+    return pc;
+}
+
+}  // namespace
+
+// RP.6d — OutlinePipeline + descriptor sets are owned by RenderLoop and
+// recorded into the present pass after the tonemap fullscreen draw. Push
+// constants and the enable toggle come from the panel via SetOutlineParams.
+// The outline pass samples the stencil G-buffer (RP.6c) and the depth
+// pyramid mip 0 (RP.4d), so it inherits the depth-pyramid MSAA gate — under
+// MSAA the dispatch is skipped and the frame cycles without the outline.
+TEST_F(RenderLoopTest, OutlineDrawnDuringFrame) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/true);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, OutlineDisabledStillCyclesFrame) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/false);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, OutlineSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/true);
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

@@ -3,6 +3,7 @@
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
+#include <renderer/OutlinePipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/SsaoBlurPipeline.h>
 #include <renderer/SsaoKernel.h>
@@ -49,6 +50,9 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     UpdateSsaoDescriptors();
     ClearAoImagesToWhite();
     UpdateTonemapDescriptors();  // re-run so the AO binding points at the freshly created images
+    CreateOutlineDescriptors();
+    CreateOutlinePipeline();
+    UpdateOutlineDescriptors();
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
@@ -162,6 +166,23 @@ bool RenderLoop::EndFrame() {
                             m_tonemapPipeline->GetLayout(), 0, 1,
                             &m_tonemapDescriptorSets[m_currentImageIndex], 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    // RP.6d outline pass — composes the selection/hover outline over the
+    // tonemapped image. Gated off under MSAA (the depth pyramid the shader
+    // samples is gated off in that mode) and when the panel disables it.
+    if (m_outlineEnabled && m_samples == VK_SAMPLE_COUNT_1_BIT) {
+        OutlinePipeline::PushConstants framePush = m_outlinePush;
+        framePush.texelSize = glm::vec2(1.0F / static_cast<float>(extent.width),
+                                        1.0F / static_cast<float>(extent.height));
+        m_outlinePipeline->Bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_outlinePipeline->GetLayout(), 0, 1,
+                                &m_outlineDescriptorSets[m_currentImageIndex], 0, nullptr);
+        vkCmdPushConstants(cmd, m_outlinePipeline->GetLayout(),
+                           VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(OutlinePipeline::PushConstants), &framePush);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
 
     if (m_inPresentPass) {
         m_inPresentPass(cmd);
@@ -287,6 +308,11 @@ void RenderLoop::SetProjection(const glm::mat4& proj, float nearZ, float farZ) {
     m_farZ = farZ;
 }
 
+void RenderLoop::SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled) {
+    m_outlinePush = push;
+    m_outlineEnabled = enabled;
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -314,6 +340,7 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     UpdateSsaoDescriptors();
     ClearAoImagesToWhite();
     UpdateTonemapDescriptors();
+    UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
     }
@@ -331,6 +358,7 @@ void RenderLoop::RecreateForSwapchain() {
     UpdateSsaoDescriptors();
     ClearAoImagesToWhite();
     UpdateTonemapDescriptors();
+    UpdateOutlineDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -1094,6 +1122,141 @@ void RenderLoop::CleanupTonemapDescriptors() {
     }
 }
 
+void RenderLoop::CreateOutlineDescriptors() {
+    // Linear sampler shared by both bindings. CLAMP_TO_EDGE keeps off-screen
+    // taps from sampling sentinel data, and `maxLod = 0.25` clamps the
+    // depth-pyramid binding to mip 0 (the linearised view-space depth the
+    // outline shader actually wants — higher mips are the SSAO downsamples).
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = 0.25F;
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_outlineSampler) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create outline sampler");
+    }
+
+    // Two combined-image-sampler bindings: 0 = stencil id (R8_UINT, sampled
+    // in outline.frag as `usampler2D`), 1 = depth pyramid (R32_SFLOAT mip 0).
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
+                                    &m_outlineSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create outline descriptor set layout");
+    }
+
+    uint32_t imageCount = m_swapchain.GetImageCount();
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = imageCount * 2;  // stencil + depth per set
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = imageCount;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_outlineDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create outline descriptor pool");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_outlineSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_outlineDescriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+    m_outlineDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo,
+                                 m_outlineDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate outline descriptor sets");
+    }
+}
+
+void RenderLoop::CreateOutlinePipeline() {
+    m_outlineVertShader = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
+                                                   m_shaderDir + "/outline.vert.spv");
+    m_outlineFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
+                                                   m_shaderDir + "/outline.frag.spv");
+    m_outlinePipeline = std::make_unique<OutlinePipeline>(
+        m_device, *m_outlineVertShader, *m_outlineFragShader, m_presentRenderPass,
+        m_outlineSetLayout, VK_SAMPLE_COUNT_1_BIT);
+}
+
+void RenderLoop::UpdateOutlineDescriptors() {
+    for (uint32_t i = 0; i < m_outlineDescriptorSets.size(); ++i) {
+        VkDescriptorImageInfo stencilInfo{};
+        stencilInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        stencilInfo.imageView = i < m_stencilImageViews.size()
+                                    ? m_stencilImageViews[i]
+                                    : VK_NULL_HANDLE;
+        stencilInfo.sampler = m_outlineSampler;
+
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = i < m_depthPyramidSampledViews.size()
+                                  ? m_depthPyramidSampledViews[i]
+                                  : VK_NULL_HANDLE;
+        depthInfo.sampler = m_outlineSampler;
+
+        if (stencilInfo.imageView == VK_NULL_HANDLE ||
+            depthInfo.imageView == VK_NULL_HANDLE) {
+            continue;
+        }
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_outlineDescriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &stencilInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_outlineDescriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &depthInfo;
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+}
+
+void RenderLoop::CleanupOutlineDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_outlineDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_outlineDescriptorPool, nullptr);
+        m_outlineDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_outlineDescriptorSets.clear();
+    if (m_outlineSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_outlineSetLayout, nullptr);
+        m_outlineSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_outlineSampler, nullptr);
+        m_outlineSampler = VK_NULL_HANDLE;
+    }
+}
+
 void RenderLoop::Cleanup() {
     VkDevice device = m_device.GetDevice();
 
@@ -1108,11 +1271,15 @@ void RenderLoop::Cleanup() {
     m_ssaoBlurPipeline.reset();
     m_ssaoMainShader.reset();
     m_ssaoBlurShader.reset();
+    m_outlinePipeline.reset();
+    m_outlineVertShader.reset();
+    m_outlineFragShader.reset();
 
     CleanupFrameResources();
     CleanupTonemapDescriptors();
     CleanupDepthPyramidDescriptors();
     CleanupSsaoDescriptors();
+    CleanupOutlineDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
