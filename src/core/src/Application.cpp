@@ -37,7 +37,8 @@ Application::Application(const AppConfig& config) {
         *m_device, m_surface,
         VkExtent2D{static_cast<uint32_t>(fbSize.x), static_cast<uint32_t>(fbSize.y)});
 
-    m_renderLoop = std::make_unique<renderer::RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<renderer::RenderLoop>(*m_device, *m_swapchain,
+                                                           BIMEUP_SHADER_DIR);
 }
 
 Application::~Application() {

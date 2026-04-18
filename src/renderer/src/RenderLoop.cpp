@@ -1,6 +1,8 @@
 #include <renderer/RenderLoop.h>
 #include <renderer/Device.h>
+#include <renderer/Shader.h>
 #include <renderer/Swapchain.h>
+#include <renderer/TonemapPipeline.h>
 #include <tools/Log.h>
 
 #include <array>
@@ -9,17 +11,26 @@
 namespace bimeup::renderer {
 
 RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
+                       const std::string& shaderDir,
                        VkSampleCountFlagBits samples)
-    : m_device(device), m_swapchain(swapchain), m_samples(samples) {
+    : m_device(device),
+      m_swapchain(swapchain),
+      m_shaderDir(shaderDir),
+      m_samples(samples) {
     CreateCommandPool();
     CreateCommandBuffers();
     CreateSyncObjects();
     CreateRenderPass();
+    CreatePresentRenderPass();
+    CreateHdrResources();
     CreateDepthResources();
     CreateFramebuffers();
+    CreateTonemapDescriptors();
+    CreateTonemapPipeline();
+    UpdateTonemapDescriptors();
 
     if (bimeup::tools::Log::GetLogger()) {
-        LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x)",
+        LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
                  MAX_FRAMES_IN_FLIGHT, static_cast<int>(m_samples));
     }
 }
@@ -81,6 +92,44 @@ bool RenderLoop::BeginFrame() {
 
 bool RenderLoop::EndFrame() {
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+    VkExtent2D extent = m_swapchain.GetExtent();
+
+    // End the main (HDR) render pass. finalLayout on the HDR attachment
+    // transitions it to SHADER_READ_ONLY_OPTIMAL for the tonemap sampler.
+    vkCmdEndRenderPass(cmd);
+
+    // Begin the tonemap/present pass targeting the swapchain image.
+    VkRenderPassBeginInfo presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    presentInfo.renderPass = m_presentRenderPass;
+    presentInfo.framebuffer = m_presentFramebuffers[m_currentImageIndex];
+    presentInfo.renderArea.offset = {0, 0};
+    presentInfo.renderArea.extent = extent;
+    presentInfo.clearValueCount = 0;  // tonemap fullscreen-tri covers every pixel
+
+    vkCmdBeginRenderPass(cmd, &presentInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    m_tonemapPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_tonemapPipeline->GetLayout(), 0, 1,
+                            &m_tonemapDescriptorSets[m_currentImageIndex], 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    if (m_inPresentPass) {
+        m_inPresentPass(cmd);
+    }
 
     vkCmdEndRenderPass(cmd);
 
@@ -109,15 +158,15 @@ bool RenderLoop::EndFrame() {
 
     VkSwapchainKHR swapchains[] = {m_swapchain.GetSwapchain()};
 
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
-    presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapchains;
-    presentInfo.pImageIndices = &m_currentImageIndex;
+    VkPresentInfoKHR presentSubmit{};
+    presentSubmit.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentSubmit.waitSemaphoreCount = 1;
+    presentSubmit.pWaitSemaphores = signalSemaphores;
+    presentSubmit.swapchainCount = 1;
+    presentSubmit.pSwapchains = swapchains;
+    presentSubmit.pImageIndices = &m_currentImageIndex;
 
-    VkResult result = vkQueuePresentKHR(m_device.GetPresentQueue(), &presentInfo);
+    VkResult result = vkQueuePresentKHR(m_device.GetPresentQueue(), &presentSubmit);
 
     m_frameStarted = false;
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -144,6 +193,10 @@ void RenderLoop::SetPreMainPassCallback(PreMainPassCallback callback) {
     m_preMainPass = std::move(callback);
 }
 
+void RenderLoop::SetInPresentPassCallback(InPresentPassCallback callback) {
+    m_inPresentPass = std::move(callback);
+}
+
 VkCommandBuffer RenderLoop::GetCurrentCommandBuffer() const {
     return m_commandBuffers[m_currentFrame];
 }
@@ -160,6 +213,10 @@ VkRenderPass RenderLoop::GetRenderPass() const {
     return m_renderPass;
 }
 
+VkRenderPass RenderLoop::GetPresentRenderPass() const {
+    return m_presentRenderPass;
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -169,6 +226,7 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
         return;
     }
     WaitIdle();
+    m_tonemapPipeline.reset();  // depends on the main pass sample count? only for parity — rebuild anyway
     CleanupFrameResources();
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(m_device.GetDevice(), m_renderPass, nullptr);
@@ -176,16 +234,21 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     }
     m_samples = samples;
     CreateRenderPass();
+    CreateHdrResources();
     CreateDepthResources();
     CreateFramebuffers();
+    CreateTonemapPipeline();
+    UpdateTonemapDescriptors();
     LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
 }
 
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
+    CreateHdrResources();
     CreateDepthResources();
     CreateFramebuffers();
+    UpdateTonemapDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -244,10 +307,11 @@ void RenderLoop::CreateRenderPass() {
     m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
     const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
-    // Attachment 0: color. When multisampled, this is a transient MSAA image that
-    // gets resolved into the swapchain image; when 1x, it IS the swapchain image.
+    // Attachment 0: scene colour. HDR_FORMAT (R16G16B16A16_SFLOAT). When
+    // multisampled this is a transient MSAA image that resolves into the
+    // single-sample HDR image at attachment 2; when 1×, this IS the HDR image.
     VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = m_swapchain.GetFormat();
+    colorAttachment.format = HDR_FORMAT;
     colorAttachment.samples = m_samples;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
@@ -256,7 +320,7 @@ void RenderLoop::CreateRenderPass() {
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     colorAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                               : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = m_depthFormat;
@@ -268,16 +332,17 @@ void RenderLoop::CreateRenderPass() {
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    // Attachment 2 (only if multisampled): single-sample swapchain resolve target.
+    // Attachment 2 (only if multisampled): single-sample HDR resolve target. The
+    // tonemap pass reads it via sampler, so it transitions to SHADER_READ here.
     VkAttachmentDescription resolveAttachment{};
-    resolveAttachment.format = m_swapchain.GetFormat();
+    resolveAttachment.format = HDR_FORMAT;
     resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
@@ -328,6 +393,100 @@ void RenderLoop::CreateRenderPass() {
     }
 }
 
+void RenderLoop::CreatePresentRenderPass() {
+    // Tonemap + UI pass targeting the swapchain (always 1× / no depth).
+    VkAttachmentDescription color{};
+    color.format = m_swapchain.GetFormat();
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // tonemap covers every pixel
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    // Two external deps folded into one: the swapchain image must transition
+    // UNDEFINED → COLOR_ATTACHMENT_OPTIMAL before we write, and the HDR target
+    // written by the main pass must be visible to the tonemap fragment read.
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &color;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_presentRenderPass) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create present render pass");
+    }
+}
+
+void RenderLoop::CreateHdrResources() {
+    VkExtent2D extent = m_swapchain.GetExtent();
+    uint32_t imageCount = m_swapchain.GetImageCount();
+
+    m_hdrImages.assign(imageCount, VK_NULL_HANDLE);
+    m_hdrImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_hdrAllocations.assign(imageCount, VK_NULL_HANDLE);
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = HDR_FORMAT;
+        imageInfo.extent = {extent.width, extent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;  // single-sample resolve target
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_hdrImages[i], &m_hdrAllocations[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create HDR image");
+        }
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_hdrImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = HDR_FORMAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
+                              &m_hdrImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create HDR image view");
+        }
+    }
+}
+
 void RenderLoop::CreateDepthResources() {
     VkExtent2D extent = m_swapchain.GetExtent();
 
@@ -367,12 +526,13 @@ void RenderLoop::CreateDepthResources() {
         throw std::runtime_error("Failed to create depth image view");
     }
 
-    // Multisampled color target (transient — resolved into swapchain each frame).
+    // Multisampled HDR colour target (transient — resolved into the 1× HDR
+    // image each frame). Same format as m_hdrImages so subpass resolve is legal.
     if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
         VkImageCreateInfo colorInfo{};
         colorInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         colorInfo.imageType = VK_IMAGE_TYPE_2D;
-        colorInfo.format = m_swapchain.GetFormat();
+        colorInfo.format = HDR_FORMAT;
         colorInfo.extent = {extent.width, extent.height, 1};
         colorInfo.mipLevels = 1;
         colorInfo.arrayLayers = 1;
@@ -391,7 +551,7 @@ void RenderLoop::CreateDepthResources() {
         colorView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         colorView.image = m_colorImage;
         colorView.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        colorView.format = m_swapchain.GetFormat();
+        colorView.format = HDR_FORMAT;
         colorView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         colorView.subresourceRange.baseMipLevel = 0;
         colorView.subresourceRange.levelCount = 1;
@@ -406,24 +566,25 @@ void RenderLoop::CreateDepthResources() {
 }
 
 void RenderLoop::CreateFramebuffers() {
-    const auto& imageViews = m_swapchain.GetImageViews();
+    const auto& swapImageViews = m_swapchain.GetImageViews();
     VkExtent2D extent = m_swapchain.GetExtent();
     const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
-    m_framebuffers.resize(imageViews.size());
+    m_framebuffers.resize(swapImageViews.size());
+    m_presentFramebuffers.resize(swapImageViews.size());
 
-    for (size_t i = 0; i < imageViews.size(); ++i) {
-        // Attachment order must match CreateRenderPass: color (MSAA or swapchain), depth,
-        // [resolve = swapchain image].
+    for (size_t i = 0; i < swapImageViews.size(); ++i) {
+        // Main (HDR) framebuffer — attachment order must match CreateRenderPass:
+        // color (MSAA or HDR), depth, [resolve = HDR 1×].
         std::array<VkImageView, 3> attachments{};
         uint32_t count = 0;
         if (multisampled) {
             attachments[0] = m_colorImageView;
             attachments[1] = m_depthImageView;
-            attachments[2] = imageViews[i];
+            attachments[2] = m_hdrImageViews[i];
             count = 3;
         } else {
-            attachments[0] = imageViews[i];
+            attachments[0] = m_hdrImageViews[i];
             attachments[1] = m_depthImageView;
             count = 2;
         }
@@ -441,6 +602,111 @@ void RenderLoop::CreateFramebuffers() {
             VK_SUCCESS) {
             throw std::runtime_error("Failed to create framebuffer");
         }
+
+        // Present/tonemap framebuffer — single swapchain colour attachment.
+        VkFramebufferCreateInfo presentFb{};
+        presentFb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        presentFb.renderPass = m_presentRenderPass;
+        presentFb.attachmentCount = 1;
+        presentFb.pAttachments = &swapImageViews[i];
+        presentFb.width = extent.width;
+        presentFb.height = extent.height;
+        presentFb.layers = 1;
+
+        if (vkCreateFramebuffer(m_device.GetDevice(), &presentFb, nullptr,
+                                &m_presentFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create present framebuffer");
+        }
+    }
+}
+
+void RenderLoop::CreateTonemapPipeline() {
+    m_tonemapVert = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
+                                             m_shaderDir + "/tonemap.vert.spv");
+    m_tonemapFrag = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
+                                             m_shaderDir + "/tonemap.frag.spv");
+    m_tonemapPipeline = std::make_unique<TonemapPipeline>(
+        m_device, *m_tonemapVert, *m_tonemapFrag, m_presentRenderPass,
+        m_tonemapSetLayout, VK_SAMPLE_COUNT_1_BIT);
+}
+
+void RenderLoop::CreateTonemapDescriptors() {
+    // Sampler for the HDR resolve target — nearest filtering is fine since the
+    // tonemap pass samples 1:1 onto the swapchain.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_hdrSampler) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create HDR sampler");
+    }
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
+                                    &m_tonemapSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create tonemap descriptor set layout");
+    }
+
+    // One descriptor set per swapchain image (each points at its matching HDR view).
+    uint32_t imageCount = m_swapchain.GetImageCount();
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = imageCount;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = imageCount;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_tonemapDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create tonemap descriptor pool");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_tonemapSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_tonemapDescriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+    m_tonemapDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo,
+                                 m_tonemapDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate tonemap descriptor sets");
+    }
+}
+
+void RenderLoop::UpdateTonemapDescriptors() {
+    for (uint32_t i = 0; i < m_tonemapDescriptorSets.size(); ++i) {
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = m_hdrImageViews[i];
+        imageInfo.sampler = m_hdrSampler;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_tonemapDescriptorSets[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(m_device.GetDevice(), 1, &write, 0, nullptr);
     }
 }
 
@@ -453,6 +719,13 @@ void RenderLoop::CleanupFrameResources() {
         }
     }
     m_framebuffers.clear();
+
+    for (auto fb : m_presentFramebuffers) {
+        if (fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, fb, nullptr);
+        }
+    }
+    m_presentFramebuffers.clear();
 
     if (m_depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(device, m_depthImageView, nullptr);
@@ -475,15 +748,52 @@ void RenderLoop::CleanupFrameResources() {
         m_colorImage = VK_NULL_HANDLE;
         m_colorAllocation = VK_NULL_HANDLE;
     }
+
+    for (size_t i = 0; i < m_hdrImages.size(); ++i) {
+        if (m_hdrImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_hdrImageViews[i], nullptr);
+        }
+        if (m_hdrImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_hdrImages[i], m_hdrAllocations[i]);
+        }
+    }
+    m_hdrImages.clear();
+    m_hdrImageViews.clear();
+    m_hdrAllocations.clear();
+}
+
+void RenderLoop::CleanupTonemapDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_tonemapDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_tonemapDescriptorPool, nullptr);
+        m_tonemapDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_tonemapDescriptorSets.clear();
+    if (m_tonemapSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_tonemapSetLayout, nullptr);
+        m_tonemapSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_hdrSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_hdrSampler, nullptr);
+        m_hdrSampler = VK_NULL_HANDLE;
+    }
 }
 
 void RenderLoop::Cleanup() {
     VkDevice device = m_device.GetDevice();
 
+    m_tonemapPipeline.reset();
+    m_tonemapVert.reset();
+    m_tonemapFrag.reset();
+
     CleanupFrameResources();
+    CleanupTonemapDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
+    }
+    if (m_presentRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_presentRenderPass, nullptr);
     }
 
     for (VkSemaphore sem : m_renderFinishedSemaphores) {

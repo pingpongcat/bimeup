@@ -6,6 +6,7 @@ add_library(bimeup_core STATIC
 )
 
 target_include_directories(bimeup_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(bimeup_core PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")
 target_link_libraries(bimeup_core PUBLIC
     bimeup_platform
     bimeup_scene

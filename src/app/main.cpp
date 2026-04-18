@@ -192,7 +192,8 @@ int main(int argc, char* argv[]) {
     VkSampleCountFlags supportedSamples =
         bimeup::renderer::GetUsableSampleCounts(device.GetPhysicalDevice());
     VkSampleCountFlagBits currentSamples = VK_SAMPLE_COUNT_1_BIT;
-    bimeup::renderer::RenderLoop renderLoop(device, swapchain, currentSamples);
+    bimeup::renderer::RenderLoop renderLoop(device, swapchain, BIMEUP_SHADER_DIR,
+                                            currentSamples);
 
     // Shaders
     std::string shaderDir = BIMEUP_SHADER_DIR;
@@ -272,14 +273,21 @@ int main(int argc, char* argv[]) {
             .device = device.GetDevice(),
             .queueFamily = device.GetGraphicsQueueFamily(),
             .queue = device.GetGraphicsQueue(),
-            .renderPass = renderLoop.GetRenderPass(),
+            .renderPass = renderLoop.GetPresentRenderPass(),
             .minImageCount = swapchain.GetImageCount(),
             .imageCount = swapchain.GetImageCount(),
             .apiVersion = VK_API_VERSION_1_2,
-            .msaaSamples = renderLoop.GetSampleCount(),
+            .msaaSamples = renderLoop.GetPresentSampleCount(),
         });
     };
     initImGui();
+
+    // UI draws into the post-tonemap pass so ImGui colours hit the swapchain
+    // directly instead of being fed through ACES. Registered once — the
+    // callback fires each frame after the internal tonemap fullscreen draw.
+    renderLoop.SetInPresentPassCallback([&](VkCommandBuffer cmd) {
+        uiManager.EndFrame(cmd);
+    });
 
     bimeup::ui::Theme::Apply();
 
@@ -361,7 +369,8 @@ int main(int argc, char* argv[]) {
             }
             ImGui::End();
         }
-        uiManager.EndFrame(renderLoop.GetCurrentCommandBuffer());
+        // uiManager.EndFrame is invoked by the renderLoop's InPresentPass
+        // callback (wired above), so it runs inside the tonemap pass.
 
         if (!renderLoop.EndFrame()) {
             recreateSwapchainForLoading();
@@ -1584,7 +1593,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        uiManager.EndFrame(cmd);
+        // uiManager.EndFrame runs inside the tonemap pass via
+        // renderLoop's InPresentPass callback (registered near initImGui).
 
         if (!renderLoop.EndFrame()) {
             recreateSwapchain();

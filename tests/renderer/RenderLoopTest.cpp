@@ -59,11 +59,11 @@ protected:
 };
 
 TEST_F(RenderLoopTest, CreatesSuccessfully) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 }
 
 TEST_F(RenderLoopTest, SingleFrameCycle) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 
     bool began = m_renderLoop->BeginFrame();
     ASSERT_TRUE(began);
@@ -77,7 +77,7 @@ TEST_F(RenderLoopTest, SingleFrameCycle) {
 }
 
 TEST_F(RenderLoopTest, MultipleFrames) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 
     for (int i = 0; i < 5; ++i) {
         bool began = m_renderLoop->BeginFrame();
@@ -90,7 +90,7 @@ TEST_F(RenderLoopTest, MultipleFrames) {
 }
 
 TEST_F(RenderLoopTest, FrameIndexCycles) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 
     for (uint32_t i = 0; i < 4; ++i) {
         EXPECT_EQ(m_renderLoop->GetCurrentFrameIndex(),
@@ -105,7 +105,7 @@ TEST_F(RenderLoopTest, FrameIndexCycles) {
 }
 
 TEST_F(RenderLoopTest, PreMainPassCallbackInvokedEachFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 
     int calls = 0;
     VkCommandBuffer capturedCmd = VK_NULL_HANDLE;
@@ -125,7 +125,7 @@ TEST_F(RenderLoopTest, PreMainPassCallbackInvokedEachFrame) {
 }
 
 TEST_F(RenderLoopTest, SetClearColor) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 
     m_renderLoop->SetClearColor(1.0f, 0.0f, 0.0f);
 
@@ -139,7 +139,7 @@ TEST_F(RenderLoopTest, SetClearColor) {
 
 TEST_F(RenderLoopTest, DestructorCleansUp) {
     {
-        RenderLoop loop(*m_device, *m_swapchain);
+        RenderLoop loop(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
         bool began = loop.BeginFrame();
         ASSERT_TRUE(began);
         EXPECT_TRUE(loop.EndFrame());

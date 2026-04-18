@@ -101,7 +101,7 @@ protected:
 
         m_device = std::make_unique<Device>(m_context->GetInstance(), m_surface);
         m_swapchain = std::make_unique<Swapchain>(*m_device, m_surface, VkExtent2D{800, 600});
-        m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain);
+        m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     }
 
     void TearDown() override {
