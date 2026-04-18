@@ -46,6 +46,44 @@ std::vector<uint32_t> MakeMinimalFragmentSpirv() {
     };
 }
 
+VkRenderPass CreateMrtRenderPass(VkDevice device, VkFormat colorFormat, VkFormat normalFormat) {
+    std::array<VkAttachmentDescription, 2> attachments{};
+    for (size_t i = 0; i < attachments.size(); ++i) {
+        attachments[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[i].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+    attachments[0].format = colorFormat;
+    attachments[1].format = normalFormat;
+
+    std::array<VkAttachmentReference, 2> colorRefs{};
+    colorRefs[0] = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    colorRefs[1] = {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
+
+    VkRenderPassCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments = attachments.data();
+    info.subpassCount = 1;
+    info.pSubpasses = &subpass;
+
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    VkResult result = vkCreateRenderPass(device, &info, nullptr, &renderPass);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create MRT test render pass");
+    }
+    return renderPass;
+}
+
 VkRenderPass CreateSimpleRenderPass(VkDevice device, VkFormat format) {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = format;
@@ -184,6 +222,75 @@ TEST_F(PipelineTest, CreateWithAlphaBlendEnabled) {
     m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+}
+
+TEST_F(PipelineTest, CreateWithTwoColorAttachmentsAllWriting) {
+    // MRT pass (colour + normal G-buffer). Pipeline must build a blend-state array
+    // sized to colorAttachmentCount — a single VkPipelineColorBlendAttachmentState
+    // pointed at by pAttachments is a spec violation when attachmentCount > 1.
+    VkRenderPass mrt = CreateMrtRenderPass(m_device->GetDevice(),
+                                           VK_FORMAT_R16G16B16A16_SFLOAT,
+                                           VK_FORMAT_R16G16_SNORM);
+
+    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
+    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
+
+    PipelineConfig config{};
+    config.renderPass = mrt;
+    config.colorAttachmentCount = 2;
+
+    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+
+    m_pipeline.reset();
+    vkDestroyRenderPass(m_device->GetDevice(), mrt, nullptr);
+}
+
+TEST_F(PipelineTest, CreateWithTwoColorAttachmentsSecondWriteMasked) {
+    // Overlay-style MRT pipeline: writes only attachment 0 (colour), leaves
+    // attachment 1 (normal) untouched via zero writemask.
+    VkRenderPass mrt = CreateMrtRenderPass(m_device->GetDevice(),
+                                           VK_FORMAT_R16G16B16A16_SFLOAT,
+                                           VK_FORMAT_R16G16_SNORM);
+
+    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
+    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
+
+    PipelineConfig config{};
+    config.renderPass = mrt;
+    config.colorAttachmentCount = 2;
+    config.disableSecondaryColorWrites = true;
+
+    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+
+    m_pipeline.reset();
+    vkDestroyRenderPass(m_device->GetDevice(), mrt, nullptr);
+}
+
+TEST_F(PipelineTest, CreateMrtWithAlphaBlendOnPrimaryOnly) {
+    // Transparent-style MRT pipeline: alpha-over on attachment 0, attachment 1
+    // write-masked so blend state on the secondary attachment is inert.
+    VkRenderPass mrt = CreateMrtRenderPass(m_device->GetDevice(),
+                                           VK_FORMAT_R16G16B16A16_SFLOAT,
+                                           VK_FORMAT_R16G16_SNORM);
+
+    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
+    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
+
+    PipelineConfig config{};
+    config.renderPass = mrt;
+    config.colorAttachmentCount = 2;
+    config.alphaBlendEnable = true;
+    config.depthTestEnable = true;
+    config.depthWriteEnable = false;
+    config.disableSecondaryColorWrites = true;
+
+    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+
+    m_pipeline.reset();
+    vkDestroyRenderPass(m_device->GetDevice(), mrt, nullptr);
 }
 
 TEST_F(PipelineTest, DestructorCleansUp) {

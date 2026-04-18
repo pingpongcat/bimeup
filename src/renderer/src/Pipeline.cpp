@@ -108,17 +108,29 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = config.alphaBlendEnable ? VK_TRUE : VK_FALSE;
-    if (config.alphaBlendEnable) {
-        colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    // One blend state per colour attachment. Attachment 0 carries the alpha-blend
+    // configuration; secondary attachments either mirror attachment 0 or have
+    // writemask = 0 depending on `disableSecondaryColorWrites`, so overlay
+    // pipelines bound to the MRT main pass don't stomp the normal G-buffer.
+    constexpr VkColorComponentFlags kFullWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                                     VK_COLOR_COMPONENT_G_BIT |
+                                                     VK_COLOR_COMPONENT_B_BIT |
+                                                     VK_COLOR_COMPONENT_A_BIT;
+    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(
+        config.colorAttachmentCount);
+    for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
+        auto& b = blendAttachments[i];
+        const bool suppress = (i > 0) && config.disableSecondaryColorWrites;
+        b.colorWriteMask = suppress ? 0U : kFullWriteMask;
+        b.blendEnable = (config.alphaBlendEnable && !suppress) ? VK_TRUE : VK_FALSE;
+        if (b.blendEnable == VK_TRUE) {
+            b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            b.colorBlendOp = VK_BLEND_OP_ADD;
+            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            b.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
     }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
@@ -126,7 +138,7 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.attachmentCount = config.colorAttachmentCount;
     colorBlending.pAttachments =
-        config.colorAttachmentCount == 0 ? nullptr : &colorBlendAttachment;
+        config.colorAttachmentCount == 0 ? nullptr : blendAttachments.data();
 
     std::array<VkDynamicState, 2> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,

@@ -21,6 +21,12 @@ struct PipelineConfig {
     bool alphaBlendEnable = false;
     VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     uint32_t colorAttachmentCount = 1;  // set to 0 for depth-only passes
+    // If true, colour attachments beyond attachment 0 have colorWriteMask = 0 —
+    // i.e. the fragment shader emits only `outColor` and leaves every other
+    // attachment untouched. Intended for overlay pipelines (section-fill, disk
+    // marker, transparent) bound to the MRT main pass that doesn't populate the
+    // normal G-buffer. Ignored when colorAttachmentCount <= 1.
+    bool disableSecondaryColorWrites = false;
     std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
