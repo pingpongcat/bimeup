@@ -147,3 +147,31 @@ TEST_F(RenderLoopTest, DestructorCleansUp) {
     }
     // Validation layers + sanitizers would catch leaks
 }
+
+// RP.3c — MRT normal G-buffer: the main render pass has a second R16G16_SNORM
+// colour attachment per swap image, rebuilt in lockstep with the HDR target.
+TEST_F(RenderLoopTest, NormalFormatIsR16G16Snorm) {
+    EXPECT_EQ(RenderLoop::NORMAL_FORMAT, VK_FORMAT_R16G16_SNORM);
+}
+
+TEST_F(RenderLoopTest, NormalGBufferImageViewsProvidedPerSwapImage) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    ASSERT_GT(imageCount, 0u);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetNormalImageView(i), VK_NULL_HANDLE)
+            << "normal G-buffer view missing for swap image " << i;
+    }
+}
+
+TEST_F(RenderLoopTest, NormalGBufferSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetNormalImageView(i), VK_NULL_HANDLE);
+    }
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}

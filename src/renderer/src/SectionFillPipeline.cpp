@@ -20,7 +20,9 @@ SectionFillPipeline::SectionFillPipeline(const Device& device,
                                          const Shader& fragmentShader,
                                          VkRenderPass renderPass,
                                          VkDescriptorSetLayout cameraLayout,
-                                         VkSampleCountFlagBits samples) {
+                                         VkSampleCountFlagBits samples,
+                                         uint32_t colorAttachmentCount,
+                                         bool disableSecondaryColorWrites) {
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
     binding.stride = sizeof(SectionVertexLayout);
@@ -47,7 +49,8 @@ SectionFillPipeline::SectionFillPipeline(const Device& device,
     config.depthWriteEnable = false;
     config.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
-    config.colorAttachmentCount = 1;
+    config.colorAttachmentCount = colorAttachmentCount;
+    config.disableSecondaryColorWrites = disableSecondaryColorWrites;
     config.vertexBindings = {binding};
     config.vertexAttributes = {posAttr, colorAttr};
     config.descriptorSetLayouts = {cameraLayout};

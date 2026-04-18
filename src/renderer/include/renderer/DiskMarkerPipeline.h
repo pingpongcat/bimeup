@@ -23,7 +23,9 @@ public:
                        const Shader& fragmentShader,
                        VkRenderPass renderPass,
                        VkDescriptorSetLayout cameraLayout,
-                       VkSampleCountFlagBits samples);
+                       VkSampleCountFlagBits samples,
+                       uint32_t colorAttachmentCount = 1,
+                       bool disableSecondaryColorWrites = false);
     ~DiskMarkerPipeline();
 
     DiskMarkerPipeline(const DiskMarkerPipeline&) = delete;

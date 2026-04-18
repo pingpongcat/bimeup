@@ -71,9 +71,13 @@ bool RenderLoop::BeginFrame() {
         m_preMainPass(cmd);
     }
 
-    std::array<VkClearValue, 2> clearValues{};
+    // Clear values indexed to match CreateRenderPass:
+    //   [0] scene colour, [1] normal ((0,0) → +Z after oct-decode),
+    //   [2] depth, [3..4] resolve targets (DONT_CARE → filler).
+    std::array<VkClearValue, 5> clearValues{};
     clearValues[0].color = m_clearColor;
-    clearValues[1].depthStencil = {1.0F, 0};
+    clearValues[1].color = VkClearColorValue{{0.0F, 0.0F, 0.0F, 0.0F}};
+    clearValues[2].depthStencil = {1.0F, 0};
 
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -217,6 +221,13 @@ VkRenderPass RenderLoop::GetPresentRenderPass() const {
     return m_presentRenderPass;
 }
 
+VkImageView RenderLoop::GetNormalImageView(uint32_t imageIndex) const {
+    if (imageIndex >= m_normalImageViews.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return m_normalImageViews[imageIndex];
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -239,7 +250,9 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateFramebuffers();
     CreateTonemapPipeline();
     UpdateTonemapDescriptors();
-    LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
+    if (bimeup::tools::Log::GetLogger()) {
+        LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
+    }
 }
 
 void RenderLoop::RecreateForSwapchain() {
@@ -307,9 +320,14 @@ void RenderLoop::CreateRenderPass() {
     m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
     const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
-    // Attachment 0: scene colour. HDR_FORMAT (R16G16B16A16_SFLOAT). When
-    // multisampled this is a transient MSAA image that resolves into the
-    // single-sample HDR image at attachment 2; when 1×, this IS the HDR image.
+    // Attachment layout (MRT for RP.3c — scene colour + oct-packed normal G-buffer):
+    //   Non-MSAA: [0] HDR colour, [1] normal, [2] depth.
+    //   MSAA:     [0] HDR colour MSAA, [1] normal MSAA, [2] depth,
+    //             [3] HDR resolve, [4] normal resolve.
+    // Final layouts on the sampled targets (HDR + normal resolve) are
+    // SHADER_READ_ONLY_OPTIMAL so the tonemap pass (and future SSAO/SSIL)
+    // can bind them straight as samplers.
+
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = HDR_FORMAT;
     colorAttachment.samples = m_samples;
@@ -322,6 +340,18 @@ void RenderLoop::CreateRenderPass() {
     colorAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+    VkAttachmentDescription normalAttachment{};
+    normalAttachment.format = NORMAL_FORMAT;
+    normalAttachment.samples = m_samples;
+    normalAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    normalAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                            : VK_ATTACHMENT_STORE_OP_STORE;
+    normalAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    normalAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    normalAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    normalAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = m_depthFormat;
     depthAttachment.samples = m_samples;
@@ -332,37 +362,45 @@ void RenderLoop::CreateRenderPass() {
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    // Attachment 2 (only if multisampled): single-sample HDR resolve target. The
-    // tonemap pass reads it via sampler, so it transitions to SHADER_READ here.
-    VkAttachmentDescription resolveAttachment{};
-    resolveAttachment.format = HDR_FORMAT;
-    resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkAttachmentDescription hdrResolveAttachment{};
+    hdrResolveAttachment.format = HDR_FORMAT;
+    hdrResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    hdrResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    hdrResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    hdrResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    hdrResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    hdrResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    hdrResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentDescription normalResolveAttachment{};
+    normalResolveAttachment.format = NORMAL_FORMAT;
+    normalResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    normalResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    normalResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    normalResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    normalResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    normalResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    normalResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    std::array<VkAttachmentReference, 2> colorRefs{};
+    colorRefs[0] = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    colorRefs[1] = {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
+    depthRef.attachment = 2;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentReference resolveRef{};
-    resolveRef.attachment = 2;
-    resolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    std::array<VkAttachmentReference, 2> resolveRefs{};
+    resolveRefs[0] = {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    resolveRefs[1] = {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
     if (multisampled) {
-        subpass.pResolveAttachments = &resolveRef;
+        subpass.pResolveAttachments = resolveRefs.data();
     }
 
     VkSubpassDependency dependency{};
@@ -376,12 +414,13 @@ void RenderLoop::CreateRenderPass() {
     dependency.dstAccessMask =
         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    std::array<VkAttachmentDescription, 3> attachments = {
-        colorAttachment, depthAttachment, resolveAttachment};
+    std::array<VkAttachmentDescription, 5> attachments = {
+        colorAttachment, normalAttachment, depthAttachment,
+        hdrResolveAttachment, normalResolveAttachment};
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = multisampled ? 3U : 2U;
+    rpInfo.attachmentCount = multisampled ? 5U : 3U;
     rpInfo.pAttachments = attachments.data();
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
@@ -447,6 +486,9 @@ void RenderLoop::CreateHdrResources() {
     m_hdrImages.assign(imageCount, VK_NULL_HANDLE);
     m_hdrImageViews.assign(imageCount, VK_NULL_HANDLE);
     m_hdrAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_normalImages.assign(imageCount, VK_NULL_HANDLE);
+    m_normalImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_normalAllocations.assign(imageCount, VK_NULL_HANDLE);
 
     for (uint32_t i = 0; i < imageCount; ++i) {
         VkImageCreateInfo imageInfo{};
@@ -483,6 +525,24 @@ void RenderLoop::CreateHdrResources() {
         if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
                               &m_hdrImageViews[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create HDR image view");
+        }
+
+        // Normal G-buffer target — single-sample (resolve destination when
+        // MSAA is on, direct target otherwise). SAMPLED is required because
+        // SSAO/SSIL later bind this view through a descriptor.
+        VkImageCreateInfo normalInfo = imageInfo;
+        normalInfo.format = NORMAL_FORMAT;
+        if (vmaCreateImage(m_device.GetAllocator(), &normalInfo, &allocInfo,
+                           &m_normalImages[i], &m_normalAllocations[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create normal G-buffer image");
+        }
+
+        VkImageViewCreateInfo normalView = viewInfo;
+        normalView.image = m_normalImages[i];
+        normalView.format = NORMAL_FORMAT;
+        if (vkCreateImageView(m_device.GetDevice(), &normalView, nullptr,
+                              &m_normalImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create normal G-buffer image view");
         }
     }
 }
@@ -562,6 +622,22 @@ void RenderLoop::CreateDepthResources() {
                               &m_colorImageView) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create MSAA color image view");
         }
+
+        // Multisampled normal G-buffer (transient, same shape as MSAA colour).
+        VkImageCreateInfo normalMsaaInfo = colorInfo;
+        normalMsaaInfo.format = NORMAL_FORMAT;
+        if (vmaCreateImage(m_device.GetAllocator(), &normalMsaaInfo, &allocInfo,
+                           &m_normalMsaaImage, &m_normalMsaaAllocation, nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create MSAA normal image");
+        }
+
+        VkImageViewCreateInfo normalMsaaView = colorView;
+        normalMsaaView.image = m_normalMsaaImage;
+        normalMsaaView.format = NORMAL_FORMAT;
+        if (vkCreateImageView(m_device.GetDevice(), &normalMsaaView, nullptr,
+                              &m_normalMsaaImageView) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create MSAA normal image view");
+        }
     }
 }
 
@@ -575,18 +651,22 @@ void RenderLoop::CreateFramebuffers() {
 
     for (size_t i = 0; i < swapImageViews.size(); ++i) {
         // Main (HDR) framebuffer — attachment order must match CreateRenderPass:
-        // color (MSAA or HDR), depth, [resolve = HDR 1×].
-        std::array<VkImageView, 3> attachments{};
+        //   non-MSAA: [hdr, normal, depth]
+        //   MSAA:     [hdr MSAA, normal MSAA, depth, hdr resolve, normal resolve]
+        std::array<VkImageView, 5> attachments{};
         uint32_t count = 0;
         if (multisampled) {
             attachments[0] = m_colorImageView;
-            attachments[1] = m_depthImageView;
-            attachments[2] = m_hdrImageViews[i];
-            count = 3;
+            attachments[1] = m_normalMsaaImageView;
+            attachments[2] = m_depthImageView;
+            attachments[3] = m_hdrImageViews[i];
+            attachments[4] = m_normalImageViews[i];
+            count = 5;
         } else {
             attachments[0] = m_hdrImageViews[i];
-            attachments[1] = m_depthImageView;
-            count = 2;
+            attachments[1] = m_normalImageViews[i];
+            attachments[2] = m_depthImageView;
+            count = 3;
         }
 
         VkFramebufferCreateInfo fbInfo{};
@@ -749,6 +829,17 @@ void RenderLoop::CleanupFrameResources() {
         m_colorAllocation = VK_NULL_HANDLE;
     }
 
+    if (m_normalMsaaImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_normalMsaaImageView, nullptr);
+        m_normalMsaaImageView = VK_NULL_HANDLE;
+    }
+
+    if (m_normalMsaaImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_normalMsaaImage, m_normalMsaaAllocation);
+        m_normalMsaaImage = VK_NULL_HANDLE;
+        m_normalMsaaAllocation = VK_NULL_HANDLE;
+    }
+
     for (size_t i = 0; i < m_hdrImages.size(); ++i) {
         if (m_hdrImageViews[i] != VK_NULL_HANDLE) {
             vkDestroyImageView(device, m_hdrImageViews[i], nullptr);
@@ -760,6 +851,18 @@ void RenderLoop::CleanupFrameResources() {
     m_hdrImages.clear();
     m_hdrImageViews.clear();
     m_hdrAllocations.clear();
+
+    for (size_t i = 0; i < m_normalImages.size(); ++i) {
+        if (m_normalImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_normalImageViews[i], nullptr);
+        }
+        if (m_normalImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_normalImages[i], m_normalAllocations[i]);
+        }
+    }
+    m_normalImages.clear();
+    m_normalImageViews.clear();
+    m_normalAllocations.clear();
 }
 
 void RenderLoop::CleanupTonemapDescriptors() {

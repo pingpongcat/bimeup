@@ -20,7 +20,9 @@ DiskMarkerPipeline::DiskMarkerPipeline(const Device& device,
                                        const Shader& fragmentShader,
                                        VkRenderPass renderPass,
                                        VkDescriptorSetLayout cameraLayout,
-                                       VkSampleCountFlagBits samples) {
+                                       VkSampleCountFlagBits samples,
+                                       uint32_t colorAttachmentCount,
+                                       bool disableSecondaryColorWrites) {
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
     binding.stride = sizeof(DiskVertexLayout);
@@ -52,7 +54,8 @@ DiskMarkerPipeline::DiskMarkerPipeline(const Device& device,
     config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     config.alphaBlendEnable = true;
     config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
-    config.colorAttachmentCount = 1;
+    config.colorAttachmentCount = colorAttachmentCount;
+    config.disableSecondaryColorWrites = disableSecondaryColorWrites;
     config.vertexBindings = {binding};
     config.vertexAttributes = {posAttr, colorAttr};
     config.descriptorSetLayouts = {cameraLayout};

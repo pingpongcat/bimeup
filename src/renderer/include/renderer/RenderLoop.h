@@ -23,6 +23,12 @@ public:
     // resolve pass. Matches the Stage RP plan — enough dynamic range to keep
     // bright lighting / future SSIL bounces from clipping before the curve.
     static constexpr VkFormat HDR_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
+    // Normal G-buffer format — octahedron-packed view-space normal, two
+    // signed 16-bit channels. Attachment 1 of the main render pass. Clear
+    // value (0,0) decodes to +Z so overlay pipelines that leave this
+    // attachment untouched (disableSecondaryColorWrites) don't corrupt
+    // SSAO/SSIL sampling downstream.
+    static constexpr VkFormat NORMAL_FORMAT = VK_FORMAT_R16G16_SNORM;
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir,
@@ -65,6 +71,11 @@ public:
     /// swapchain. Bind ImGui and any other post-tonemap pipelines here;
     /// sample count is always 1× (the swapchain is never multisampled).
     [[nodiscard]] VkRenderPass GetPresentRenderPass() const;
+    /// View into the single-sample normal G-buffer for the given swap image
+    /// index (same index domain as `GetCurrentImageIndex()`). Will be read by
+    /// SSAO / SSIL / outline passes in later RP tasks. Returns VK_NULL_HANDLE
+    /// only if the index is out of range.
+    [[nodiscard]] VkImageView GetNormalImageView(uint32_t imageIndex) const;
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -129,6 +140,16 @@ private:
     std::vector<VkImage> m_hdrImages;
     std::vector<VkImageView> m_hdrImageViews;
     std::vector<VmaAllocation> m_hdrAllocations;
+    // Per-swapchain-image normal G-buffer target (R16G16_SNORM, oct-packed
+    // view-space normal). Written by `basic.frag` at layout(location=1); will
+    // be sampled by SSAO/SSIL/outline passes later in Stage RP.
+    std::vector<VkImage> m_normalImages;
+    std::vector<VkImageView> m_normalImageViews;
+    std::vector<VmaAllocation> m_normalAllocations;
+    // Multisampled normal attachment (transient, only when m_samples > 1x).
+    VkImage m_normalMsaaImage = VK_NULL_HANDLE;
+    VkImageView m_normalMsaaImageView = VK_NULL_HANDLE;
+    VmaAllocation m_normalMsaaAllocation = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkFramebuffer> m_framebuffers;
     std::vector<VkFramebuffer> m_presentFramebuffers;
