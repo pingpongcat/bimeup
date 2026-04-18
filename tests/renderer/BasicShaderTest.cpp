@@ -3,7 +3,12 @@
 #include <renderer/Device.h>
 #include <renderer/VulkanContext.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 using bimeup::renderer::Device;
 using bimeup::renderer::Shader;
@@ -65,6 +70,58 @@ TEST_F(BasicShaderTest, ShadowVertexShaderCompiledToValidSpirv) {
 
     EXPECT_NE(shadowVert.GetModule(), VK_NULL_HANDLE);
     EXPECT_EQ(shadowVert.GetStage(), ShaderStage::Vertex);
+}
+
+// RP.3d contract: basic.frag must write both colour (location 0) and the
+// oct-packed view-space normal G-buffer (location 1) so the main render pass's
+// second MRT attachment gets populated for SSAO/SSIL/outlines.
+TEST_F(BasicShaderTest, FragmentShaderDeclaresNormalOutputAtLocation1) {
+    std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(f) << "Missing " << path;
+    const auto bytes = static_cast<std::streamoff>(f.tellg());
+    ASSERT_GT(bytes, 0);
+    ASSERT_EQ(bytes % 4, 0);
+    f.seekg(0);
+    std::vector<uint32_t> words(static_cast<size_t>(bytes) / 4);
+    f.read(reinterpret_cast<char*>(words.data()), bytes);
+
+    ASSERT_GE(words.size(), 5U);
+    ASSERT_EQ(words[0], 0x07230203U) << "Bad SPIR-V magic";
+
+    constexpr uint32_t kOpDecorate = 71;
+    constexpr uint32_t kOpVariable = 59;
+    constexpr uint32_t kDecorationLocation = 30;
+    constexpr uint32_t kStorageClassOutput = 3;
+
+    std::unordered_map<uint32_t, uint32_t> idToLocation;
+    std::unordered_set<uint32_t> outputIds;
+
+    for (size_t i = 5; i < words.size();) {
+        const uint32_t header = words[i];
+        const uint32_t opcode = header & 0xFFFFU;
+        const uint32_t count = header >> 16U;
+        ASSERT_GT(count, 0U) << "Malformed SPIR-V instruction at word " << i;
+        ASSERT_LE(i + count, words.size()) << "Truncated SPIR-V instruction at word " << i;
+
+        if (opcode == kOpDecorate && count >= 4 && words[i + 2] == kDecorationLocation) {
+            idToLocation[words[i + 1]] = words[i + 3];
+        } else if (opcode == kOpVariable && count >= 4 && words[i + 3] == kStorageClassOutput) {
+            outputIds.insert(words[i + 2]);
+        }
+        i += count;
+    }
+
+    bool hasLoc0 = false;
+    bool hasLoc1 = false;
+    for (uint32_t id : outputIds) {
+        auto it = idToLocation.find(id);
+        if (it == idToLocation.end()) continue;
+        if (it->second == 0) hasLoc0 = true;
+        if (it->second == 1) hasLoc1 = true;
+    }
+    EXPECT_TRUE(hasLoc0) << "basic.frag missing colour output at location 0";
+    EXPECT_TRUE(hasLoc1) << "basic.frag missing oct-packed normal output at location 1";
 }
 
 TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {

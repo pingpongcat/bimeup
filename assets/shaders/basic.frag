@@ -3,8 +3,10 @@
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec3 fragNormalWorld;
 layout(location = 2) in vec3 fragWorldPos;
+layout(location = 3) in vec3 fragNormalView;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outNormal;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
     vec4 keyDirectionIntensity;
@@ -32,6 +34,20 @@ vec3 lambertContribution(vec3 n, vec4 dirI, vec4 colE) {
     vec3 toLight = normalize(-dirI.xyz);
     float ndotl = max(dot(n, toLight), 0.0);
     return colE.rgb * (dirI.w * ndotl * enabled);
+}
+
+// Octahedron-encode a unit normal into [-1, 1]^2. Byte-for-byte mirror of
+// bimeup::renderer::OctPackNormal (Cigolle et al. JCGT 2014 signed encoding).
+vec2 octPackNormal(vec3 n) {
+    float l1 = abs(n.x) + abs(n.y) + abs(n.z);
+    vec3 nn = n / l1;
+    vec2 e = nn.xy;
+    if (nn.z < 0.0) {
+        vec2 folded = vec2(1.0 - abs(e.y), 1.0 - abs(e.x));
+        vec2 signE = vec2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+        e = folded * signE;
+    }
+    return e;
 }
 
 // 3-tone hemisphere ambient sampled by dot(n, +Y). Mirrors
@@ -85,7 +101,14 @@ void main() {
     }
 
     vec3 n = normalize(fragNormalWorld);
-    if (!gl_FrontFacing) n = -n;  // Light back faces correctly (double-sided rendering).
+    vec3 nView = normalize(fragNormalView);
+    if (!gl_FrontFacing) {  // Double-sided rendering: flip so lighting + G-buffer
+        n = -n;              // see the visible face.
+        nView = -nView;
+    }
+
+    // MRT normal G-buffer for SSAO / SSIL / outlines. R16G16_SNORM target.
+    outNormal = octPackNormal(nView);
 
     vec3 lit = hemisphereAmbient(n);
 
