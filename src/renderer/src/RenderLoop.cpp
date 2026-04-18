@@ -1,12 +1,16 @@
 #include <renderer/RenderLoop.h>
+#include <renderer/DepthLinearizePipeline.h>
+#include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
 #include <renderer/Shader.h>
 #include <renderer/Swapchain.h>
 #include <renderer/TonemapPipeline.h>
 #include <tools/Log.h>
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <vector>
 
 namespace bimeup::renderer {
 
@@ -28,6 +32,10 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateTonemapDescriptors();
     CreateTonemapPipeline();
     UpdateTonemapDescriptors();
+    CreateDepthPyramidDescriptors();
+    CreateDepthPyramidPipelines();
+    CreateDepthPyramidResources();
+    UpdateDepthPyramidDescriptors();
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
@@ -101,6 +109,11 @@ bool RenderLoop::EndFrame() {
     // End the main (HDR) render pass. finalLayout on the HDR attachment
     // transitions it to SHADER_READ_ONLY_OPTIMAL for the tonemap sampler.
     vkCmdEndRenderPass(cmd);
+
+    // RP.4d — build the depth pyramid between the main pass and the
+    // tonemap pass. No-op under MSAA (shader needs sampler2DMS); non-MSAA
+    // path dispatches linearize then three mip downsamples with barriers.
+    BuildDepthPyramid(cmd);
 
     // Begin the tonemap/present pass targeting the swapchain image.
     VkRenderPassBeginInfo presentInfo{};
@@ -228,6 +241,18 @@ VkImageView RenderLoop::GetNormalImageView(uint32_t imageIndex) const {
     return m_normalImageViews[imageIndex];
 }
 
+VkImageView RenderLoop::GetDepthPyramidView(uint32_t imageIndex) const {
+    if (imageIndex >= m_depthPyramidSampledViews.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return m_depthPyramidSampledViews[imageIndex];
+}
+
+void RenderLoop::SetProjectionNearFar(float nearZ, float farZ) {
+    m_nearZ = nearZ;
+    m_farZ = farZ;
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -248,8 +273,10 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateHdrResources();
     CreateDepthResources();
     CreateFramebuffers();
+    CreateDepthPyramidResources();
     CreateTonemapPipeline();
     UpdateTonemapDescriptors();
+    UpdateDepthPyramidDescriptors();
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
     }
@@ -261,7 +288,9 @@ void RenderLoop::RecreateForSwapchain() {
     CreateHdrResources();
     CreateDepthResources();
     CreateFramebuffers();
+    CreateDepthPyramidResources();
     UpdateTonemapDescriptors();
+    UpdateDepthPyramidDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -356,11 +385,17 @@ void RenderLoop::CreateRenderPass() {
     depthAttachment.format = m_depthFormat;
     depthAttachment.samples = m_samples;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    // Non-MSAA: keep depth and transition to SHADER_READ_ONLY so the RP.4
+    // linearize compute pass can sample it. MSAA: the pyramid is gated off
+    // (shader wants sampler2D, not sampler2DMS) so discarding depth at pass
+    // end is fine and avoids an extra resolve.
+    depthAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                           : VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription hdrResolveAttachment{};
     hdrResolveAttachment.format = HDR_FORMAT;
@@ -403,16 +438,28 @@ void RenderLoop::CreateRenderPass() {
         subpass.pResolveAttachments = resolveRefs.data();
     }
 
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask =
+    std::array<VkSubpassDependency, 2> dependencies{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstStageMask =
+    dependencies[0].dstStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstAccessMask =
+    dependencies[0].srcAccessMask = 0;
+    dependencies[0].dstAccessMask =
         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    // Post-pass dependency: the RP.4 linearize compute shader samples the
+    // depth attachment immediately after vkCmdEndRenderPass. Makes the
+    // layout transition to SHADER_READ_ONLY visible to compute reads and
+    // the depth writes themselves available. No-op on MSAA since we never
+    // sample the multisample depth image.
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     std::array<VkAttachmentDescription, 5> attachments = {
         colorAttachment, normalAttachment, depthAttachment,
@@ -424,8 +471,8 @@ void RenderLoop::CreateRenderPass() {
     rpInfo.pAttachments = attachments.data();
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
-    rpInfo.dependencyCount = 1;
-    rpInfo.pDependencies = &dependency;
+    rpInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    rpInfo.pDependencies = dependencies.data();
 
     if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create render pass");
@@ -559,7 +606,11 @@ void RenderLoop::CreateDepthResources() {
     imageInfo.arrayLayers = 1;
     imageInfo.samples = m_samples;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    // SAMPLED_BIT so the RP.4 depth-linearize compute shader can bind this
+    // image as sampler2D post-render-pass (non-MSAA path; MSAA depth is
+    // never sampled today). Cheap addition even when the pyramid is gated
+    // off, since the image is always resident.
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocInfo{};
@@ -793,6 +844,8 @@ void RenderLoop::UpdateTonemapDescriptors() {
 void RenderLoop::CleanupFrameResources() {
     VkDevice device = m_device.GetDevice();
 
+    CleanupDepthPyramidResources();
+
     for (auto fb : m_framebuffers) {
         if (fb != VK_NULL_HANDLE) {
             vkDestroyFramebuffer(device, fb, nullptr);
@@ -888,9 +941,14 @@ void RenderLoop::Cleanup() {
     m_tonemapPipeline.reset();
     m_tonemapVert.reset();
     m_tonemapFrag.reset();
+    m_depthLinearizePipeline.reset();
+    m_depthMipPipeline.reset();
+    m_depthLinearizeShader.reset();
+    m_depthMipShader.reset();
 
     CleanupFrameResources();
     CleanupTonemapDescriptors();
+    CleanupDepthPyramidDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
@@ -917,6 +975,327 @@ void RenderLoop::Cleanup() {
 
     if (m_commandPool != VK_NULL_HANDLE) {
         vkDestroyCommandPool(device, m_commandPool, nullptr);
+    }
+}
+
+void RenderLoop::CreateDepthPyramidDescriptors() {
+    // Nearest-filter sampler spanning all mips. The compute chain uses
+    // texelFetch (unfiltered); downstream SSAO/SSIL will use textureLod
+    // with an explicit mip selection, which needs minLod=0/maxLod=mips.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = static_cast<float>(DEPTH_PYRAMID_MIPS);
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr,
+                        &m_depthPyramidSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth pyramid sampler");
+    }
+
+    // Shared set layout: 0 = COMBINED_IMAGE_SAMPLER (source), 1 = STORAGE_IMAGE (dest r32f).
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
+                                    &m_depthPyramidSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth pyramid descriptor set layout");
+    }
+
+    // One set per (swap image, level). 4 levels = 1 linearize + 3 mip downsamples.
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    const uint32_t totalSets = imageCount * DEPTH_PYRAMID_MIPS;
+
+    std::array<VkDescriptorPoolSize, 2> sizes{};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[0].descriptorCount = totalSets;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    sizes[1].descriptorCount = totalSets;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = totalSets;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(sizes.size());
+    poolInfo.pPoolSizes = sizes.data();
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_depthPyramidDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create depth pyramid descriptor pool");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(totalSets, m_depthPyramidSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_depthPyramidDescriptorPool;
+    allocInfo.descriptorSetCount = totalSets;
+    allocInfo.pSetLayouts = layouts.data();
+
+    std::vector<VkDescriptorSet> flat(totalSets, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo, flat.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate depth pyramid descriptor sets");
+    }
+
+    m_depthPyramidSets.assign(imageCount, std::array<VkDescriptorSet, DEPTH_PYRAMID_MIPS>{});
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        for (uint32_t level = 0; level < DEPTH_PYRAMID_MIPS; ++level) {
+            m_depthPyramidSets[i][level] = flat[(i * DEPTH_PYRAMID_MIPS) + level];
+        }
+    }
+}
+
+void RenderLoop::CreateDepthPyramidPipelines() {
+    m_depthLinearizeShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/depth_linearize.comp.spv");
+    m_depthMipShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/depth_mip.comp.spv");
+    m_depthLinearizePipeline = std::make_unique<DepthLinearizePipeline>(
+        m_device, *m_depthLinearizeShader, m_depthPyramidSetLayout);
+    m_depthMipPipeline = std::make_unique<DepthMipPipeline>(
+        m_device, *m_depthMipShader, m_depthPyramidSetLayout);
+}
+
+void RenderLoop::CreateDepthPyramidResources() {
+    VkExtent2D extent = m_swapchain.GetExtent();
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    m_depthPyramidExtent = extent;
+
+    m_depthPyramidImages.assign(imageCount, VK_NULL_HANDLE);
+    m_depthPyramidAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_depthPyramidSampledViews.assign(imageCount, VK_NULL_HANDLE);
+    m_depthPyramidMipViews.assign(imageCount, std::array<VkImageView, DEPTH_PYRAMID_MIPS>{});
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = DEPTH_PYRAMID_FORMAT;
+        imageInfo.extent = {extent.width, extent.height, 1};
+        imageInfo.mipLevels = DEPTH_PYRAMID_MIPS;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // STORAGE for compute writes per-mip; SAMPLED for the full-chain
+        // view that downstream SSAO/SSIL binds through textureLod.
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_depthPyramidImages[i], &m_depthPyramidAllocations[i],
+                           nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create depth pyramid image");
+        }
+
+        VkImageViewCreateInfo fullView{};
+        fullView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        fullView.image = m_depthPyramidImages[i];
+        fullView.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        fullView.format = DEPTH_PYRAMID_FORMAT;
+        fullView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        fullView.subresourceRange.baseMipLevel = 0;
+        fullView.subresourceRange.levelCount = DEPTH_PYRAMID_MIPS;
+        fullView.subresourceRange.baseArrayLayer = 0;
+        fullView.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_device.GetDevice(), &fullView, nullptr,
+                              &m_depthPyramidSampledViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create depth pyramid sampled view");
+        }
+
+        for (uint32_t level = 0; level < DEPTH_PYRAMID_MIPS; ++level) {
+            VkImageViewCreateInfo mipView = fullView;
+            mipView.subresourceRange.baseMipLevel = level;
+            mipView.subresourceRange.levelCount = 1;
+            if (vkCreateImageView(m_device.GetDevice(), &mipView, nullptr,
+                                  &m_depthPyramidMipViews[i][level]) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create depth pyramid mip view");
+            }
+        }
+    }
+}
+
+void RenderLoop::UpdateDepthPyramidDescriptors() {
+    const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
+    const uint32_t imageCount = static_cast<uint32_t>(m_depthPyramidSets.size());
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        for (uint32_t level = 0; level < DEPTH_PYRAMID_MIPS; ++level) {
+            // Linearize (level == 0): source is the non-linear depth attachment
+            // (non-MSAA only). Under MSAA we never dispatch this set but still
+            // point it at a valid single-sample view (mip 0) so descriptor
+            // validation is happy if the set is ever bound.
+            // Downsample (level ≥ 1): source is the previous mip, sampled in GENERAL.
+            VkImageView srcView = VK_NULL_HANDLE;
+            VkImageLayout srcLayout = VK_IMAGE_LAYOUT_GENERAL;
+            if (level == 0) {
+                srcView = multisampled ? m_depthPyramidMipViews[i][0] : m_depthImageView;
+                srcLayout = multisampled ? VK_IMAGE_LAYOUT_GENERAL
+                                         : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else {
+                srcView = m_depthPyramidMipViews[i][level - 1];
+                srcLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+
+            VkDescriptorImageInfo srcInfo{};
+            srcInfo.imageLayout = srcLayout;
+            srcInfo.imageView = srcView;
+            srcInfo.sampler = m_depthPyramidSampler;
+
+            VkDescriptorImageInfo dstInfo{};
+            dstInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            dstInfo.imageView = m_depthPyramidMipViews[i][level];
+
+            std::array<VkWriteDescriptorSet, 2> writes{};
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = m_depthPyramidSets[i][level];
+            writes[0].dstBinding = 0;
+            writes[0].descriptorCount = 1;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[0].pImageInfo = &srcInfo;
+
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = m_depthPyramidSets[i][level];
+            writes[1].dstBinding = 1;
+            writes[1].descriptorCount = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[1].pImageInfo = &dstInfo;
+
+            vkUpdateDescriptorSets(m_device.GetDevice(),
+                                   static_cast<uint32_t>(writes.size()), writes.data(),
+                                   0, nullptr);
+        }
+    }
+}
+
+void RenderLoop::BuildDepthPyramid(VkCommandBuffer cmd) {
+    // MSAA path gated off — depth_linearize.comp wants sampler2D, not
+    // sampler2DMS. Revisit when SSAO (RP.5) needs MSAA support.
+    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
+        return;
+    }
+
+    const uint32_t i = m_currentImageIndex;
+    const VkExtent2D extent = m_depthPyramidExtent;
+
+    // All mips UNDEFINED → GENERAL for this frame's writes. Prior contents
+    // are discardable — every mip is fully overwritten below.
+    VkImageMemoryBarrier pre{};
+    pre.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    pre.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    pre.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    pre.srcAccessMask = 0;
+    pre.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    pre.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre.image = m_depthPyramidImages[i];
+    pre.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    pre.subresourceRange.baseMipLevel = 0;
+    pre.subresourceRange.levelCount = DEPTH_PYRAMID_MIPS;
+    pre.subresourceRange.baseArrayLayer = 0;
+    pre.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &pre);
+
+    // Linearize depth → pyramid mip 0.
+    m_depthLinearizePipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_depthLinearizePipeline->GetLayout(), 0, 1,
+                            &m_depthPyramidSets[i][0], 0, nullptr);
+    DepthLinearizePipeline::PushConstants push{m_nearZ, m_farZ};
+    vkCmdPushConstants(cmd, m_depthLinearizePipeline->GetLayout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+
+    // Mip chain: each dispatch reads mip N-1 and writes mip N. One W→R
+    // barrier per level on the source mip is sufficient.
+    m_depthMipPipeline->Bind(cmd);
+    for (uint32_t level = 1; level < DEPTH_PYRAMID_MIPS; ++level) {
+        VkImageMemoryBarrier srcBarrier = pre;
+        srcBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        srcBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        srcBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        srcBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcBarrier.subresourceRange.baseMipLevel = level - 1;
+        srcBarrier.subresourceRange.levelCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &srcBarrier);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                m_depthMipPipeline->GetLayout(), 0, 1,
+                                &m_depthPyramidSets[i][level], 0, nullptr);
+        const uint32_t dstW = std::max(1U, extent.width >> level);
+        const uint32_t dstH = std::max(1U, extent.height >> level);
+        vkCmdDispatch(cmd, (dstW + 7) / 8, (dstH + 7) / 8, 1);
+    }
+
+    // Publish all mips to fragment-shader reads for downstream consumers
+    // (SSAO/SSIL). No-op today but keeps the barrier correct when RP.5
+    // lands — avoids a silent hazard.
+    VkImageMemoryBarrier post = pre;
+    post.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    post.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    post.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    post.subresourceRange.baseMipLevel = 0;
+    post.subresourceRange.levelCount = DEPTH_PYRAMID_MIPS;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &post);
+}
+
+void RenderLoop::CleanupDepthPyramidResources() {
+    VkDevice device = m_device.GetDevice();
+    for (size_t i = 0; i < m_depthPyramidImages.size(); ++i) {
+        for (auto& mipView : m_depthPyramidMipViews[i]) {
+            if (mipView != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, mipView, nullptr);
+                mipView = VK_NULL_HANDLE;
+            }
+        }
+        if (m_depthPyramidSampledViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_depthPyramidSampledViews[i], nullptr);
+        }
+        if (m_depthPyramidImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_depthPyramidImages[i],
+                            m_depthPyramidAllocations[i]);
+        }
+    }
+    m_depthPyramidImages.clear();
+    m_depthPyramidAllocations.clear();
+    m_depthPyramidSampledViews.clear();
+    m_depthPyramidMipViews.clear();
+}
+
+void RenderLoop::CleanupDepthPyramidDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_depthPyramidDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_depthPyramidDescriptorPool, nullptr);
+        m_depthPyramidDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_depthPyramidSets.clear();
+    if (m_depthPyramidSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_depthPyramidSetLayout, nullptr);
+        m_depthPyramidSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_depthPyramidSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_depthPyramidSampler, nullptr);
+        m_depthPyramidSampler = VK_NULL_HANDLE;
     }
 }
 

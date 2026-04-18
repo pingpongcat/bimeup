@@ -175,3 +175,47 @@ TEST_F(RenderLoopTest, NormalGBufferSurvivesSampleCountChange) {
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
 }
+
+// RP.4d — Linear depth + depth pyramid: a 4-mip R32_SFLOAT pyramid per swap
+// image, built by a compute pass between the main HDR pass and the tonemap
+// pass. MSAA path gates off for now (shader needs sampler2DMS; can be added
+// when SSAO starts sampling the pyramid).
+TEST_F(RenderLoopTest, DepthPyramidFormatIsR32Sfloat) {
+    EXPECT_EQ(RenderLoop::DEPTH_PYRAMID_FORMAT, VK_FORMAT_R32_SFLOAT);
+}
+
+TEST_F(RenderLoopTest, DepthPyramidMipCountIsFour) {
+    EXPECT_EQ(RenderLoop::DEPTH_PYRAMID_MIPS, 4u);
+}
+
+TEST_F(RenderLoopTest, DepthPyramidViewProvidedPerSwapImage) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    ASSERT_GT(imageCount, 0u);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE)
+            << "depth pyramid view missing for swap image " << i;
+    }
+}
+
+TEST_F(RenderLoopTest, DepthPyramidBuiltDuringFrame) {
+    // Exercises the full per-frame compute dispatch (linearize + 3 mip levels).
+    // Validation layers + sanitizers guard barrier/sync mistakes.
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetProjectionNearFar(0.1F, 100.0F);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, DepthPyramidSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    const uint32_t imageCount = m_swapchain->GetImageCount();
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE);
+    }
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
