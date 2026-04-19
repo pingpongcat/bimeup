@@ -45,6 +45,13 @@ struct RenderQualitySettings {
 
     int msaaSamples{1};          // R.2 — 1, 2, 4, 8
 
+    // Pre-ACES linear multiplier on composited HDR in `tonemap.frag`. The
+    // three-point lighting sum (ambient ~0.6 + key ~1.0 + fill ~0.45 + rim
+    // ~0.35) can push bright surfaces to ~2.5 in HDR space, which ACES
+    // tonemaps to near-white. 0.6 brings the mid-grey through the knee and
+    // leaves headroom for direct light without blowing out.
+    float exposure{0.6F};
+
     OutlineSettings outline{};
     SsilSettings ssil{};
     FxaaSettings fxaa{};

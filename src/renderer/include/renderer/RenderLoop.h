@@ -202,6 +202,15 @@ public:
     /// method forces the flag off in that mode regardless of `enabled`,
     /// matching the fog / SSAO / SSIL gating pattern.
     void SetBloomParams(float threshold, float intensity, bool enabled);
+
+    /// Pre-ACES exposure multiplier applied to the composited HDR colour
+    /// inside `tonemap.frag`. Default (from the push-constant ctor) is 1.0
+    /// — identity. The panel seeds a scene-appropriate value so the three-
+    /// point lighting (ambient + key + fill + rim can sum to ~2.x on a
+    /// bright surface) doesn't saturate the ACES curve into near-white.
+    /// Does not interact with MSAA — applied unconditionally each frame.
+    void SetExposure(float exposure);
+
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }

@@ -1548,6 +1548,11 @@ int main(int argc, char* argv[]) {
                                       bloomSettings.enabled);
         }
 
+        // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR
+        // space, so the tonemap needs a multiplier to keep direct-lit
+        // surfaces off the ACES curve shoulder. Panel default is 0.6.
+        renderLoop.SetExposure(renderQualityPanel->GetSettings().exposure);
+
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + key light direction, and (re)build the shadow map if resolution
         // or enabled-state changed.

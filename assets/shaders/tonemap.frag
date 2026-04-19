@@ -35,6 +35,7 @@ layout(push_constant) uniform PushConstants {
     float fogEnd;
     float bloomIntensity;
     float bloomEnabled;
+    float exposure;        // pre-ACES linear scale on composited HDR
 } pc;
 
 layout(location = 0) in vec2 inUv;
@@ -78,5 +79,5 @@ void main() {
         lit = mix(lit, pc.fogColorEnabled.rgb, factor);
     }
 
-    outColor = vec4(aces(lit), 1.0);
+    outColor = vec4(aces(lit * pc.exposure), 1.0);
 }

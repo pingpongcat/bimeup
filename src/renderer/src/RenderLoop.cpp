@@ -456,6 +456,10 @@ void RenderLoop::SetBloomParams(float threshold, float intensity, bool enabled) 
     m_tonemapPush.bloomEnabled = m_bloomEnabled ? 1.0F : 0.0F;
 }
 
+void RenderLoop::SetExposure(float exposure) {
+    m_tonemapPush.exposure = exposure;
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -1182,9 +1186,11 @@ void RenderLoop::UpdateTonemapDescriptors() {
         // Sampler reuses `m_depthPyramidSampler` (set up alongside the
         // pyramid itself); view is the full sampled chain, but
         // `tonemap.frag` only touches mip 0 since the fog factor is a
-        // direct linear-depth lookup.
+        // direct linear-depth lookup. Layout = GENERAL to match the
+        // actual pyramid state (SSAO/SSIL compute also bind it at
+        // GENERAL; BuildDepthPyramid leaves it in GENERAL).
         VkDescriptorImageInfo depthInfo{};
-        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         depthInfo.imageView = i < m_depthPyramidSampledViews.size()
                                   ? m_depthPyramidSampledViews[i]
                                   : VK_NULL_HANDLE;
@@ -1398,8 +1404,13 @@ void RenderLoop::CreateOutlineDescriptors() {
     // outline shader actually wants — higher mips are the SSAO downsamples).
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    // NEAREST on both axes — the outline pass's stencil binding is
+    // R8_UINT (sampled as `usampler2D`), and integer formats have no
+    // VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT support per
+    // spec. The shared depth-pyramid binding samples at integer pixel
+    // offsets for a 3×3 Sobel patch, so NEAREST is correct there too.
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -1479,8 +1490,13 @@ void RenderLoop::UpdateOutlineDescriptors() {
                                     : VK_NULL_HANDLE;
         stencilInfo.sampler = m_outlineSampler;
 
+        // Pyramid stays in GENERAL across the frame (SSAO/SSIL compute
+        // bind it at GENERAL) — BuildDepthPyramid leaves it there, so
+        // sampling in GENERAL is what the runtime actually sees. The
+        // image was created with USAGE_STORAGE so the matching rules
+        // allow the shader read at this layout.
         VkDescriptorImageInfo depthInfo{};
-        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         depthInfo.imageView = i < m_depthPyramidSampledViews.size()
                                   ? m_depthPyramidSampledViews[i]
                                   : VK_NULL_HANDLE;
@@ -1921,7 +1937,14 @@ void RenderLoop::CreateBloomResources() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // COLOR_ATTACHMENT for the down/up framebuffer writes; SAMPLED for
+        // the down/up shader reads + tonemap composite; TRANSFER_DST so
+        // ClearBloomChainToZero can vkCmdClearColorImage the chain on
+        // creation/resize before the first dispatch (otherwise tonemap
+        // would sample undefined contents until bloom is enabled).
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         VmaAllocationCreateInfo allocInfo{};
@@ -2568,9 +2591,15 @@ void RenderLoop::BuildDepthPyramid(VkCommandBuffer cmd) {
         vkCmdDispatch(cmd, (dstW + 7) / 8, (dstH + 7) / 8, 1);
     }
 
-    // Publish all mips to fragment-shader reads for downstream consumers
-    // (SSAO/SSIL). No-op today but keeps the barrier correct when RP.5
-    // lands — avoids a silent hazard.
+    // Publish all mips to downstream consumers (SSAO/SSIL compute,
+    // outline + tonemap-fog fragment). The chain stays in GENERAL
+    // because the SSAO/SSIL descriptors bind it at layout GENERAL; the
+    // outline + tonemap descriptors (see UpdateOutlineDescriptors +
+    // UpdateTonemapDescriptors) also bind it at GENERAL so fragment
+    // sampling in that layout is valid via the matching rules (the
+    // image was created with USAGE_STORAGE). Each frame's `pre` barrier
+    // is `oldLayout = UNDEFINED → GENERAL` so the prior layout is
+    // discarded before the next compute dispatch.
     VkImageMemoryBarrier post = pre;
     post.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -2579,7 +2608,8 @@ void RenderLoop::BuildDepthPyramid(VkCommandBuffer cmd) {
     post.subresourceRange.baseMipLevel = 0;
     post.subresourceRange.levelCount = DEPTH_PYRAMID_MIPS;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &post);
 }
 

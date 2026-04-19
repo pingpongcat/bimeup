@@ -158,6 +158,11 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.fillModeNonSolid = VK_TRUE;  // wireframe render mode
+    // Required because MRT-targeted pipelines (transparent, section-fill,
+    // disk-marker) use different blend states per attachment — colour
+    // attachment[0] blends, secondary normal/stencil attachments don't —
+    // and the spec requires this feature for non-uniform blend state.
+    deviceFeatures.independentBlend = VK_TRUE;
 
     std::array<const char*, 1> swapchainExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 

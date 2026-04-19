@@ -220,14 +220,14 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
         << "tonemap.frag SPIR-V missing expected binding 3 (depth pyramid)";
 }
 
-// RP.10c — the push-constant contract between tonemap.frag and the CPU
-// struct. `vec4 fogColorEnabled` at offset 0 + `float fogStart` at 16 +
-// `float fogEnd` at 20 + `float bloomIntensity` at 24 + `float bloomEnabled`
-// at 28 = 32 bytes total. A reorder that still totals 32 bytes would need
-// another guard but would not fail *this* test — that guard lives in
-// FieldOffsetsMatchShaderLayout below.
-TEST(TonemapPushConstantsTest, SizeIsThirtyTwoBytes) {
-    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 32U);
+// The push-constant contract between tonemap.frag and the CPU struct.
+// `vec4 fogColorEnabled` at offset 0 + `float fogStart` at 16 + `float
+// fogEnd` at 20 + `float bloomIntensity` at 24 + `float bloomEnabled` at
+// 28 + `float exposure` at 32 = 36 bytes total. A reorder that still
+// totals 36 bytes would need another guard but would not fail *this*
+// test — that guard lives in FieldOffsetsMatchShaderLayout below.
+TEST(TonemapPushConstantsTest, SizeIsThirtySixBytes) {
+    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 36U);
 }
 
 TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
@@ -236,6 +236,7 @@ TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogEnd), 20U);
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, bloomIntensity), 24U);
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, bloomEnabled), 28U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 32U);
 }
 
 // RP.10c — tonemap.frag's binding-4 sampler is the bloom pyramid mip 0
