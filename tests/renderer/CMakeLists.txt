@@ -37,8 +37,6 @@ add_executable(renderer_tests
     SsilMathTest.cpp
     SsilPipelineTest.cpp
     SsilBlurPipelineTest.cpp
-    FxaaMathTest.cpp
-    FxaaPipelineTest.cpp
     SmaaMathTest.cpp
     SmaaLutTest.cpp
     SmaaEdgePipelineTest.cpp

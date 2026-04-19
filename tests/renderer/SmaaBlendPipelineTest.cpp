@@ -136,13 +136,14 @@ TEST_F(SmaaBlendPipelineTest, DestructorCleansUp) {
     }
 }
 
-TEST(SmaaBlendPipelinePushConstants, SizeIsEightBytes) {
-    // vec2 rcpFrame = 8 bytes. Smallest push-constant block of the three
-    // SMAA passes — the blend pass needs nothing else from the CPU since
-    // the weights texture already encodes the dominant-axis decision.
-    EXPECT_EQ(sizeof(SmaaBlendPipeline::PushConstants), 8U);
+TEST(SmaaBlendPipelinePushConstants, SizeIsTwelveBytes) {
+    // vec2 rcpFrame (8) + float enabled (4) = 12 bytes. The `enabled` field
+    // gates the shader's passthrough branch so the RP.11c panel toggle can
+    // short-circuit without relying on a stale weights texture.
+    EXPECT_EQ(sizeof(SmaaBlendPipeline::PushConstants), 12U);
 }
 
 TEST(SmaaBlendPipelinePushConstants, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(SmaaBlendPipeline::PushConstants, rcpFrame), 0U);
+    EXPECT_EQ(offsetof(SmaaBlendPipeline::PushConstants, enabled), 8U);
 }

@@ -30,14 +30,15 @@ struct SsilSettings {
     float normalRejection{2.0F};
 };
 
-// RP.8c FXAA post-process knobs. The renderer runs the FXAA draw
+// RP.11c SMAA 1x post-process knobs. The renderer runs the blend draw
 // unconditionally (it's the only path from the LDR intermediate to the
-// swapchain); when `enabled` is false the draw becomes a cheap texture
-// copy. `quality` is 0 (LOW) or 1 (HIGH) and drives the sub-pixel blend
-// branch in `fxaa.frag`.
-struct FxaaSettings {
+// swapchain); when `enabled` is false the edge + weights passes are
+// skipped and the blend shader short-circuits to a passthrough via its
+// push-constant `enabled` flag, so disabling AA doesn't pay the 3-pass
+// cost or the stale-weights risk. No quality preset — SMAA 1x defaults
+// ship sharp (scope decision at RP.11 kickoff).
+struct SmaaSettings {
     bool enabled{true};
-    int quality{1};  // 0 = LOW, 1 = HIGH
 };
 
 struct RenderQualitySettings {
@@ -54,7 +55,7 @@ struct RenderQualitySettings {
 
     OutlineSettings outline{};
     SsilSettings ssil{};
-    FxaaSettings fxaa{};
+    SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     renderer::FogSettings fog{};      // RP.9b
     renderer::BloomSettings bloom{};  // RP.10c
 };

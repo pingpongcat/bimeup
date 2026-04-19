@@ -21,6 +21,11 @@ layout(set = 0, binding = 1) uniform sampler2D blendTex;
 
 layout(push_constant) uniform Push {
     vec2 rcpFrame;  // (1/width, 1/height)
+    // RP.11c — SMAA enable/disable. When 0, the pass short-circuits to a
+    // passthrough of the LDR input before the weights sample so a stale
+    // weights buffer (from a previously-enabled frame) can't introduce
+    // blending on a frame the user has toggled AA off for.
+    float enabled;
 } pc;
 
 layout(location = 0) in vec2 inUv;
@@ -28,6 +33,11 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     vec2 texcoord = inUv;
+
+    if (pc.enabled < 0.5) {
+        outColor = textureLod(colorTex, texcoord, 0.0);
+        return;
+    }
 
     // HLSL: offset = mad(SMAA_RT_METRICS.xyxy, vec4(1,0,0,1), texcoord.xyxy)
     //   → offset.xy = texcoord + (rcpFrame.x, 0)  — right neighbour

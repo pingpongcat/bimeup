@@ -36,8 +36,6 @@ add_library(bimeup_renderer STATIC
     src/SsilMath.cpp
     src/SsilPipeline.cpp
     src/SsilBlurPipeline.cpp
-    src/FxaaMath.cpp
-    src/FxaaPipeline.cpp
     src/SmaaMath.cpp
     src/SmaaLut.cpp
     src/SmaaEdgePipeline.cpp

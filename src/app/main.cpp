@@ -1520,12 +1520,15 @@ int main(int argc, char* argv[]) {
             renderLoop.SetOutlineParams(outlinePush, outlineSettings.enabled);
         }
 
-        // RP.8c — FXAA enable + quality preset. The draw runs every frame
-        // regardless of `enabled`; the flag just flips push constants so the
-        // shader's early-exit fires on every pixel when AA is off.
+        // RP.11c — SMAA enable. The blend draw runs every frame (it's the
+        // only path from the LDR intermediate to the swapchain); when
+        // `enabled` is false the renderer skips the edge + weights passes
+        // and the blend shader's push-constant gate short-circuits to a
+        // passthrough, so the cost drops from 3 draws to 1 and stale
+        // weights can't leak into the output.
         {
-            const auto& fxaaSettings = renderQualityPanel->GetSettings().fxaa;
-            renderLoop.SetFxaaParams(fxaaSettings.enabled, fxaaSettings.quality);
+            const auto& smaaSettings = renderQualityPanel->GetSettings().smaa;
+            renderLoop.SetSmaaParams(smaaSettings.enabled);
         }
 
         // RP.9b — push fog colour + [start,end] range into the tonemap

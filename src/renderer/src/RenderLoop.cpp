@@ -3,9 +3,9 @@
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
-#include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
 #include <renderer/Shader.h>
+#include <renderer/SmaaLut.h>
 #include <renderer/SsaoBlurPipeline.h>
 #include <renderer/SsaoKernel.h>
 #include <renderer/SsaoPipeline.h>
@@ -64,9 +64,13 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateOutlineDescriptors();
     CreateOutlinePipeline();
     UpdateOutlineDescriptors();
-    CreateFxaaDescriptors();
-    CreateFxaaPipeline();
-    UpdateFxaaDescriptors();
+    CreateSmaaRenderPass();
+    CreateSmaaLuts();
+    CreateSmaaDescriptors();
+    CreateSmaaPipelines();
+    CreateSmaaResources();
+    UpdateSmaaDescriptors();
+    ClearSmaaChainToZero();
     CreateBloomRenderPass();
     CreateBloomDescriptors();
     CreateBloomPipelines();
@@ -173,8 +177,8 @@ bool RenderLoop::EndFrame() {
     RunBloom(cmd);
 
     // Post pass — tonemap + outline, writes to the per-swap LDR intermediate.
-    // Its final layout is SHADER_READ_ONLY_OPTIMAL so the FXAA pass samples
-    // it in the following present pass without a manual barrier.
+    // Its final layout is SHADER_READ_ONLY_OPTIMAL so the SMAA edge pass
+    // (and later the blend pass) samples it without a manual barrier.
     VkRenderPassBeginInfo postInfo{};
     postInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     postInfo.renderPass = m_postRenderPass;
@@ -225,49 +229,47 @@ bool RenderLoop::EndFrame() {
 
     vkCmdEndRenderPass(cmd);
 
-    // Present pass — FXAA reads the LDR intermediate and writes the swapchain,
-    // then the registered in-present callback draws UI (ImGui) on top of the
-    // anti-aliased image. Disabling FXAA from the panel pushes constants
-    // that trip the shader's early-exit on every pixel, effectively turning
-    // the draw into a single sample + write (cheap texture copy).
+    // RP.11c — SMAA edge + weights passes before the present pass begins,
+    // gated by `m_smaaEnabled`. Each writes a per-swap RGBA8 target via the
+    // shared SMAA render pass; final layouts are SHADER_READ_ONLY_OPTIMAL
+    // so the blend pass inside the present pass samples the weights
+    // without a manual barrier. When disabled the passes are skipped and
+    // the blend shader's push-constant gate short-circuits to a
+    // passthrough of the LDR input.
+    if (m_smaaEnabled) {
+        RunSmaaEdgeAndWeights(cmd);
+    }
+
+    // Present pass — SMAA blend reads the LDR intermediate + weights and
+    // writes the swapchain, then the registered in-present callback draws
+    // UI (ImGui) on top of the anti-aliased image. Disabling SMAA from the
+    // panel clears the blend push-constant `enabled` field; the shader's
+    // early-exit returns the LDR sample unchanged (single sample + write,
+    // cheap texture copy).
     VkRenderPassBeginInfo presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     presentInfo.renderPass = m_presentRenderPass;
     presentInfo.framebuffer = m_presentFramebuffers[m_currentImageIndex];
     presentInfo.renderArea.offset = {0, 0};
     presentInfo.renderArea.extent = extent;
-    presentInfo.clearValueCount = 0;  // FXAA fullscreen-tri covers every pixel
+    presentInfo.clearValueCount = 0;  // SMAA blend fullscreen-tri covers every pixel
 
     vkCmdBeginRenderPass(cmd, &presentInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    FxaaPipeline::PushConstants fxaaPush{};
-    fxaaPush.rcpFrame = glm::vec2(1.0F / static_cast<float>(extent.width),
-                                  1.0F / static_cast<float>(extent.height));
-    if (m_fxaaEnabled) {
-        // FXAA 3.11 "HIGH" defaults; HIGH also turns on the sub-pixel blend.
-        fxaaPush.subpixel = m_fxaaQuality >= 1 ? 0.75F : 0.5F;
-        fxaaPush.edgeThreshold = m_fxaaQuality >= 1 ? 0.166F : 0.25F;
-        fxaaPush.edgeThresholdMin = m_fxaaQuality >= 1 ? 0.0625F : 0.0833F;
-        fxaaPush.quality = m_fxaaQuality;
-    } else {
-        // Force the shader's early-exit on every pixel. `edgeThresholdMin = 1.0`
-        // exceeds the maximum possible luma range (0..1) so the gate is never
-        // crossed — the draw becomes a pure texture copy from LDR to swapchain.
-        fxaaPush.subpixel = 0.0F;
-        fxaaPush.edgeThreshold = 1.0F;
-        fxaaPush.edgeThresholdMin = 1.0F;
-        fxaaPush.quality = 0;
-    }
-    m_fxaaPipeline->Bind(cmd);
+    SmaaBlendPipeline::PushConstants blendPush{};
+    blendPush.rcpFrame = glm::vec2(1.0F / static_cast<float>(extent.width),
+                                   1.0F / static_cast<float>(extent.height));
+    blendPush.enabled = m_smaaEnabled ? 1.0F : 0.0F;
+    m_smaaBlendPipeline->Bind(cmd);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_fxaaPipeline->GetLayout(), 0, 1,
-                            &m_fxaaDescriptorSets[m_currentImageIndex], 0, nullptr);
-    vkCmdPushConstants(cmd, m_fxaaPipeline->GetLayout(),
+                            m_smaaBlendPipeline->GetLayout(), 0, 1,
+                            &m_smaaBlendDescriptorSets[m_currentImageIndex], 0, nullptr);
+    vkCmdPushConstants(cmd, m_smaaBlendPipeline->GetLayout(),
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(FxaaPipeline::PushConstants), &fxaaPush);
+                       sizeof(SmaaBlendPipeline::PushConstants), &blendPush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     if (m_inPresentPass) {
@@ -425,9 +427,8 @@ void RenderLoop::SetOutlineParams(const OutlinePipeline::PushConstants& push, bo
     m_outlineEnabled = enabled;
 }
 
-void RenderLoop::SetFxaaParams(bool enabled, int quality) {
-    m_fxaaEnabled = enabled;
-    m_fxaaQuality = quality;
+void RenderLoop::SetSmaaParams(bool enabled) {
+    m_smaaEnabled = enabled;
 }
 
 void RenderLoop::SetFogParams(const glm::vec3& color, float start, float end,
@@ -485,17 +486,19 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateSsaoResources();
     CreateSsilResources();
     CreateBloomResources();
+    CreateSmaaResources();
     CreateTonemapPipeline();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
     UpdateSsilDescriptors();
     UpdateBloomDescriptors();
+    UpdateSmaaDescriptors();
     ClearAoImagesToWhite();
     ClearSsilTargetsToZero();
     ClearBloomChainToZero();
+    ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
-    UpdateFxaaDescriptors();     // LDR intermediate views were rebuilt
     // MSAA gates bloom off — force-clear the enable flag so a frame cycled
     // between SetSampleCount calls without a SetBloomParams refresh can't
     // leave tonemap.frag sampling an un-dispatched (undefined) chain.
@@ -519,16 +522,18 @@ void RenderLoop::RecreateForSwapchain() {
     CreateSsaoResources();
     CreateSsilResources();
     CreateBloomResources();
+    CreateSmaaResources();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
     UpdateSsilDescriptors();
     UpdateBloomDescriptors();
+    UpdateSmaaDescriptors();
     ClearAoImagesToWhite();
     ClearSsilTargetsToZero();
     ClearBloomChainToZero();
+    ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();
-    UpdateFxaaDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -1045,7 +1050,7 @@ void RenderLoop::CreateFramebuffers() {
         }
 
         // Post framebuffer — single LDR intermediate colour attachment
-        // (sampled by the FXAA pass in the swapchain present pass).
+        // (sampled by the SMAA edge + blend passes).
         VkFramebufferCreateInfo postFb{};
         postFb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         postFb.renderPass = m_postRenderPass;
@@ -1060,7 +1065,7 @@ void RenderLoop::CreateFramebuffers() {
             throw std::runtime_error("Failed to create post framebuffer");
         }
 
-        // Present framebuffer — single swapchain colour attachment (FXAA + UI).
+        // Present framebuffer — single swapchain colour attachment (SMAA blend + UI).
         VkFramebufferCreateInfo presentFb{};
         presentFb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         presentFb.renderPass = m_presentRenderPass;
@@ -1260,6 +1265,7 @@ void RenderLoop::UpdateTonemapDescriptors() {
 void RenderLoop::CleanupFrameResources() {
     VkDevice device = m_device.GetDevice();
 
+    CleanupSmaaResources();
     CleanupBloomResources();
     CleanupSsilResources();
     CleanupSsaoResources();
@@ -1546,8 +1552,8 @@ void RenderLoop::CreatePostRenderPass() {
     // Render-pass-compatible with `m_presentRenderPass`: same format (swap),
     // same sample count (1), single colour attachment, no depth. The only
     // operational difference is the final layout — here the image transitions
-    // to SHADER_READ_ONLY_OPTIMAL so the FXAA pass can sample it in the
-    // following render pass without a manual barrier. Tonemap + outline
+    // to SHADER_READ_ONLY_OPTIMAL so the SMAA edge / blend passes can
+    // sample it without a manual barrier. Tonemap + outline
     // pipelines (built against `m_presentRenderPass`) bind here unchanged
     // per Vulkan render-pass compatibility rules.
     VkAttachmentDescription color{};
@@ -1642,11 +1648,240 @@ void RenderLoop::CreateLdrResources() {
     }
 }
 
-void RenderLoop::CreateFxaaDescriptors() {
-    // Linear sampler — FXAA samples the LDR intermediate at sub-pixel offsets,
-    // so linear filtering keeps the neighbour taps from aliasing the same
-    // texel back. CLAMP_TO_EDGE prevents the edge-search taps from sampling
-    // wrap-around data at the screen borders.
+void RenderLoop::CreateSmaaRenderPass() {
+    // Shared RGBA8 render pass for the SMAA edge + weights draws. Each
+    // pass binds its own framebuffer pointing at a per-swap single-mip
+    // RGBA8 view; attachment contents are CLEAR-then-STORE and transition
+    // to SHADER_READ_ONLY_OPTIMAL on end so the downstream pass samples
+    // the freshly written target without a manual barrier.
+    VkAttachmentDescription color{};
+    color.format = VK_FORMAT_R8G8B8A8_UNORM;
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    // Two deps: (a) prior pass's colour write (the post pass's LDR
+    // intermediate, or the edge pass's result before weights reads it)
+    // must be visible to the current pass's fragment shader; (b) our
+    // colour write must be visible to the subsequent pass's shader read.
+    std::array<VkSubpassDependency, 2> deps{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[0].dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &color;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = static_cast<uint32_t>(deps.size());
+    rpInfo.pDependencies = deps.data();
+
+    if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_smaaRenderPass) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SMAA render pass");
+    }
+}
+
+namespace {
+
+struct SmaaLutUploadJob {
+    VkImage image;
+    VkImageView view;
+    VmaAllocation allocation;
+};
+
+SmaaLutUploadJob CreateAndUploadSmaaLut(const Device& device, VkCommandPool cmdPool,
+                                        VkQueue queue, VkFormat format, uint32_t width,
+                                        uint32_t height, const unsigned char* data,
+                                        std::size_t sizeBytes) {
+    SmaaLutUploadJob out{};
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {width, height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+    if (vmaCreateImage(device.GetAllocator(), &imageInfo, &allocInfo, &out.image,
+                       &out.allocation, nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SMAA LUT image");
+    }
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = out.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(device.GetDevice(), &viewInfo, nullptr, &out.view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SMAA LUT view");
+    }
+
+    // Staging buffer — HOST_VISIBLE + TRANSFER_SRC. VMA_MEMORY_USAGE_AUTO
+    // with HOST_ACCESS_SEQUENTIAL_WRITE_BIT lets VMA pick the right memory
+    // type (usually HOST_VISIBLE + HOST_COHERENT).
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = sizeBytes;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo stagingAlloc{};
+    stagingAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+    stagingAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VmaAllocation stagingMem = VK_NULL_HANDLE;
+    VmaAllocationInfo stagingInfo{};
+    if (vmaCreateBuffer(device.GetAllocator(), &bufInfo, &stagingAlloc, &stagingBuf,
+                        &stagingMem, &stagingInfo) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SMAA LUT staging buffer");
+    }
+    std::memcpy(stagingInfo.pMappedData, data, sizeBytes);
+
+    VkCommandBufferAllocateInfo cmdAlloc{};
+    cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmdAlloc.commandPool = cmdPool;
+    cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device.GetDevice(), &cmdAlloc, &cmd) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SMAA LUT upload cmd buffer");
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toTransfer{};
+    toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toTransfer.srcAccessMask = 0;
+    toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toTransfer.image = out.image;
+    toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toTransfer.subresourceRange.baseMipLevel = 0;
+    toTransfer.subresourceRange.levelCount = 1;
+    toTransfer.subresourceRange.baseArrayLayer = 0;
+    toTransfer.subresourceRange.layerCount = 1;
+    toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &toTransfer);
+
+    VkBufferImageCopy copy{};
+    copy.bufferOffset = 0;
+    copy.bufferRowLength = 0;
+    copy.bufferImageHeight = 0;
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.mipLevel = 0;
+    copy.imageSubresource.baseArrayLayer = 0;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cmd, stagingBuf, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &copy);
+
+    VkImageMemoryBarrier toShader{};
+    toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toShader.image = out.image;
+    toShader.subresourceRange = toTransfer.subresourceRange;
+    toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &toShader);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device.GetDevice(), cmdPool, 1, &cmd);
+    vmaDestroyBuffer(device.GetAllocator(), stagingBuf, stagingMem);
+
+    return out;
+}
+
+}  // namespace
+
+void RenderLoop::CreateSmaaLuts() {
+    // AreaTex (160×560 RG8) + SearchTex (64×16 R8) from the vendored
+    // `iryoku/smaa` submodule via `renderer::SmaaAreaTex::Data()` /
+    // `SmaaSearchTex::Data()`. Both upload once per RenderLoop, sampled by
+    // `smaa_weights.frag` bindings 1 + 2 through the shared linear
+    // CLAMP_TO_EDGE sampler created in `CreateSmaaDescriptors`.
+    auto area = CreateAndUploadSmaaLut(
+        m_device, m_commandPool, m_device.GetGraphicsQueue(),
+        VK_FORMAT_R8G8_UNORM, static_cast<uint32_t>(SmaaAreaTex::kWidth),
+        static_cast<uint32_t>(SmaaAreaTex::kHeight), SmaaAreaTex::Data(),
+        SmaaAreaTex::kSizeBytes);
+    m_smaaAreaImage = area.image;
+    m_smaaAreaImageView = area.view;
+    m_smaaAreaAllocation = area.allocation;
+
+    auto search = CreateAndUploadSmaaLut(
+        m_device, m_commandPool, m_device.GetGraphicsQueue(),
+        VK_FORMAT_R8_UNORM, static_cast<uint32_t>(SmaaSearchTex::kWidth),
+        static_cast<uint32_t>(SmaaSearchTex::kHeight), SmaaSearchTex::Data(),
+        SmaaSearchTex::kSizeBytes);
+    m_smaaSearchImage = search.image;
+    m_smaaSearchImageView = search.view;
+    m_smaaSearchAllocation = search.allocation;
+}
+
+void RenderLoop::CreateSmaaDescriptors() {
+    // Shared linear sampler with CLAMP_TO_EDGE, maxLod = 0. Used by all
+    // three SMAA passes for the LDR input + edges + weights + LUTs — the
+    // SMAA algorithm relies on linear filtering (especially for the
+    // bilinear-sampling blend trick in `smaa_blend.frag`).
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -1657,101 +1892,500 @@ void RenderLoop::CreateFxaaDescriptors() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.minLod = 0.0F;
     samplerInfo.maxLod = 0.0F;
-    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_fxaaSampler) !=
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_smaaSampler) !=
         VK_SUCCESS) {
-        throw std::runtime_error("Failed to create FXAA sampler");
+        throw std::runtime_error("Failed to create SMAA sampler");
     }
 
-    // Single CIS binding: LDR input colour. Matches `fxaa.frag` set 0/binding 0.
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    auto makeLayout = [&](uint32_t bindingCount, VkDescriptorSetLayout* out) {
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+        for (uint32_t i = 0; i < bindingCount; ++i) {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = bindingCount;
+        layoutInfo.pBindings = bindings.data();
+        if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr, out) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SMAA descriptor set layout");
+        }
+    };
 
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
-                                    &m_fxaaSetLayout) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create FXAA descriptor set layout");
-    }
+    // Edge = 1 binding (LDR input). Weights = 3 bindings (edges + AreaTex + SearchTex).
+    // Blend = 2 bindings (LDR input + weights).
+    makeLayout(1, &m_smaaEdgeSetLayout);
+    makeLayout(3, &m_smaaWeightsSetLayout);
+    makeLayout(2, &m_smaaBlendSetLayout);
 
+    // Pool sized for per-swap set allocation: edges (1 CIS) + weights (3 CIS) + blend (2 CIS)
+    // = 6 CIS per swap image.
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount;
+    poolSize.descriptorCount = imageCount * 6;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = imageCount;
+    poolInfo.maxSets = imageCount * 3;  // edge + weights + blend set per image
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
-                               &m_fxaaDescriptorPool) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create FXAA descriptor pool");
+                               &m_smaaDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SMAA descriptor pool");
     }
 
-    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_fxaaSetLayout);
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_fxaaDescriptorPool;
-    allocInfo.descriptorSetCount = imageCount;
-    allocInfo.pSetLayouts = layouts.data();
-    m_fxaaDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
-    if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo,
-                                 m_fxaaDescriptorSets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate FXAA descriptor sets");
+    auto allocSets = [&](VkDescriptorSetLayout layout,
+                         std::vector<VkDescriptorSet>& sets) {
+        std::vector<VkDescriptorSetLayout> layouts(imageCount, layout);
+        sets.assign(imageCount, VK_NULL_HANDLE);
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_smaaDescriptorPool;
+        allocInfo.descriptorSetCount = imageCount;
+        allocInfo.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo, sets.data()) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate SMAA descriptor sets");
+        }
+    };
+    allocSets(m_smaaEdgeSetLayout, m_smaaEdgeDescriptorSets);
+    allocSets(m_smaaWeightsSetLayout, m_smaaWeightsDescriptorSets);
+    allocSets(m_smaaBlendSetLayout, m_smaaBlendDescriptorSets);
+}
+
+void RenderLoop::CreateSmaaPipelines() {
+    m_smaaVertShader = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
+                                                m_shaderDir + "/smaa.vert.spv");
+    m_smaaEdgeFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
+                                                    m_shaderDir + "/smaa_edge.frag.spv");
+    m_smaaWeightsFragShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Fragment, m_shaderDir + "/smaa_weights.frag.spv");
+    m_smaaBlendFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
+                                                     m_shaderDir + "/smaa_blend.frag.spv");
+    // Edge + weights pipelines target the shared SMAA render pass; blend
+    // pipeline targets the present pass (same shape as FXAA did).
+    m_smaaEdgePipeline = std::make_unique<SmaaEdgePipeline>(
+        m_device, *m_smaaVertShader, *m_smaaEdgeFragShader, m_smaaRenderPass,
+        m_smaaEdgeSetLayout, VK_SAMPLE_COUNT_1_BIT);
+    m_smaaWeightsPipeline = std::make_unique<SmaaWeightsPipeline>(
+        m_device, *m_smaaVertShader, *m_smaaWeightsFragShader, m_smaaRenderPass,
+        m_smaaWeightsSetLayout, VK_SAMPLE_COUNT_1_BIT);
+    m_smaaBlendPipeline = std::make_unique<SmaaBlendPipeline>(
+        m_device, *m_smaaVertShader, *m_smaaBlendFragShader, m_presentRenderPass,
+        m_smaaBlendSetLayout, VK_SAMPLE_COUNT_1_BIT);
+}
+
+void RenderLoop::CreateSmaaResources() {
+    VkExtent2D extent = m_swapchain.GetExtent();
+    uint32_t imageCount = m_swapchain.GetImageCount();
+
+    m_smaaEdgesImages.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaEdgesImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaEdgesAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaEdgesFramebuffers.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaWeightsImages.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaWeightsImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaWeightsAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_smaaWeightsFramebuffers.assign(imageCount, VK_NULL_HANDLE);
+
+    auto makeTarget = [&](VkImage& image, VkImageView& view, VmaAllocation& alloc,
+                          VkFramebuffer& fb) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        imageInfo.extent = {extent.width, extent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // TRANSFER_DST so ClearSmaaChainToZero can clear the weights
+        // target at creation / resize (ensures blend reads deterministic
+        // zero until the first enabled frame lands a real weights map).
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo, &image, &alloc,
+                           nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SMAA intermediate image");
+        }
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SMAA intermediate view");
+        }
+
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_smaaRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &view;
+        fbInfo.width = extent.width;
+        fbInfo.height = extent.height;
+        fbInfo.layers = 1;
+        if (vkCreateFramebuffer(m_device.GetDevice(), &fbInfo, nullptr, &fb) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SMAA framebuffer");
+        }
+    };
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        makeTarget(m_smaaEdgesImages[i], m_smaaEdgesImageViews[i],
+                   m_smaaEdgesAllocations[i], m_smaaEdgesFramebuffers[i]);
+        makeTarget(m_smaaWeightsImages[i], m_smaaWeightsImageViews[i],
+                   m_smaaWeightsAllocations[i], m_smaaWeightsFramebuffers[i]);
     }
 }
 
-void RenderLoop::CreateFxaaPipeline() {
-    m_fxaaVertShader = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
-                                                m_shaderDir + "/fxaa.vert.spv");
-    m_fxaaFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
-                                                m_shaderDir + "/fxaa.frag.spv");
-    m_fxaaPipeline = std::make_unique<FxaaPipeline>(
-        m_device, *m_fxaaVertShader, *m_fxaaFragShader, m_presentRenderPass,
-        m_fxaaSetLayout, VK_SAMPLE_COUNT_1_BIT);
-}
-
-void RenderLoop::UpdateFxaaDescriptors() {
-    for (uint32_t i = 0; i < m_fxaaDescriptorSets.size(); ++i) {
-        VkDescriptorImageInfo ldrInfo{};
-        ldrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ldrInfo.imageView = i < m_ldrImageViews.size() ? m_ldrImageViews[i] : VK_NULL_HANDLE;
-        ldrInfo.sampler = m_fxaaSampler;
-
-        if (ldrInfo.imageView == VK_NULL_HANDLE) {
+void RenderLoop::UpdateSmaaDescriptors() {
+    // Binding plan:
+    //   edge set   [0] ← LDR intermediate (SHADER_READ_ONLY_OPTIMAL)
+    //   weights set[0] ← edges target      (SHADER_READ_ONLY_OPTIMAL)
+    //                [1] ← AreaTex LUT     (SHADER_READ_ONLY_OPTIMAL)
+    //                [2] ← SearchTex LUT   (SHADER_READ_ONLY_OPTIMAL)
+    //   blend set  [0] ← LDR intermediate
+    //              [1] ← weights target    (SHADER_READ_ONLY_OPTIMAL)
+    // LUTs are bound from the per-RenderLoop images so they're the same
+    // across all swap slots.
+    for (uint32_t i = 0; i < m_smaaEdgeDescriptorSets.size(); ++i) {
+        if (i >= m_ldrImageViews.size() || m_ldrImageViews[i] == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (i >= m_smaaEdgesImageViews.size() ||
+            m_smaaEdgesImageViews[i] == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (i >= m_smaaWeightsImageViews.size() ||
+            m_smaaWeightsImageViews[i] == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (m_smaaAreaImageView == VK_NULL_HANDLE ||
+            m_smaaSearchImageView == VK_NULL_HANDLE) {
             continue;
         }
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_fxaaDescriptorSets[i];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &ldrInfo;
-        vkUpdateDescriptorSets(m_device.GetDevice(), 1, &write, 0, nullptr);
+        VkDescriptorImageInfo ldrInfo{};
+        ldrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ldrInfo.imageView = m_ldrImageViews[i];
+        ldrInfo.sampler = m_smaaSampler;
+
+        VkDescriptorImageInfo edgesInfo{};
+        edgesInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        edgesInfo.imageView = m_smaaEdgesImageViews[i];
+        edgesInfo.sampler = m_smaaSampler;
+
+        VkDescriptorImageInfo weightsInfo{};
+        weightsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        weightsInfo.imageView = m_smaaWeightsImageViews[i];
+        weightsInfo.sampler = m_smaaSampler;
+
+        VkDescriptorImageInfo areaInfo{};
+        areaInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        areaInfo.imageView = m_smaaAreaImageView;
+        areaInfo.sampler = m_smaaSampler;
+
+        VkDescriptorImageInfo searchInfo{};
+        searchInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        searchInfo.imageView = m_smaaSearchImageView;
+        searchInfo.sampler = m_smaaSampler;
+
+        std::array<VkWriteDescriptorSet, 6> writes{};
+
+        // Edge set — 1 write.
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_smaaEdgeDescriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &ldrInfo;
+
+        // Weights set — 3 writes.
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_smaaWeightsDescriptorSets[i];
+        writes[1].dstBinding = 0;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &edgesInfo;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_smaaWeightsDescriptorSets[i];
+        writes[2].dstBinding = 1;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].pImageInfo = &areaInfo;
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = m_smaaWeightsDescriptorSets[i];
+        writes[3].dstBinding = 2;
+        writes[3].descriptorCount = 1;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].pImageInfo = &searchInfo;
+
+        // Blend set — 2 writes.
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = m_smaaBlendDescriptorSets[i];
+        writes[4].dstBinding = 0;
+        writes[4].descriptorCount = 1;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].pImageInfo = &ldrInfo;
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = m_smaaBlendDescriptorSets[i];
+        writes[5].dstBinding = 1;
+        writes[5].descriptorCount = 1;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].pImageInfo = &weightsInfo;
+
+        vkUpdateDescriptorSets(m_device.GetDevice(), static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
     }
 }
 
-void RenderLoop::CleanupFxaaDescriptors() {
+void RenderLoop::ClearSmaaChainToZero() {
+    // Transition edges + weights images from UNDEFINED to
+    // SHADER_READ_ONLY_OPTIMAL (matching the SMAA render pass's initial
+    // layout and the descriptor writes above) via a TRANSFER_DST clear
+    // to zero. Runs at creation and on MSAA / swapchain resize so the
+    // first blend sample of a disabled-SMAA frame reads deterministic
+    // zeros (the blend shader short-circuits via the push-constant gate
+    // anyway, but this keeps the weights texture in a known layout +
+    // contents state between toggles).
+    if (m_smaaEdgesImages.empty() && m_smaaWeightsImages.empty()) {
+        return;
+    }
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(m_device.GetDevice(), &allocInfo, &cmd) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SMAA-clear command buffer");
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkClearColorValue zero{};
+    auto clearOne = [&](VkImage image) {
+        if (image == VK_NULL_HANDLE) {
+            return;
+        }
+        VkImageMemoryBarrier toTransfer{};
+        toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toTransfer.srcAccessMask = 0;
+        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toTransfer.image = image;
+        toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        toTransfer.subresourceRange.baseMipLevel = 0;
+        toTransfer.subresourceRange.levelCount = 1;
+        toTransfer.subresourceRange.baseArrayLayer = 0;
+        toTransfer.subresourceRange.layerCount = 1;
+        toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &toTransfer);
+
+        VkImageSubresourceRange range = toTransfer.subresourceRange;
+        vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1,
+                             &range);
+
+        VkImageMemoryBarrier toShader{};
+        toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toShader.image = image;
+        toShader.subresourceRange = range;
+        toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &toShader);
+    };
+
+    for (VkImage img : m_smaaEdgesImages) {
+        clearOne(img);
+    }
+    for (VkImage img : m_smaaWeightsImages) {
+        clearOne(img);
+    }
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_device.GetGraphicsQueue());
+    vkFreeCommandBuffers(m_device.GetDevice(), m_commandPool, 1, &cmd);
+}
+
+void RenderLoop::RunSmaaEdgeAndWeights(VkCommandBuffer cmd) {
+    const uint32_t i = m_currentImageIndex;
+    if (i >= m_smaaEdgesFramebuffers.size() || i >= m_smaaWeightsFramebuffers.size()) {
+        return;
+    }
+    VkExtent2D extent = m_swapchain.GetExtent();
+
+    auto runPass = [&](VkFramebuffer fb, VkDescriptorSet set, VkPipeline pipeline,
+                       VkPipelineLayout layout, const void* pushData, size_t pushSize) {
+        VkRenderPassBeginInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpInfo.renderPass = m_smaaRenderPass;
+        rpInfo.framebuffer = fb;
+        rpInfo.renderArea.offset = {0, 0};
+        rpInfo.renderArea.extent = extent;
+        VkClearValue clear{};
+        clear.color = VkClearColorValue{{0.0F, 0.0F, 0.0F, 0.0F}};
+        rpInfo.clearValueCount = 1;
+        rpInfo.pClearValues = &clear;
+
+        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{};
+        viewport.x = 0.0F;
+        viewport.y = 0.0F;
+        viewport.width = static_cast<float>(extent.width);
+        viewport.height = static_cast<float>(extent.height);
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0,
+                                nullptr);
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           static_cast<uint32_t>(pushSize), pushData);
+
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+    };
+
+    SmaaEdgePipeline::PushConstants edgePush{};
+    edgePush.rcpFrame = glm::vec2(1.0F / static_cast<float>(extent.width),
+                                  1.0F / static_cast<float>(extent.height));
+    edgePush.threshold = 0.1F;
+    edgePush.localContrastFactor = 2.0F;
+    runPass(m_smaaEdgesFramebuffers[i], m_smaaEdgeDescriptorSets[i],
+            m_smaaEdgePipeline->GetPipeline(), m_smaaEdgePipeline->GetLayout(), &edgePush,
+            sizeof(edgePush));
+
+    SmaaWeightsPipeline::PushConstants weightsPush{};
+    weightsPush.subsampleIndices = glm::vec4(0.0F);
+    weightsPush.rcpFrame = edgePush.rcpFrame;
+    runPass(m_smaaWeightsFramebuffers[i], m_smaaWeightsDescriptorSets[i],
+            m_smaaWeightsPipeline->GetPipeline(), m_smaaWeightsPipeline->GetLayout(),
+            &weightsPush, sizeof(weightsPush));
+}
+
+void RenderLoop::CleanupSmaaResources() {
     VkDevice device = m_device.GetDevice();
-    if (m_fxaaDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_fxaaDescriptorPool, nullptr);
-        m_fxaaDescriptorPool = VK_NULL_HANDLE;
+    for (size_t i = 0; i < m_smaaEdgesImages.size(); ++i) {
+        if (m_smaaEdgesFramebuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, m_smaaEdgesFramebuffers[i], nullptr);
+        }
+        if (m_smaaEdgesImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_smaaEdgesImageViews[i], nullptr);
+        }
+        if (m_smaaEdgesImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_smaaEdgesImages[i],
+                            m_smaaEdgesAllocations[i]);
+        }
     }
-    m_fxaaDescriptorSets.clear();
-    if (m_fxaaSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_fxaaSetLayout, nullptr);
-        m_fxaaSetLayout = VK_NULL_HANDLE;
+    for (size_t i = 0; i < m_smaaWeightsImages.size(); ++i) {
+        if (m_smaaWeightsFramebuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, m_smaaWeightsFramebuffers[i], nullptr);
+        }
+        if (m_smaaWeightsImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_smaaWeightsImageViews[i], nullptr);
+        }
+        if (m_smaaWeightsImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_smaaWeightsImages[i],
+                            m_smaaWeightsAllocations[i]);
+        }
     }
-    if (m_fxaaSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(device, m_fxaaSampler, nullptr);
-        m_fxaaSampler = VK_NULL_HANDLE;
+    m_smaaEdgesImages.clear();
+    m_smaaEdgesImageViews.clear();
+    m_smaaEdgesAllocations.clear();
+    m_smaaEdgesFramebuffers.clear();
+    m_smaaWeightsImages.clear();
+    m_smaaWeightsImageViews.clear();
+    m_smaaWeightsAllocations.clear();
+    m_smaaWeightsFramebuffers.clear();
+}
+
+void RenderLoop::CleanupSmaaLuts() {
+    VkDevice device = m_device.GetDevice();
+    if (m_smaaAreaImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_smaaAreaImageView, nullptr);
+        m_smaaAreaImageView = VK_NULL_HANDLE;
+    }
+    if (m_smaaAreaImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_smaaAreaImage, m_smaaAreaAllocation);
+        m_smaaAreaImage = VK_NULL_HANDLE;
+        m_smaaAreaAllocation = VK_NULL_HANDLE;
+    }
+    if (m_smaaSearchImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_smaaSearchImageView, nullptr);
+        m_smaaSearchImageView = VK_NULL_HANDLE;
+    }
+    if (m_smaaSearchImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_smaaSearchImage, m_smaaSearchAllocation);
+        m_smaaSearchImage = VK_NULL_HANDLE;
+        m_smaaSearchAllocation = VK_NULL_HANDLE;
+    }
+}
+
+void RenderLoop::CleanupSmaaDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_smaaDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_smaaDescriptorPool, nullptr);
+        m_smaaDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_smaaEdgeDescriptorSets.clear();
+    m_smaaWeightsDescriptorSets.clear();
+    m_smaaBlendDescriptorSets.clear();
+    if (m_smaaEdgeSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_smaaEdgeSetLayout, nullptr);
+        m_smaaEdgeSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_smaaWeightsSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_smaaWeightsSetLayout, nullptr);
+        m_smaaWeightsSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_smaaBlendSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_smaaBlendSetLayout, nullptr);
+        m_smaaBlendSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_smaaSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_smaaSampler, nullptr);
+        m_smaaSampler = VK_NULL_HANDLE;
     }
 }
 
@@ -2272,9 +2906,13 @@ void RenderLoop::Cleanup() {
     m_outlinePipeline.reset();
     m_outlineVertShader.reset();
     m_outlineFragShader.reset();
-    m_fxaaPipeline.reset();
-    m_fxaaVertShader.reset();
-    m_fxaaFragShader.reset();
+    m_smaaEdgePipeline.reset();
+    m_smaaWeightsPipeline.reset();
+    m_smaaBlendPipeline.reset();
+    m_smaaVertShader.reset();
+    m_smaaEdgeFragShader.reset();
+    m_smaaWeightsFragShader.reset();
+    m_smaaBlendFragShader.reset();
     m_bloomDownPipeline.reset();
     m_bloomUpPipeline.reset();
     m_bloomVertShader.reset();
@@ -2287,7 +2925,8 @@ void RenderLoop::Cleanup() {
     CleanupSsaoDescriptors();
     CleanupSsilDescriptors();
     CleanupOutlineDescriptors();
-    CleanupFxaaDescriptors();
+    CleanupSmaaLuts();
+    CleanupSmaaDescriptors();
     CleanupBloomDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
@@ -2302,6 +2941,10 @@ void RenderLoop::Cleanup() {
     if (m_bloomRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_bloomRenderPass, nullptr);
         m_bloomRenderPass = VK_NULL_HANDLE;
+    }
+    if (m_smaaRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_smaaRenderPass, nullptr);
+        m_smaaRenderPass = VK_NULL_HANDLE;
     }
 
     for (VkSemaphore sem : m_renderFinishedSemaphores) {

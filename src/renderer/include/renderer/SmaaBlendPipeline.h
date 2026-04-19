@@ -24,10 +24,14 @@ class Shader;
 class SmaaBlendPipeline {
 public:
     // Push-constant layout matches the `push_constant` block in
-    // `smaa_blend.frag` — only `rcpFrame` since the weights texture
-    // already encodes everything else the blend pass needs. 8 bytes.
+    // `smaa_blend.frag`. 12 bytes: `rcpFrame` + a float `enabled` gate
+    // (RP.11c) that short-circuits the shader to passthrough when SMAA is
+    // toggled off by the panel — the edge + weights passes skip entirely
+    // on that frame, and this flag stops the blend pass from multiplying
+    // through stale weights.
     struct PushConstants {
-        glm::vec2 rcpFrame;  // (1/width, 1/height)
+        glm::vec2 rcpFrame;  // @ 0 — (1/width, 1/height)
+        float enabled;       // @ 8 — 1.0 → run SMAA, 0.0 → passthrough LDR
     };
 
     SmaaBlendPipeline(const Device& device,

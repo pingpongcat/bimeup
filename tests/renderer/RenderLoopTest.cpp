@@ -395,49 +395,54 @@ TEST_F(RenderLoopTest, OutlineSurvivesSampleCountChange) {
     m_renderLoop->WaitIdle();
 }
 
-// RP.8c — FxaaPipeline + its descriptor set are owned by RenderLoop and
-// recorded in the present pass as the final LDR-intermediate → swapchain
-// step. Unlike the outline pass, FXAA runs unconditionally: the `enabled`
-// flag just flips push constants so the shader's early-exit fires on every
-// pixel, turning the draw into a cheap sample-and-copy. The MSAA path still
-// works because FXAA samples a single-sample LDR intermediate regardless of
-// the scene-pass sample count.
-TEST_F(RenderLoopTest, FxaaDrawnDuringFrame) {
+// RP.11c — SMAA 3-pass chain replaces FXAA. Edge + weights passes render
+// into per-swap RGBA8 intermediates via a shared SMAA render pass; the
+// blend pass writes the final AA'd LDR pixel into the swapchain inside the
+// existing present pass. The edge/weights intermediates plus the vendored
+// AreaTex + SearchTex LUTs are owned by RenderLoop; ImGui still draws on
+// top of the blend result in the in-present callback.
+TEST_F(RenderLoopTest, SmaaAppliedDuringFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetFxaaParams(/*enabled=*/true, /*quality=*/1);
-    // Exercises the full post → present pass split: tonemap + outline into the
-    // LDR intermediate, then FXAA samples it and writes the swapchain, under
-    // Vulkan validation.
+    m_renderLoop->SetSmaaParams(/*enabled=*/true);
+    // Full frame under Vulkan validation with SMAA enabled — exercises the
+    // 3-pass chain (edge → weights → blend), the shared LUT bindings in
+    // `smaa_weights.frag` (AreaTex + SearchTex), and the descriptor
+    // updates that tie edges/weights views to the per-swap targets.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
 }
 
-TEST_F(RenderLoopTest, FxaaDisabledStillCyclesFrame) {
+TEST_F(RenderLoopTest, SmaaDisabledStillCyclesFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetFxaaParams(/*enabled=*/false, /*quality=*/0);
-    // Guards the always-on FXAA draw: even when `enabled=false` the pipeline
-    // still binds and dispatches — push constants force the shader's
-    // early-exit so every pixel just samples + writes the LDR input. A
-    // regression that gated the draw off entirely would leave the swapchain
-    // image undefined and trip validation on the present submit.
+    m_renderLoop->SetSmaaParams(/*enabled=*/false);
+    // Disabled path — edge + weights passes are skipped but the blend pass
+    // still runs in the present pass as a passthrough (push-constant
+    // `enabled` flag short-circuits before the weights sample in
+    // `smaa_blend.frag`). A regression that gated the blend draw off
+    // entirely would leave the swapchain image undefined and trip
+    // validation on present; a regression that left the shader sampling
+    // stale weights would still work here but the flag's unit-level
+    // contract is pinned by `SmaaBlendPipelinePushConstants`.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
 }
 
-TEST_F(RenderLoopTest, FxaaSurvivesSampleCountChange) {
+TEST_F(RenderLoopTest, SmaaSurvivesSampleCountChange) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    m_renderLoop->SetFxaaParams(/*enabled=*/true, /*quality=*/1);
-    // MSAA path: the scene pass goes multisampled, resolves to the HDR
-    // target, tonemap still writes to the single-sample LDR intermediate,
-    // and FXAA runs at 1× sample as usual. Exercises the LDR / post-pass /
-    // present-pass rebuild alongside the existing MSAA rebuild chain.
+    m_renderLoop->SetSmaaParams(/*enabled=*/true);
+    // MSAA path: the scene pass resolves to a single-sample HDR target,
+    // tonemap writes the single-sample LDR intermediate, and SMAA runs at
+    // 1× sample throughout (LDR is always 1-sample regardless of scene
+    // MSAA, same as FXAA before). Exercises the SMAA per-swap rebuild
+    // alongside the existing MSAA rebuild chain + guards against a
+    // regression that wired SMAA intermediates to the scene sample count.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

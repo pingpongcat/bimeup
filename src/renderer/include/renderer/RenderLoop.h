@@ -2,8 +2,10 @@
 
 #include <renderer/BloomDownPipeline.h>
 #include <renderer/BloomUpPipeline.h>
-#include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
+#include <renderer/SmaaBlendPipeline.h>
+#include <renderer/SmaaEdgePipeline.h>
+#include <renderer/SmaaWeightsPipeline.h>
 #include <renderer/TonemapPipeline.h>
 
 #include <vulkan/vulkan.h>
@@ -173,13 +175,14 @@ public:
     /// updates per-frame so resize lands cleanly.
     void SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled);
 
-    /// RP.8c — FXAA post-process parameters. When `enabled` is false the FXAA
-    /// pass still runs (it's the only path from the LDR intermediate to the
-    /// swapchain) but push constants are set so the shader's early-exit
-    /// predicate fires on every pixel — effectively a texture copy at the
-    /// cost of a single sample + write. `quality` is 0 (LOW) or 1 (HIGH) and
-    /// drives the sub-pixel blend path in `fxaa.frag`.
-    void SetFxaaParams(bool enabled, int quality);
+    /// RP.11c — SMAA 1x post-process enable. The blend draw is the only
+    /// path from the LDR intermediate to the swapchain, so it runs every
+    /// frame; when `enabled` is false the edge + weights passes are
+    /// skipped and the blend shader's push-constant gate short-circuits
+    /// to a passthrough via `smaa_blend.frag`'s early-return branch —
+    /// 3 draws → 1 draw and stale weights can't influence the output.
+    /// LDR intermediate is always 1-sample so SMAA needs no MSAA gate.
+    void SetSmaaParams(bool enabled);
 
     /// RP.9b — linear distance fog parameters pushed into `tonemap.frag` via
     /// the tonemap pipeline's push constants. When `enabled` is false the
@@ -271,10 +274,17 @@ private:
     void CleanupOutlineDescriptors();
     void CreatePostRenderPass();
     void CreateLdrResources();
-    void CreateFxaaDescriptors();
-    void CreateFxaaPipeline();
-    void UpdateFxaaDescriptors();
-    void CleanupFxaaDescriptors();
+    void CreateSmaaRenderPass();
+    void CreateSmaaLuts();
+    void CreateSmaaDescriptors();
+    void CreateSmaaPipelines();
+    void CreateSmaaResources();
+    void UpdateSmaaDescriptors();
+    void ClearSmaaChainToZero();
+    void RunSmaaEdgeAndWeights(VkCommandBuffer cmd);
+    void CleanupSmaaResources();
+    void CleanupSmaaLuts();
+    void CleanupSmaaDescriptors();
     void CreateBloomRenderPass();
     void CreateBloomDescriptors();
     void CreateBloomPipelines();
@@ -306,11 +316,13 @@ private:
 
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
     // "Post" pass runs tonemap + outline into a per-swap-image LDR intermediate
-    // target (RP.8c). The intermediate is then sampled by the FXAA pipeline in
-    // `m_presentRenderPass`, which writes the swapchain. `m_postRenderPass` is
-    // render-pass-compatible with `m_presentRenderPass` (same swapchain format,
-    // same sample count, same attachment layout) so tonemap + outline pipelines
-    // built against the present pass bind to the post pass without rebuild.
+    // target (RP.8c / RP.11c). The intermediate is then sampled by the SMAA
+    // edge pass (writing the edges target) and by the SMAA blend pass in
+    // `m_presentRenderPass` which writes the swapchain. `m_postRenderPass`
+    // is render-pass-compatible with `m_presentRenderPass` (same swapchain
+    // format, same sample count, same attachment layout) so tonemap +
+    // outline pipelines built against the present pass bind to the post
+    // pass without rebuild.
     VkRenderPass m_postRenderPass = VK_NULL_HANDLE;
     VkRenderPass m_presentRenderPass = VK_NULL_HANDLE;
     VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
@@ -351,11 +363,12 @@ private:
     std::vector<VkFramebuffer> m_framebuffers;
     std::vector<VkFramebuffer> m_postFramebuffers;
     std::vector<VkFramebuffer> m_presentFramebuffers;
-    // Per-swap-image LDR intermediate target (RP.8c). Format matches the
-    // swapchain so the FXAA pass can sample it and write the final swapchain
-    // image through a compatible pipeline layout. Usage = COLOR_ATTACHMENT |
-    // SAMPLED; final layout after the post pass is SHADER_READ_ONLY_OPTIMAL
-    // so FXAA samples it without a manual barrier.
+    // Per-swap-image LDR intermediate target (RP.8c / RP.11c). Format
+    // matches the swapchain so the SMAA blend pass can sample it and write
+    // the final swapchain image through a compatible pipeline layout.
+    // Usage = COLOR_ATTACHMENT | SAMPLED; final layout after the post pass
+    // is SHADER_READ_ONLY_OPTIMAL so both the SMAA edge pass and the blend
+    // pass sample it without a manual barrier.
     std::vector<VkImage> m_ldrImages;
     std::vector<VkImageView> m_ldrImageViews;
     std::vector<VmaAllocation> m_ldrAllocations;
@@ -489,21 +502,77 @@ private:
     OutlinePipeline::PushConstants m_outlinePush{};
     bool m_outlineEnabled = false;
 
-    // FXAA post-process (RP.8c). Samples the per-swap LDR intermediate written
-    // by the post pass, writes the anti-aliased LDR image to the swapchain
-    // inside `m_presentRenderPass`. Pipeline is bound unconditionally each
-    // frame — the `m_fxaaEnabled` flag just flips push constants so the
-    // shader's early-exit hits on every pixel, effectively making the draw a
-    // cheap texture copy. `m_fxaaQuality` is 0 (LOW) or 1 (HIGH).
-    std::unique_ptr<Shader> m_fxaaVertShader;
-    std::unique_ptr<Shader> m_fxaaFragShader;
-    std::unique_ptr<FxaaPipeline> m_fxaaPipeline;
-    VkSampler m_fxaaSampler = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_fxaaSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_fxaaDescriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_fxaaDescriptorSets;
-    bool m_fxaaEnabled = true;
-    int m_fxaaQuality = 1;
+    // SMAA 1x post-process (RP.11c). 3-pass chain replacing RP.8c FXAA:
+    //   1. edge pass — samples the LDR intermediate, writes an RGBA8 edges
+    //      target (per-swap); driven by `m_smaaEdgePipeline`.
+    //   2. weights pass — samples edges + the vendored AreaTex/SearchTex
+    //      LUTs, writes an RGBA8 weights target; `m_smaaWeightsPipeline`.
+    //   3. blend pass — samples the LDR intermediate + weights, writes the
+    //      swapchain inside `m_presentRenderPass`; `m_smaaBlendPipeline`.
+    // The blend draw is always bound each frame (it's the only path from
+    // LDR to the swapchain). When `m_smaaEnabled` is false, the edge +
+    // weights passes are skipped entirely and the blend shader's
+    // push-constant gate (`enabled` at offset 8) short-circuits before
+    // the weights sample. LDR is always 1-sample, so SMAA runs under MSAA
+    // without a gate (unlike bloom / fog / outline).
+    //
+    // The AreaTex (160×560 RG8) + SearchTex (64×16 R8) LUTs live for the
+    // RenderLoop's lifetime — uploaded once in `CreateSmaaLuts` from the
+    // vendored byte arrays in `renderer::SmaaAreaTex::Data()` +
+    // `renderer::SmaaSearchTex::Data()` (RP.11b.1). The per-swap edges +
+    // weights images / framebuffers / descriptor sets rebuild on MSAA
+    // change or swapchain resize alongside the HDR / LDR chains.
+    std::unique_ptr<Shader> m_smaaVertShader;
+    std::unique_ptr<Shader> m_smaaEdgeFragShader;
+    std::unique_ptr<Shader> m_smaaWeightsFragShader;
+    std::unique_ptr<Shader> m_smaaBlendFragShader;
+    std::unique_ptr<SmaaEdgePipeline> m_smaaEdgePipeline;
+    std::unique_ptr<SmaaWeightsPipeline> m_smaaWeightsPipeline;
+    std::unique_ptr<SmaaBlendPipeline> m_smaaBlendPipeline;
+
+    // Shared RGBA8 render pass for the edge + weights draws. Attachments
+    // use LOAD_OP_CLEAR + STORE_OP_STORE; initial layout UNDEFINED, final
+    // layout SHADER_READ_ONLY_OPTIMAL so the downstream pass samples the
+    // result without a manual barrier. Framebuffers switch targets per
+    // pass.
+    VkRenderPass m_smaaRenderPass = VK_NULL_HANDLE;
+    VkSampler m_smaaSampler = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout m_smaaEdgeSetLayout = VK_NULL_HANDLE;    // 1× CIS
+    VkDescriptorSetLayout m_smaaWeightsSetLayout = VK_NULL_HANDLE; // 3× CIS
+    VkDescriptorSetLayout m_smaaBlendSetLayout = VK_NULL_HANDLE;   // 2× CIS
+    VkDescriptorPool m_smaaDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_smaaEdgeDescriptorSets;
+    std::vector<VkDescriptorSet> m_smaaWeightsDescriptorSets;
+    std::vector<VkDescriptorSet> m_smaaBlendDescriptorSets;
+
+    // Per-swap 2-channel edges target (RGBA8 image; shader only writes
+    // R/G via `vec2 outEdges`, but the shared render pass's single
+    // attachment format keeps both passes pipeline-compatible).
+    std::vector<VkImage> m_smaaEdgesImages;
+    std::vector<VkImageView> m_smaaEdgesImageViews;
+    std::vector<VmaAllocation> m_smaaEdgesAllocations;
+    std::vector<VkFramebuffer> m_smaaEdgesFramebuffers;
+
+    // Per-swap 4-channel weights target (RGBA8). Sampled by both the
+    // weights pass (read-back isn't needed here; only blend reads it) and
+    // the blend pass (reads all four channels per SMAA's packed layout).
+    std::vector<VkImage> m_smaaWeightsImages;
+    std::vector<VkImageView> m_smaaWeightsImageViews;
+    std::vector<VmaAllocation> m_smaaWeightsAllocations;
+    std::vector<VkFramebuffer> m_smaaWeightsFramebuffers;
+
+    // SMAA LUTs — uploaded once, sampled by `smaa_weights.frag` bindings
+    // 1 + 2. Both are R8-per-channel, linear-filtered, CLAMP_TO_EDGE via
+    // the shared `m_smaaSampler`.
+    VkImage m_smaaAreaImage = VK_NULL_HANDLE;
+    VkImageView m_smaaAreaImageView = VK_NULL_HANDLE;
+    VmaAllocation m_smaaAreaAllocation = VK_NULL_HANDLE;
+    VkImage m_smaaSearchImage = VK_NULL_HANDLE;
+    VkImageView m_smaaSearchImageView = VK_NULL_HANDLE;
+    VmaAllocation m_smaaSearchAllocation = VK_NULL_HANDLE;
+
+    bool m_smaaEnabled = true;
 
     // RP.9b / RP.10c — shared tonemap push-constant state fed into
     // `tonemap.frag` each frame. `SetFogParams` updates the fog fields and

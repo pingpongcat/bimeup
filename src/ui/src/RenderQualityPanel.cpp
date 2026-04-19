@@ -116,20 +116,9 @@ void RenderQualityPanel::OnDraw() {
         ImGui::EndDisabled();
     }
 
-    if (ImGui::CollapsingHeader("FXAA")) {
-        auto& fxaa = m_settings.fxaa;
-        ImGui::Checkbox("Enabled", &fxaa.enabled);
-        ImGui::BeginDisabled(!fxaa.enabled);
-        ImGui::TextUnformatted("Quality");
-        ImGui::SameLine();
-        if (ImGui::RadioButton("LOW", fxaa.quality == 0)) {
-            fxaa.quality = 0;
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("HIGH", fxaa.quality == 1)) {
-            fxaa.quality = 1;
-        }
-        ImGui::EndDisabled();
+    if (ImGui::CollapsingHeader("SMAA")) {
+        auto& smaa = m_settings.smaa;
+        ImGui::Checkbox("Enabled", &smaa.enabled);
     }
 
     if (ImGui::CollapsingHeader("Fog")) {
