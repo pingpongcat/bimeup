@@ -41,6 +41,7 @@ add_library(bimeup_renderer STATIC
     src/SmaaMath.cpp
     src/SmaaLut.cpp
     src/SmaaEdgePipeline.cpp
+    src/SmaaWeightsPipeline.cpp
     src/FogMath.cpp
     src/BloomMath.cpp
     src/BloomDownPipeline.cpp

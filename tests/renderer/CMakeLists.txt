@@ -42,6 +42,7 @@ add_executable(renderer_tests
     SmaaMathTest.cpp
     SmaaLutTest.cpp
     SmaaEdgePipelineTest.cpp
+    SmaaWeightsPipelineTest.cpp
     FogMathTest.cpp
     BloomMathTest.cpp
     BloomDownPipelineTest.cpp
