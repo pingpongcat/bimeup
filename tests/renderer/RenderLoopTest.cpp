@@ -219,11 +219,12 @@ TEST_F(RenderLoopTest, NormalGBufferImageViewsProvidedPerSwapImage) {
     }
 }
 
-// RP.6c — MRT outline stencil G-buffer: the main render pass has a third
-// R8_UINT colour attachment per swap image (0 = background, 1 = selected,
-// 2 = hovered). Sampled by the RP.6b outline fragment shader. Layout mirrors
-// the normal G-buffer — per-swap-image single-sample target (RP.14.1.a
-// retired the transient MSAA sibling along with the rest of the MSAA path).
+// RP.6c → RP.15.b — MRT transparency stencil G-buffer: the main render
+// pass has a third R8_UINT colour attachment per swap image; bit 2 (value
+// 4) marks transparent surfaces (RP.12b), other bits unused. Sampled by
+// `ssao_xegtao.comp` as the transparency gate. Layout mirrors the normal
+// G-buffer — per-swap-image single-sample target (RP.14.1.a retired the
+// transient MSAA sibling along with the rest of the MSAA path).
 TEST_F(RenderLoopTest, StencilFormatIsR8Uint) {
     EXPECT_EQ(RenderLoop::STENCIL_FORMAT, VK_FORMAT_R8_UINT);
 }
@@ -238,21 +239,20 @@ TEST_F(RenderLoopTest, StencilGBufferImageViewsProvidedPerSwapImage) {
     }
 }
 
-// RP.12b — bit 4 = "transparent surface" rides alongside the base category
-// in the stencil G-buffer, so values become {0, 1, 2, 4, 5, 6}. R8_UINT
-// trivially holds that range, but pin the contract so a future format
-// downgrade (e.g. to a packed format that drops the high bits) trips this
-// test rather than silently breaking glass-vs-outline detection.
+// RP.12b (slimmed in RP.15.b) — bit 2 (value 4) = "transparent surface" is
+// the only live bit in the stencil G-buffer post-outline-retirement; the
+// only values are {0, 4}. R8_UINT trivially holds that, but pin the
+// contract so a future format downgrade trips this test rather than
+// silently breaking the XeGTAO transparency gate.
 //
-// Limits of this test: it does NOT exercise the basic.frag push (4 → 8 byte
-// range) or the main.cpp transparent-pipeline `transparentBit = 4` push —
-// those are caught by Vulkan validation layers on any draw and by visual
-// smoke testing of glass-on-selection. The CPU mirror semantics are pinned
-// by `OutlineEdgeTest.EdgeFromStencil*Glass*`.
+// Limits of this test: it does NOT exercise the basic.frag push or the
+// main.cpp transparent-pipeline `transparentBit = 4` push — those are
+// caught by Vulkan validation layers on any draw and by visual smoke
+// testing of glass rendering.
 TEST_F(RenderLoopTest, StencilFormatHoldsTransparentBit) {
     EXPECT_EQ(RenderLoop::STENCIL_FORMAT, VK_FORMAT_R8_UINT);
-    static_assert(0x6U <= 0xFFU,
-                  "RP.12b stencil range {0,1,2,4,5,6} must fit in R8");
+    static_assert(0x4U <= 0xFFU,
+                  "RP.15.b stencil range {0, 4} must fit in R8");
 }
 
 // RP.4d — Linear depth + depth pyramid: a 4-mip R32_SFLOAT pyramid per swap

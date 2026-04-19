@@ -35,7 +35,7 @@ protected:
         //   binding 1: view-space normal G-buffer  (combined-image-sampler)
         //   binding 2: XeGtaoUbo { proj, invProj } (uniform buffer — no kernel[])
         //   binding 3: R8 half-res AO target       (storage image)
-        //   binding 4: outline stencil G-buffer    (combined-image-sampler, RP.12d)
+        //   binding 4: transparency stencil G-buffer (combined-image-sampler, RP.12d)
         s_layout = std::make_unique<DescriptorSetLayout>(
             *s_device,
             std::vector<LayoutBinding>{

@@ -122,7 +122,7 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
         b.colorWriteMask = suppress ? 0U : kFullWriteMask;
         // Blending is only meaningful for the colour attachment[0]. The MRT
         // main pass binds attachment[1] = R16G16_SNORM normal G-buffer and
-        // attachment[2] = R8_UINT outline stencil id — neither is a colour
+        // attachment[2] = R8_UINT transparency stencil — neither is a colour
         // target and R8_UINT lacks COLOR_ATTACHMENT_BLEND_BIT entirely.
         // Force blendEnable off on every secondary attachment regardless of
         // alphaBlendEnable / additiveBlend so the transparent pipeline

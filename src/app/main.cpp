@@ -438,34 +438,32 @@ int main(int argc, char* argv[]) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.6d / RP.12b fragment-stage push range at offset 64: `{uint stencilId,
-    // uint transparentBit}` (8 bytes). Per draw the loop pushes the per-mesh
-    // category (0/1/2) and the per-pipeline transparent flag (0 for opaque,
-    // 4 for the transparent pipeline) — basic.frag OR's them into the stencil
-    // G-buffer so the outline / SSAO / SSIL passes can detect glass without
-    // losing the underlying selection.
-    VkPushConstantRange stencilPushRange{};
-    stencilPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stencilPushRange.offset = 64;
-    stencilPushRange.size = sizeof(uint32_t) * 2;
+    // RP.12b fragment-stage push range at offset 64: `uint transparentBit`
+    // (4 bytes) — 0 for the opaque pipeline, 4 for the transparent pipeline.
+    // basic.frag writes it into the R8_UINT stencil G-buffer so XeGTAO can
+    // treat glass as transparent instead of AO-occluding.
+    VkPushConstantRange transparentBitPushRange{};
+    transparentBitPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    transparentBitPushRange.offset = 64;
+    transparentBitPushRange.size = sizeof(uint32_t);
 
     bimeup::renderer::PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderLoop.GetRenderPass();
     pipelineConfig.vertexBindings = {binding};
     pipelineConfig.vertexAttributes = {attrs.begin(), attrs.end()};
     pipelineConfig.descriptorSetLayouts = {dsLayout.GetLayout()};
-    pipelineConfig.pushConstantRanges = {pushRange, stencilPushRange};
+    pipelineConfig.pushConstantRanges = {pushRange, transparentBitPushRange};
     pipelineConfig.depthTestEnable = true;
     pipelineConfig.depthWriteEnable = true;
     // Double-sided rendering so clip-plane-exposed interior faces are visible.
     pipelineConfig.cullMode = VK_CULL_MODE_NONE;
 
     // Main render pass is MRT (scene HDR + R16G16_SNORM normal G-buffer +
-    // R8_UINT outline stencil G-buffer). All scene pipelines must therefore
-    // have `colorAttachmentCount = 3`. `basic.frag` writes all three outputs
-    // (colour, oct-packed normal, stencil id — the last one is 0u until RP.6d
-    // plumbs selection state), so `disableSecondaryColorWrites` is OFF for
-    // the shaded/wireframe/transparent pipelines. Overlay pipelines
+    // R8_UINT transparency stencil G-buffer). All scene pipelines must
+    // therefore have `colorAttachmentCount = 3`. `basic.frag` writes all
+    // three outputs (colour, oct-packed normal, transparency bit — 0 for
+    // opaque, 4 for transparent), so `disableSecondaryColorWrites` is OFF
+    // for the shaded/wireframe/transparent pipelines. Overlay pipelines
     // (section-fill, disk-marker) still mask attachments 1 and 2 so they
     // don't stomp the normal + stencil clear values.
     auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
@@ -586,20 +584,11 @@ int main(int argc, char* argv[]) {
     // every mesh's triangle owners on each click.
     std::unordered_map<bimeup::scene::NodeId, std::vector<uint32_t>> nodeVertexIndices;
     std::unordered_map<uint32_t, std::vector<bimeup::scene::NodeId>> expressIdToNodes;
-    // RP.6d outline-pass support: per draw call we need to map `MeshHandle` to
-    // the union of express ids whose nodes use that handle, so the per-draw
-    // `outStencilId` push can resolve to selected (1) / hovered (2) / 0.
-    // CollectDrawCalls dedupes by handle, so handle-level granularity is
-    // exactly the granularity at which the outline pass resolves an outline.
-    std::unordered_map<bimeup::renderer::MeshHandle, std::vector<uint32_t>> handleToExpressIds;
     for (size_t i = 0; i < sceneResult->scene.GetNodeCount(); ++i) {
         auto nodeId = static_cast<bimeup::scene::NodeId>(i);
         const auto& node = sceneResult->scene.GetNode(nodeId);
         if (node.expressId != 0) {
             expressIdToNodes[node.expressId].push_back(nodeId);
-            if (node.mesh.has_value()) {
-                handleToExpressIds[*node.mesh].push_back(node.expressId);
-            }
         }
         if (!node.mesh.has_value()) continue;
         auto it = nodeToSceneMeshIdx.find(nodeId);
@@ -628,33 +617,6 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-
-    // RP.6d hover cache: ElementHovered fires every mouse-move with an
-    // optional expressId (nullopt on miss). Cached here so each frame's draw
-    // loop can resolve the per-handle outline stencil id without re-raycasting.
-    std::optional<uint32_t> hoveredExpressId;
-    auto hoveredSubscription = eventBus.Subscribe<bimeup::core::ElementHovered>(
-        [&](const bimeup::core::ElementHovered& e) { hoveredExpressId = e.expressId; });
-
-    // Per-draw stencil id for the outline pass — resolved against the
-    // dedupe-by-handle draw list. Returns 2 (hovered) when any node sharing
-    // this handle is hovered, 1 (selected) when any sharing node is selected,
-    // 0 otherwise. Hover beats selected so a cursor over an already-selected
-    // element renders the hover colour; matches the `EdgeFromStencil` rule
-    // baked into outline.frag.
-    auto resolveStencilId = [&](bimeup::renderer::MeshHandle handle) -> uint32_t {
-        auto it = handleToExpressIds.find(handle);
-        if (it == handleToExpressIds.end()) return 0U;
-        if (hoveredExpressId.has_value()) {
-            for (auto id : it->second) {
-                if (id == *hoveredExpressId) return 2U;
-            }
-        }
-        for (auto id : it->second) {
-            if (selection.Contains(id)) return 1U;
-        }
-        return 0U;
-    };
 
     constexpr glm::vec4 kHighlightColor(1.0F, 0.85F, 0.2F, 1.0F);
     selection.SetOnChanged([&] {
@@ -1581,10 +1543,10 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                uint32_t stencilPush[2] = {resolveStencilId(handle), 0U};
+                uint32_t transparentBit = 0U;
                 vkCmdPushConstants(cmd, opaquePipeline.GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilPush),
-                                   stencilPush);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(transparentBit),
+                                   &transparentBit);
                 meshBuffer.Draw(cmd, handle);
             }
         }
@@ -1644,12 +1606,12 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
                                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
-                // RP.12b: transparent pipeline OR's bit 4 into the stencil
-                // G-buffer so SSAO / SSIL / outline can detect glass.
-                uint32_t stencilPush[2] = {resolveStencilId(handle), 0x4U};
+                // RP.12b: transparent pipeline writes bit 2 into the stencil
+                // G-buffer so XeGTAO can treat glass as transparent.
+                uint32_t transparentBit = 0x4U;
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilPush),
-                                   stencilPush);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(transparentBit),
+                                   &transparentBit);
                 meshBuffer.Draw(cmd, handle);
             }
         }

@@ -14,8 +14,8 @@
 //   set 0 / binding 1 : view-space normal G-buffer (oct-packed, sampler2D)
 //   set 0 / binding 2 : XeGtaoUbo — proj + invProj only (no hemisphere kernel)
 //   set 0 / binding 3 : half-res R8 AO output (writeonly storage image)
-//   set 0 / binding 4 : outline stencil G-buffer (R8_UINT usampler2D) —
-//                       RP.12d transparency gate; bit 4 = transparent surface.
+//   set 0 / binding 4 : transparency stencil G-buffer (R8_UINT usampler2D) —
+//                       RP.12d gate; bit 4 = transparent surface.
 //
 // Push constants: radius, falloff, intensity, shadowPower (see
 // `SsaoXeGtaoPipeline::PushConstants`). Adaptive-base temporal refinement

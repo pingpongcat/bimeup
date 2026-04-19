@@ -81,7 +81,7 @@ TEST_F(BasicShaderTest, ShadowVertexShaderCompiledToValidSpirv) {
 
 // RP.3d contract: basic.frag must write both colour (location 0) and the
 // oct-packed view-space normal G-buffer (location 1) so the main render pass's
-// second MRT attachment gets populated for SSAO/SSIL/outlines.
+// second MRT attachment gets populated for SSAO.
 TEST_F(BasicShaderTest, FragmentShaderDeclaresNormalOutputAtLocation1) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -131,12 +131,12 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresNormalOutputAtLocation1) {
     }
     EXPECT_TRUE(hasLoc0) << "basic.frag missing colour output at location 0";
     EXPECT_TRUE(hasLoc1) << "basic.frag missing oct-packed normal output at location 1";
-    // RP.6c contract: basic.frag emits a third output — the outline-stencil id
-    // (R8_UINT, 0/1/2 for background/selected/hovered). Selection wiring
-    // arrives in RP.6d; for now the shader writes 0u unconditionally so the
-    // MRT attachment gets the expected value. Kept in the same shader-output
-    // test so an accidental `out` removal fails one test, not three.
-    EXPECT_TRUE(hasLoc2) << "basic.frag missing outline-stencil output at location 2";
+    // RP.6c (slimmed in RP.15.b) contract: basic.frag emits a third output
+    // — the transparency stencil bit (R8_UINT, 0 for opaque / 4 for
+    // transparent per the RP.12b transparentBit push). Kept in the same
+    // shader-output test so an accidental `out` removal fails one test,
+    // not three.
+    EXPECT_TRUE(hasLoc2) << "basic.frag missing transparency-stencil output at location 2";
 }
 
 TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
@@ -150,16 +150,16 @@ TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     EXPECT_STREQ(info.pName, "main");
 }
 
-// RP.6d contract: basic.frag declares a fragment-stage push constant block
-// containing a single 32-bit unsigned int member (`stencilId`) at byte offset
-// 64 — the byte after the 64-byte vertex-stage model matrix push range. Walk
-// the SPIR-V module: find the OpVariable in the PushConstant storage class,
-// follow its OpTypePointer → OpTypeStruct, assert the struct has exactly one
-// member, that member is a 32-bit OpTypeInt with signedness=0, and an
-// OpMemberDecorate Offset=64 is attached at member index 0. A regression
-// (block removed, member renamed away from a uint, offset drifted) fails
-// before the runtime hits the validation layer.
-TEST_F(BasicShaderTest, FragmentShaderDeclaresStencilIdPushConstant) {
+// RP.15.b contract: basic.frag declares a fragment-stage push constant block
+// containing exactly one 32-bit unsigned int member (`transparentBit`) at
+// byte offset 64 — the byte after the 64-byte vertex-stage model matrix push
+// range. Walk the SPIR-V module: find the OpVariable in the PushConstant
+// storage class, follow its OpTypePointer → OpTypeStruct, assert the struct
+// has exactly one member, that member is a 32-bit OpTypeInt with
+// signedness=0, and an OpMemberDecorate Offset=64 is attached at member
+// index 0. The "exactly one member" clause catches a resurrection of the
+// retired `stencilId` member (RP.6d) alongside `transparentBit` (RP.12b).
+TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     ASSERT_TRUE(f) << "Missing " << path;
@@ -227,28 +227,29 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresStencilIdPushConstant) {
     }
 
     // Resolve the struct type behind every PushConstant pointer variable, then
-    // search for the one whose member-0 has Offset=64 and a 32-bit unsigned
-    // int member type.
+    // assert exactly one has a single 32-bit unsigned int member at Offset=64.
+    // "Exactly one member" catches a resurrection of the retired `stencilId`
+    // member — the post-RP.15.b block is `{ uint transparentBit @ 64 }`, not
+    // `{ uint stencilId @ 64, uint transparentBit @ 68 }`.
     bool found = false;
     for (uint32_t pointerTypeId : pushConstantVarTypeIds) {
         auto pIt = pointers.find(pointerTypeId);
         if (pIt == pointers.end()) continue;
         auto sIt = structs.find(pIt->second.typeId);
-        if (sIt == structs.end() || sIt->second.memberTypes.empty()) continue;
+        if (sIt == structs.end()) continue;
+        if (sIt->second.memberTypes.size() != 1U) continue;
         auto offIt = memberOffsets.find(pIt->second.typeId);
         if (offIt == memberOffsets.end()) continue;
-        for (size_t m = 0; m < sIt->second.memberTypes.size(); ++m) {
-            auto memberOffsetIt = offIt->second.find(static_cast<uint32_t>(m));
-            if (memberOffsetIt == offIt->second.end()) continue;
-            if (memberOffsetIt->second != 64U) continue;
-            auto intIt = ints.find(sIt->second.memberTypes[m]);
-            if (intIt == ints.end()) continue;
-            if (intIt->second.width == 32U && intIt->second.signedness == 0U) {
-                found = true;
-                break;
-            }
+        auto memberOffsetIt = offIt->second.find(0U);
+        if (memberOffsetIt == offIt->second.end()) continue;
+        if (memberOffsetIt->second != 64U) continue;
+        auto intIt = ints.find(sIt->second.memberTypes[0]);
+        if (intIt == ints.end()) continue;
+        if (intIt->second.width == 32U && intIt->second.signedness == 0U) {
+            found = true;
+            break;
         }
-        if (found) break;
     }
-    EXPECT_TRUE(found) << "basic.frag missing fragment push constant `uint stencilId` at offset 64";
+    EXPECT_TRUE(found) << "basic.frag missing fragment push constant `uint transparentBit` at "
+                          "offset 64 (exactly one 32-bit uint member expected)";
 }

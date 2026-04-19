@@ -13,7 +13,7 @@ using bimeup::renderer::VulkanContext;
 
 // RP.14.1.b — symmetric guard to RP.14.1.a's RenderLoopExposesMsaaAccessors.
 // MSAA is retired project-wide: SMAA covers architectural AA and MSAA gated
-// XeGTAO / outline / depth-pyramid-build off (those paths bind sampler2D, not
+// XeGTAO / depth-pyramid-build off (those paths bind sampler2D, not
 // sampler2DMS). If someone adds rasterizationSamples back to PipelineConfig,
 // this concept becomes satisfied and the build breaks.
 template <typename T>
@@ -22,7 +22,7 @@ concept PipelineConfigExposesRasterizationSamples =
 static_assert(!PipelineConfigExposesRasterizationSamples<PipelineConfig>,
               "RP.14.1.b — PipelineConfig::rasterizationSamples retired; "
               "all pipelines run 1× because MSAA off is a hard project "
-              "requirement for the XeGTAO / outline / depth-pyramid paths.");
+              "requirement for the XeGTAO / depth-pyramid paths.");
 
 namespace {
 

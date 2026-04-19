@@ -100,7 +100,7 @@ bool RenderLoop::BeginFrame() {
 
     // Clear values indexed to match CreateRenderPass:
     //   [0] scene colour, [1] normal ((0,0) → +Z after oct-decode),
-    //   [2] outline stencil id (0 = background), [3] depth,
+    //   [2] transparency stencil (0 = opaque), [3] depth,
     //   [4..6] resolve targets (DONT_CARE → filler).
     std::array<VkClearValue, 7> clearValues{};
     clearValues[0].color = m_clearColor;
@@ -426,10 +426,10 @@ void RenderLoop::CreateRenderPass() {
     m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
 
     // Attachment layout (MRT — scene colour + oct-packed normal G-buffer +
-    // outline stencil id): [0] HDR colour, [1] normal, [2] stencil id,
+    // transparency stencil): [0] HDR colour, [1] normal, [2] stencil,
     // [3] depth. Final layouts on the sampled targets are
-    // SHADER_READ_ONLY_OPTIMAL so tonemap / SSAO / outline can bind them
-    // straight as samplers.
+    // SHADER_READ_ONLY_OPTIMAL so tonemap / SSAO can bind them straight as
+    // samplers.
 
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = HDR_FORMAT;
@@ -642,8 +642,8 @@ void RenderLoop::CreateHdrResources() {
             throw std::runtime_error("Failed to create normal G-buffer image view");
         }
 
-        // Outline stencil G-buffer — same shape as the normal target.
-        // SAMPLED so the RP.6b outline pass can read via `usampler2D`.
+        // Transparency stencil G-buffer — same shape as the normal target.
+        // SAMPLED so `ssao_xegtao.comp` can read via `usampler2D`.
         VkImageCreateInfo stencilInfo = imageInfo;
         stencilInfo.format = STENCIL_FORMAT;
         if (vmaCreateImage(m_device.GetAllocator(), &stencilInfo, &allocInfo,

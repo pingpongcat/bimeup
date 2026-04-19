@@ -7,10 +7,10 @@ layout(location = 3) in vec3 fragNormalView;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outNormal;
-// Outline stencil id. Low 2 bits hold the category (0 = background, 1 =
-// selected, 2 = hovered); bit 4 is the RP.12b "transparent surface" flag,
-// OR'd in by the transparent-pipeline push so the outline pass and SSAO /
-// SSIL gates can detect glass without losing the underlying selection.
+// Transparency stencil G-buffer (RP.12b). Bit 2 (value 4) marks fragments
+// from the transparent pipeline; XeGTAO uses it to treat glass as
+// transparent instead of AO-occluding. Low bits unused post-RP.15
+// (selection-outline retirement).
 layout(location = 2) out uint outStencilId;
 
 // Fragment-stage push constant. Sits at offset 64 — the byte after the
@@ -18,10 +18,9 @@ layout(location = 2) out uint outStencilId;
 // wireframe / transparent pipelines all share this layout; overlay pipelines
 // (section-fill, disk-marker) keep their layouts untouched and never touch
 // the new range. `transparentBit` is 0 for opaque draws and 4 for the
-// transparent pipeline — the fragment OR's it into the stencil G-buffer.
+// transparent pipeline — the fragment writes it into the stencil G-buffer.
 layout(push_constant) uniform StencilPush {
-    layout(offset = 64) uint stencilId;
-    layout(offset = 68) uint transparentBit;
+    layout(offset = 64) uint transparentBit;
 } push;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
@@ -123,9 +122,9 @@ void main() {
         nView = -nView;
     }
 
-    // MRT normal G-buffer for SSAO / SSIL / outlines. R16G16_SNORM target.
+    // MRT normal G-buffer for SSAO. R16G16_SNORM target.
     outNormal = octPackNormal(nView);
-    outStencilId = push.stencilId | push.transparentBit;
+    outStencilId = push.transparentBit;
 
     vec3 lit = hemisphereAmbient(n);
 

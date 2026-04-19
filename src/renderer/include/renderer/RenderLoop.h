@@ -41,11 +41,13 @@ public:
     // attachment untouched (disableSecondaryColorWrites) don't corrupt
     // SSAO sampling downstream.
     static constexpr VkFormat NORMAL_FORMAT = VK_FORMAT_R16G16_SNORM;
-    // Outline stencil G-buffer format (RP.6c). Single-channel unsigned 8-bit
-    // integer — 0 = background, 1 = selected, 2 = hovered. Attachment 2 of
-    // the main render pass. Sampled by `outline.frag` (RP.6b) as a
-    // `usampler2D`. Clear value is 0 so unwritten pixels fall into the
-    // background category.
+    // Transparency stencil G-buffer format (RP.6c → RP.12b, slimmed in
+    // RP.15.b). Single-channel unsigned 8-bit integer: bit 2 (value 4) is
+    // the "transparent surface" flag written by `basic.frag` for the
+    // transparent pipeline; other bits unused. Attachment 2 of the main
+    // render pass. Sampled by `ssao_xegtao.comp` as a `usampler2D` so
+    // XeGTAO can treat glass as transparent. Clear value is 0 so unwritten
+    // pixels read as opaque.
     static constexpr VkFormat STENCIL_FORMAT = VK_FORMAT_R8_UINT;
     // Depth pyramid format — view-space linear depth, single-channel float.
     // Used by the RP.4c/d depth_linearize + depth_mip compute chain and
@@ -102,14 +104,14 @@ public:
     /// sample count is always 1× (the swapchain is never multisampled).
     [[nodiscard]] VkRenderPass GetPresentRenderPass() const;
     /// View into the single-sample normal G-buffer for the given swap image
-    /// index (same index domain as `GetCurrentImageIndex()`). Will be read by
-    /// SSAO / outline passes in later RP tasks. Returns VK_NULL_HANDLE
-    /// only if the index is out of range.
+    /// index (same index domain as `GetCurrentImageIndex()`). Read by SSAO.
+    /// Returns VK_NULL_HANDLE only if the index is out of range.
     [[nodiscard]] VkImageView GetNormalImageView(uint32_t imageIndex) const;
-    /// View into the single-sample outline-stencil G-buffer (R8_UINT) for the
-    /// given swap image index (same index domain as `GetCurrentImageIndex()`).
-    /// Bound by the RP.6b outline pass as a `usampler2D`. Returns VK_NULL_HANDLE
-    /// only if the index is out of range.
+    /// View into the single-sample transparency stencil G-buffer (R8_UINT)
+    /// for the given swap image index (same index domain as
+    /// `GetCurrentImageIndex()`). Sampled by `ssao_xegtao.comp` as a
+    /// `usampler2D` — bit 2 marks transparent surfaces (RP.12b / RP.15.b).
+    /// Returns VK_NULL_HANDLE only if the index is out of range.
     [[nodiscard]] VkImageView GetStencilImageView(uint32_t imageIndex) const;
     /// Full-mip-chain sampled view of the depth pyramid for the given swap
     /// image index (R32_SFLOAT, mips 0..DEPTH_PYRAMID_MIPS-1 of view-space
@@ -236,14 +238,14 @@ private:
     std::vector<VkImageView> m_hdrImageViews;
     std::vector<VmaAllocation> m_hdrAllocations;
     // Per-swapchain-image normal G-buffer target (R16G16_SNORM, oct-packed
-    // view-space normal). Written by `basic.frag` at layout(location=1); will
-    // be sampled by SSAO/outline passes later in Stage RP.
+    // view-space normal). Written by `basic.frag` at layout(location=1);
+    // sampled by SSAO.
     std::vector<VkImage> m_normalImages;
     std::vector<VkImageView> m_normalImageViews;
     std::vector<VmaAllocation> m_normalAllocations;
-    // Per-swapchain-image outline-stencil G-buffer target (R8_UINT).
-    // Written by `basic.frag` at layout(location=2) and sampled by the RP.6b
-    // outline pass.
+    // Per-swapchain-image transparency stencil G-buffer target (R8_UINT).
+    // Written by `basic.frag` at layout(location=2) — bit 2 marks
+    // transparent surfaces (RP.12b). Sampled by `ssao_xegtao.comp`.
     std::vector<VkImage> m_stencilImages;
     std::vector<VkImageView> m_stencilImageViews;
     std::vector<VmaAllocation> m_stencilAllocations;

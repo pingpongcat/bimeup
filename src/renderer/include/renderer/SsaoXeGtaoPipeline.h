@@ -26,8 +26,8 @@ class Shader;
 ///              (No kernel[] — XeGTAO walks screen-space slices, not a
 ///              pre-generated hemisphere point set.)
 ///   binding 3: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE — R8 half-res AO output.
-///   binding 4: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER — outline stencil
-///              G-buffer (R8_UINT usampler2D, NEAREST). RP.12d transparency
+///   binding 4: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER — transparency
+///              stencil G-buffer (R8_UINT usampler2D, NEAREST). RP.12d
 ///              gate: bit 4 = "transparent surface" — centre transparent
 ///              → early-out AO=1, tap transparent → contribution 0.
 ///
