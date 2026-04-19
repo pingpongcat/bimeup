@@ -39,6 +39,7 @@ add_library(bimeup_renderer STATIC
     src/FxaaMath.cpp
     src/FxaaPipeline.cpp
     src/FogMath.cpp
+    src/BloomMath.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
