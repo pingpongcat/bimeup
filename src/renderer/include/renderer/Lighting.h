@@ -30,17 +30,6 @@ struct HemisphereAmbient {
     glm::vec3 ground{0.25F, 0.22F, 0.20F};
 };
 
-// RP.9 — linear distance fog applied pre-ACES in `tonemap.frag` via
-// `mix(colour, fogColor, computeFog(viewZ, start, end))`. Defaults mirror
-// the PLAN "Expected APIs" block: disabled by default, fog colour matches
-// the zenith sky so the fade blends cleanly with the ambient hemisphere.
-struct FogSettings {
-    bool enabled{false};
-    glm::vec3 color{0.55F, 0.60F, 0.70F};
-    float start{20.0F};
-    float end{120.0F};
-};
-
 struct LightingScene {
     DirectionalLight key;
     DirectionalLight fill;

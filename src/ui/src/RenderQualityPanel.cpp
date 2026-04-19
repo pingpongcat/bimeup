@@ -111,19 +111,6 @@ void RenderQualityPanel::OnDraw() {
         ImGui::Checkbox("Enabled", &smaa.enabled);
     }
 
-    if (ImGui::CollapsingHeader("Fog")) {
-        auto& fog = m_settings.fog;
-        ImGui::Checkbox("Enabled", &fog.enabled);
-        ImGui::BeginDisabled(!fog.enabled);
-        std::array<float, 3> col{fog.color.r, fog.color.g, fog.color.b};
-        if (ImGui::ColorEdit3("Color", col.data())) {
-            fog.color = glm::vec3(col[0], col[1], col[2]);
-        }
-        ImGui::SliderFloat("Start (m)", &fog.start, 0.0F, 500.0F, "%.1f");
-        ImGui::SliderFloat("End (m)", &fog.end, 0.0F, 1000.0F, "%.1f");
-        ImGui::EndDisabled();
-    }
-
     if (ImGui::CollapsingHeader("Shadows")) {
         auto& shadow = m_settings.lighting.shadow;
         ImGui::Checkbox("Enabled", &shadow.enabled);

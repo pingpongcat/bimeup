@@ -1526,16 +1526,6 @@ int main(int argc, char* argv[]) {
             renderLoop.SetSmaaParams(smaaSettings.enabled);
         }
 
-        // RP.9b — push fog colour + [start,end] range into the tonemap
-        // pipeline's fragment push constants. Under MSAA the renderer
-        // force-clears the enable flag (the depth pyramid bound at
-        // tonemap.frag binding 3 isn't built in that mode).
-        {
-            const auto& fogSettings = renderQualityPanel->GetSettings().fog;
-            renderLoop.SetFogParams(fogSettings.color, fogSettings.start,
-                                    fogSettings.end, fogSettings.enabled);
-        }
-
         // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR
         // space, so the tonemap needs a multiplier to keep direct-lit
         // surfaces off the ACES curve shoulder. Panel default is 0.6.

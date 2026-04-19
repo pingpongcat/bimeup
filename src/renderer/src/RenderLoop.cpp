@@ -178,7 +178,7 @@ bool RenderLoop::EndFrame() {
                             &m_tonemapDescriptorSets[m_currentImageIndex], 0, nullptr);
     vkCmdPushConstants(cmd, m_tonemapPipeline->GetLayout(),
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(TonemapPipeline::PushConstants), &m_tonemapPush);
+                       sizeof(TonemapPipeline::PushConstants), &m_exposurePush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // RP.6d outline pass — composes the selection/hover outline over the
@@ -376,20 +376,8 @@ void RenderLoop::SetSmaaParams(bool enabled) {
     m_smaaEnabled = enabled;
 }
 
-void RenderLoop::SetFogParams(const glm::vec3& color, float start, float end,
-                              bool enabled) {
-    // The depth pyramid (tonemap binding 2) isn't built under MSAA — pyramid
-    // compute uses sampler2D, not sampler2DMS — so the fragment sample at
-    // binding 2 would read undefined memory. Force the enable flag off in
-    // that mode so `tonemap.frag` takes the no-fog early-exit path.
-    const bool effective = enabled && m_samples == VK_SAMPLE_COUNT_1_BIT;
-    m_tonemapPush.fogColorEnabled = glm::vec4(color, effective ? 1.0F : 0.0F);
-    m_tonemapPush.fogStart = start;
-    m_tonemapPush.fogEnd = end;
-}
-
 void RenderLoop::SetExposure(float exposure) {
-    m_tonemapPush.exposure = exposure;
+    m_exposurePush.exposure = exposure;
 }
 
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
@@ -1018,11 +1006,10 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Three bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8,
-    // RP.5d), 2 = depth pyramid mip 0 (linear view-space Z, RP.4).
-    // tonemap.frag multiplies AO pre-ACES and samples linear depth at
-    // binding 2 for the RP.9 fog factor.
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    // Two bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8,
+    // RP.5d). tonemap.frag multiplies AO pre-ACES then runs the ACES
+    // curve. RP.13b retired binding 2 (depth pyramid) along with fog.
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1043,7 +1030,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * 3;  // HDR + AO + depth per set
+    poolSize.descriptorCount = imageCount * 2;  // HDR + AO per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1085,21 +1072,7 @@ void RenderLoop::UpdateTonemapDescriptors() {
         aoInfo.imageView = i < m_aoViewsA.size() ? m_aoViewsA[i] : VK_NULL_HANDLE;
         aoInfo.sampler = m_aoSampler;
 
-        // RP.9b depth pyramid binding — same lazy-init story as AO.
-        // Sampler reuses `m_depthPyramidSampler` (set up alongside the
-        // pyramid itself); view is the full sampled chain, but
-        // `tonemap.frag` only touches mip 0 since the fog factor is a
-        // direct linear-depth lookup. Layout = GENERAL to match the
-        // actual pyramid state (SSAO compute binds it at GENERAL;
-        // BuildDepthPyramid leaves it in GENERAL).
-        VkDescriptorImageInfo depthInfo{};
-        depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        depthInfo.imageView = i < m_depthPyramidSampledViews.size()
-                                  ? m_depthPyramidSampledViews[i]
-                                  : VK_NULL_HANDLE;
-        depthInfo.sampler = m_depthPyramidSampler;
-
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_tonemapDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -1115,15 +1088,6 @@ void RenderLoop::UpdateTonemapDescriptors() {
             writes[writeCount].descriptorCount = 1;
             writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[writeCount].pImageInfo = &aoInfo;
-            ++writeCount;
-        }
-        if (depthInfo.imageView != VK_NULL_HANDLE && depthInfo.sampler != VK_NULL_HANDLE) {
-            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
-            writes[writeCount].dstBinding = 2;
-            writes[writeCount].descriptorCount = 1;
-            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[writeCount].pImageInfo = &depthInfo;
             ++writeCount;
         }
         vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);
@@ -2589,15 +2553,15 @@ void RenderLoop::BuildDepthPyramid(VkCommandBuffer cmd) {
         vkCmdDispatch(cmd, (dstW + 7) / 8, (dstH + 7) / 8, 1);
     }
 
-    // Publish all mips to downstream consumers (SSAO compute,
-    // outline + tonemap-fog fragment). The chain stays in GENERAL
-    // because the SSAO descriptors bind it at layout GENERAL; the
-    // outline + tonemap descriptors (see UpdateOutlineDescriptors +
-    // UpdateTonemapDescriptors) also bind it at GENERAL so fragment
-    // sampling in that layout is valid via the matching rules (the
-    // image was created with USAGE_STORAGE). Each frame's `pre` barrier
-    // is `oldLayout = UNDEFINED → GENERAL` so the prior layout is
-    // discarded before the next compute dispatch.
+    // Publish all mips to downstream consumers (SSAO compute, outline
+    // fragment — RP.13b retired the tonemap-fog consumer). The chain
+    // stays in GENERAL because the SSAO descriptors bind it at layout
+    // GENERAL; the outline descriptors (see UpdateOutlineDescriptors)
+    // also bind it at GENERAL so fragment sampling in that layout is
+    // valid via the matching rules (the image was created with
+    // USAGE_STORAGE). Each frame's `pre` barrier is `oldLayout =
+    // UNDEFINED → GENERAL` so the prior layout is discarded before the
+    // next compute dispatch.
     VkImageMemoryBarrier post = pre;
     post.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     post.newLayout = VK_IMAGE_LAYOUT_GENERAL;

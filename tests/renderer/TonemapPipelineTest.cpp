@@ -71,13 +71,12 @@ protected:
         s_device = std::make_unique<Device>(s_context->GetInstance());
         s_renderPass = CreateColorOnlyRenderPass(s_device->GetDevice());
         // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
-        // (RP.5d), binding 2 = depth pyramid mip 0 for the RP.9b fog factor.
+        // (RP.5d). RP.13b retired binding 2 (depth pyramid) along with fog.
         s_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
@@ -162,13 +161,14 @@ TEST_F(TonemapPipelineTest, DestructorCleansUp) {
     // Validation layers would catch leaked pipeline/layout
 }
 
-// RP.9b — tonemap.frag's binding-2 sampler is the depth pyramid mip 0
-// source for the fog factor. RP.13a renumbered this from binding 3 down
-// to binding 2 after retiring SSIL. Walks the SPIR-V OpDecorate stream
-// and asserts a sampled image exists at (set 0, binding 2); a regression
-// that dropped the binding would let the renderer link a 2-binding
-// layout against a 3-binding shader and only trip at validation time.
-TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationTwo) {
+// RP.13b — tonemap.frag must NOT declare a binding-2 sampler after fog
+// retirement removed the depth-pyramid read. Walks the SPIR-V
+// OpDecorate stream and asserts no sampled image exists at (set 0,
+// binding 2); a regression that re-added the depth sampler would let a
+// 3-binding shader link against the 2-binding CPU layout and only trip
+// at validation time. (Symmetric to the binding-3 and binding-4 guards
+// below that pin earlier retirements.)
+TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingTwo) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
     ASSERT_TRUE(file.good());
@@ -179,7 +179,7 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationTwo) {
     const size_t wordCount = bytes.size() / sizeof(uint32_t);
 
     bool foundBinding2 = false;
-    size_t idx = 5;  // skip SPIR-V header
+    size_t idx = 5;
     while (idx < wordCount) {
         uint32_t word = w[idx];
         uint32_t opcode = word & 0xFFFFU;
@@ -187,26 +187,22 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationTwo) {
         if (len == 0 || idx + len > wordCount) {
             break;
         }
-        // OpDecorate = 71. Arguments: target, decoration, literals...
         if (opcode == 71 && len >= 4) {
             uint32_t decoration = w[idx + 2];
-            // Decoration::Binding = 33.
             if (decoration == 33 && w[idx + 3] == 2U) {
                 foundBinding2 = true;
             }
         }
         idx += len;
     }
-    EXPECT_TRUE(foundBinding2)
-        << "tonemap.frag SPIR-V missing expected binding 2 (depth pyramid)";
+    EXPECT_FALSE(foundBinding2)
+        << "tonemap.frag SPIR-V still declares binding 2 (fog retired in RP.13b)";
 }
 
 // RP.13a — tonemap.frag must NOT declare a binding-3 sampler after SSIL
-// retirement moved depth pyramid down from binding 3 to binding 2. Walks
-// the SPIR-V OpDecorate stream and asserts no sampled image exists at
-// (set 0, binding 3); a regression that re-added a third sampler binding
-// would let a 4-binding shader link against the 3-binding CPU layout and
-// only trip at validation time.
+// retirement. RP.13b then retired binding 2 (fog), so nothing should
+// declare binding 3 either. Walks the SPIR-V OpDecorate stream and
+// asserts no sampled image exists at (set 0, binding 3).
 TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingThree) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
@@ -238,21 +234,17 @@ TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingThree) {
         << "tonemap.frag SPIR-V still declares binding 3 (SSIL retired in RP.13a)";
 }
 
-// RP.12a push-constant contract between tonemap.frag and the CPU struct
-// after bloom retirement. `vec4 fogColorEnabled` at offset 0 + `float
-// fogStart` at 16 + `float fogEnd` at 20 + `float exposure` at 24 = 28
-// bytes total. A reorder that still totals 28 bytes would need another
-// guard but would not fail *this* test — that guard lives in
-// FieldOffsetsMatchShaderLayout below.
-TEST(TonemapPushConstantsTest, SizeIsTwentyEightBytes) {
-    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 28U);
+// RP.13b push-constant contract between tonemap.frag and the CPU
+// struct after fog retirement. Only `float exposure` remains, at
+// offset 0, for a 4-byte block. Prior layout was 28 bytes
+// (`vec4 fogColorEnabled` + `float fogStart` + `float fogEnd` +
+// `float exposure`) — RP.13b dropped all but exposure.
+TEST(TonemapPushConstantsTest, SizeIsFourBytes) {
+    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 4U);
 }
 
 TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogColorEnabled), 0U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogStart), 16U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogEnd), 20U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 24U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 0U);
 }
 
 // RP.12a — tonemap.frag must NOT declare a binding-4 sampler after bloom

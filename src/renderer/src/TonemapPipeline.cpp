@@ -23,11 +23,11 @@ TonemapPipeline::TonemapPipeline(const Device& device,
     config.colorAttachmentCount = 1;
     config.descriptorSetLayouts = {hdrSamplerLayout};
 
-    VkPushConstantRange fogRange{};
-    fogRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fogRange.offset = 0;
-    fogRange.size = sizeof(PushConstants);
-    config.pushConstantRanges = {fogRange};
+    VkPushConstantRange exposureRange{};
+    exposureRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    exposureRange.offset = 0;
+    exposureRange.size = sizeof(PushConstants);
+    config.pushConstantRanges = {exposureRange};
 
     m_pipeline = std::make_unique<Pipeline>(device, vertexShader, fragmentShader, config);
 }

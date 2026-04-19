@@ -194,7 +194,7 @@ TEST_F(RenderLoopTest, NormalGBufferImageViewsProvidedPerSwapImage) {
 // Merged baseline MSAA recreate check: constructing RenderLoop and flipping
 // SetSampleCount(4x) must rebuild all per-swap GBuffer attachments (normal,
 // stencil, depth-pyramid, AO) and a frame must still cycle. Feature-specific
-// MSAA gates (SSIL/Outline/SMAA/Fog) live in their own SurvivesSampleCountChange
+// MSAA gates (Outline/SMAA) live in their own SurvivesSampleCountChange
 // tests further down — those flip enable flags and exercise distinct paths.
 TEST_F(RenderLoopTest, GBuffersSurviveSampleCountChange) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
@@ -408,57 +408,6 @@ TEST_F(RenderLoopTest, SmaaSurvivesSampleCountChange) {
     // MSAA, same as FXAA before). Exercises the SMAA per-swap rebuild
     // alongside the existing MSAA rebuild chain + guards against a
     // regression that wired SMAA intermediates to the scene sample count.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-// RP.9b — fog is pushed into `tonemap.frag` each frame via the tonemap
-// pipeline's push constants. The renderer updates `m_fogPush` on
-// `SetFogParams` and uploads it before the tonemap fullscreen-tri draw;
-// `tonemap.frag` samples binding 3 (depth pyramid mip 0) only when the
-// enable flag is 1. Exercises the full frame cycle with fog enabled,
-// including the binding-3 depth sampler read.
-TEST_F(RenderLoopTest, FogAppliedDuringFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetFogParams(glm::vec3(0.55F, 0.60F, 0.70F),
-                               /*start=*/20.0F, /*end=*/120.0F,
-                               /*enabled=*/true);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, FogDisabledStillCyclesFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetFogParams(glm::vec3(0.55F, 0.60F, 0.70F),
-                               /*start=*/20.0F, /*end=*/120.0F,
-                               /*enabled=*/false);
-    // Disabled path — push constants zero the shader's enable flag so the
-    // depth-sample + mix are skipped. A regression that accidentally always
-    // sampled the depth pyramid would read undefined memory on the first
-    // frame (before BuildDepthPyramid has populated it) and trip
-    // validation. The draw itself still runs every frame.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, FogSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    m_renderLoop->SetFogParams(glm::vec3(0.55F, 0.60F, 0.70F),
-                               /*start=*/20.0F, /*end=*/120.0F,
-                               /*enabled=*/true);
-    // Under MSAA the depth pyramid is gated off, so SetFogParams forces
-    // the enable flag to 0 regardless of the caller's `enabled` argument.
-    // A regression that left the flag on would sample undefined pyramid
-    // contents; this frame cycle under Vulkan validation guards against
-    // that + exercises the tonemap-descriptor rebuild on MSAA change.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

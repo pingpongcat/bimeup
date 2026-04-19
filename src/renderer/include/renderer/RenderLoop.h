@@ -154,16 +154,6 @@ public:
     /// LDR intermediate is always 1-sample so SMAA needs no MSAA gate.
     void SetSmaaParams(bool enabled);
 
-    /// RP.9b — linear distance fog parameters pushed into `tonemap.frag` via
-    /// the tonemap pipeline's push constants. When `enabled` is false the
-    /// push constant's enable flag is zeroed so the shader skips the depth
-    /// tap + mix. Under MSAA the depth pyramid isn't built (pyramid
-    /// compute is `sampler2D`-only), so the tonemap sampler at binding 2
-    /// would read undefined contents — this method forces the enable flag
-    /// off in that mode regardless of `enabled`, matching the
-    /// SSAO/outline gating pattern.
-    void SetFogParams(const glm::vec3& color, float start, float end, bool enabled);
-
     /// Pre-ACES exposure multiplier applied to the composited HDR colour
     /// inside `tonemap.frag`. Default (from the push-constant ctor) is 1.0
     /// — identity. The panel seeds a scene-appropriate value so the three-
@@ -416,7 +406,7 @@ private:
     // weights passes are skipped entirely and the blend shader's
     // push-constant gate (`enabled` at offset 8) short-circuits before
     // the weights sample. LDR is always 1-sample, so SMAA runs under MSAA
-    // without a gate (unlike fog / outline).
+    // without a gate (unlike outline).
     //
     // The AreaTex (160×560 RG8) + SearchTex (64×16 R8) LUTs live for the
     // RenderLoop's lifetime — uploaded once in `CreateSmaaLuts` from the
@@ -476,13 +466,10 @@ private:
 
     bool m_smaaEnabled = true;
 
-    // RP.9b — shared tonemap push-constant state fed into `tonemap.frag`
-    // each frame. `SetFogParams` updates the fog fields; the struct is
-    // uploaded once per tonemap draw via vkCmdPushConstants. The fog
-    // enable flag is carried in `fogColorEnabled.w` so the shader
-    // short-circuits the depth tap + mix when disabled (or MSAA-gated —
-    // `SetFogParams` force-clears w when m_samples > 1x).
-    TonemapPipeline::PushConstants m_tonemapPush{};
+    // RP.13b — tonemap push-constant state fed into `tonemap.frag` each
+    // frame. Now only holds `exposure`; `SetExposure` writes it and the
+    // struct is uploaded once per tonemap draw via vkCmdPushConstants.
+    TonemapPipeline::PushConstants m_exposurePush{};
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;
