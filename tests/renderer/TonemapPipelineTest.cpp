@@ -6,6 +6,9 @@
 #include <renderer/TonemapPipeline.h>
 #include <renderer/VulkanContext.h>
 
+#include <glm/glm.hpp>
+
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -68,13 +71,15 @@ protected:
         m_device = std::make_unique<Device>(m_context->GetInstance());
         m_renderPass = CreateColorOnlyRenderPass(m_device->GetDevice());
         // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
-        // (RP.5d), binding 2 = half-res SSIL (RP.7d).
+        // (RP.5d), binding 2 = half-res SSIL (RP.7d), binding 3 = depth
+        // pyramid mip 0 for the RP.9b fog factor.
         m_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *m_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
+                {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
@@ -173,4 +178,58 @@ TEST_F(TonemapPipelineTest, DestructorCleansUp) {
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
     // Validation layers would catch leaked pipeline/layout
+}
+
+// RP.9b — tonemap.frag's binding-3 sampler is the depth pyramid mip 0
+// source for the fog factor. Walks the SPIR-V OpDecorate stream and asserts
+// a sampled image exists at (set 0, binding 3); a regression that dropped
+// the binding would let the renderer link a 3-binding layout against a
+// 4-binding shader and only trip at validation time.
+TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
+    std::string shaderDir = BIMEUP_SHADER_DIR;
+    std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
+    ASSERT_TRUE(file.good());
+    std::vector<char> bytes((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    ASSERT_GE(bytes.size(), 5U * sizeof(uint32_t));
+    const uint32_t* w = reinterpret_cast<const uint32_t*>(bytes.data());
+    const size_t wordCount = bytes.size() / sizeof(uint32_t);
+
+    bool foundBinding3 = false;
+    size_t idx = 5;  // skip SPIR-V header
+    while (idx < wordCount) {
+        uint32_t word = w[idx];
+        uint32_t opcode = word & 0xFFFFU;
+        uint32_t len = (word >> 16U) & 0xFFFFU;
+        if (len == 0 || idx + len > wordCount) {
+            break;
+        }
+        // OpDecorate = 71. Arguments: target, decoration, literals...
+        if (opcode == 71 && len >= 4) {
+            uint32_t decoration = w[idx + 2];
+            // Decoration::Binding = 33.
+            if (decoration == 33 && w[idx + 3] == 3U) {
+                foundBinding3 = true;
+            }
+        }
+        idx += len;
+    }
+    EXPECT_TRUE(foundBinding3)
+        << "tonemap.frag SPIR-V missing expected binding 3 (depth pyramid)";
+}
+
+// RP.9b — the push-constant contract between tonemap.frag and the CPU
+// struct. `vec4 fogColorEnabled` at offset 0 + `float fogStart` at 16 +
+// `float fogEnd` at 20 = 24 bytes total. A reorder that still totals
+// 24 bytes (e.g. swapping the two trailing floats) would need another
+// guard but would not fail *this* test — that guard lives in
+// FieldOffsetsMatchShaderLayout below.
+TEST(TonemapPushConstantsTest, SizeIsTwentyFourBytes) {
+    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 24U);
+}
+
+TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogColorEnabled), 0U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogStart), 16U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogEnd), 20U);
 }

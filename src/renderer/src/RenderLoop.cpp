@@ -187,6 +187,9 @@ bool RenderLoop::EndFrame() {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_tonemapPipeline->GetLayout(), 0, 1,
                             &m_tonemapDescriptorSets[m_currentImageIndex], 0, nullptr);
+    vkCmdPushConstants(cmd, m_tonemapPipeline->GetLayout(),
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(TonemapPipeline::PushConstants), &m_fogPush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // RP.6d outline pass — composes the selection/hover outline over the
@@ -411,6 +414,18 @@ void RenderLoop::SetOutlineParams(const OutlinePipeline::PushConstants& push, bo
 void RenderLoop::SetFxaaParams(bool enabled, int quality) {
     m_fxaaEnabled = enabled;
     m_fxaaQuality = quality;
+}
+
+void RenderLoop::SetFogParams(const glm::vec3& color, float start, float end,
+                              bool enabled) {
+    // The depth pyramid (tonemap binding 3) isn't built under MSAA — pyramid
+    // compute uses sampler2D, not sampler2DMS — so the fragment sample at
+    // binding 3 would read undefined memory. Force the enable flag off in
+    // that mode so `tonemap.frag` takes the no-fog early-exit path.
+    const bool effective = enabled && m_samples == VK_SAMPLE_COUNT_1_BIT;
+    m_fogPush.fogColorEnabled = glm::vec4(color, effective ? 1.0F : 0.0F);
+    m_fogPush.fogStart = start;
+    m_fogPush.fogEnd = end;
 }
 
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
@@ -1045,10 +1060,11 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Three bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8),
-    // 2 = post-blur SSIL (half-res RGBA16F). tonemap.frag adds the SSIL value
-    // to the HDR colour then multiplies by the AO scalar before ACES.
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    // Four bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8),
+    // 2 = post-blur SSIL (half-res RGBA16F), 3 = depth pyramid mip 0 (linear
+    // view-space Z, RP.4). tonemap.frag adds SSIL + multiplies AO pre-ACES
+    // and samples linear depth at binding 3 to compute the RP.9 fog factor.
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -1061,6 +1077,10 @@ void RenderLoop::CreateTonemapDescriptors() {
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1075,7 +1095,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * 3;  // HDR + AO + SSIL per set
+    poolSize.descriptorCount = imageCount * 4;  // HDR + AO + SSIL + depth per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1125,7 +1145,19 @@ void RenderLoop::UpdateTonemapDescriptors() {
         ssilInfo.imageView = i < m_ssilViewsA.size() ? m_ssilViewsA[i] : VK_NULL_HANDLE;
         ssilInfo.sampler = m_ssilSampler;
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        // RP.9b depth pyramid binding — same lazy-init story as AO/SSIL.
+        // Sampler reuses `m_depthPyramidSampler` (set up alongside the
+        // pyramid itself); view is the full sampled chain, but
+        // `tonemap.frag` only touches mip 0 since the fog factor is a
+        // direct linear-depth lookup.
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = i < m_depthPyramidSampledViews.size()
+                                  ? m_depthPyramidSampledViews[i]
+                                  : VK_NULL_HANDLE;
+        depthInfo.sampler = m_depthPyramidSampler;
+
+        std::array<VkWriteDescriptorSet, 4> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_tonemapDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -1150,6 +1182,15 @@ void RenderLoop::UpdateTonemapDescriptors() {
             writes[writeCount].descriptorCount = 1;
             writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[writeCount].pImageInfo = &ssilInfo;
+            ++writeCount;
+        }
+        if (depthInfo.imageView != VK_NULL_HANDLE && depthInfo.sampler != VK_NULL_HANDLE) {
+            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
+            writes[writeCount].dstBinding = 3;
+            writes[writeCount].descriptorCount = 1;
+            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[writeCount].pImageInfo = &depthInfo;
             ++writeCount;
         }
         vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);

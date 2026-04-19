@@ -2,6 +2,7 @@
 
 #include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
+#include <renderer/TonemapPipeline.h>
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -177,6 +178,16 @@ public:
     /// cost of a single sample + write. `quality` is 0 (LOW) or 1 (HIGH) and
     /// drives the sub-pixel blend path in `fxaa.frag`.
     void SetFxaaParams(bool enabled, int quality);
+
+    /// RP.9b — linear distance fog parameters pushed into `tonemap.frag` via
+    /// the tonemap pipeline's push constants. When `enabled` is false the
+    /// push constant's enable flag is zeroed so the shader skips the depth
+    /// tap + mix. Under MSAA the depth pyramid isn't built (pyramid
+    /// compute is `sampler2D`-only), so the tonemap sampler at binding 3
+    /// would read undefined contents — this method forces the enable flag
+    /// off in that mode regardless of `enabled`, matching the
+    /// SSAO/SSIL/outline gating pattern.
+    void SetFogParams(const glm::vec3& color, float start, float end, bool enabled);
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -461,6 +472,15 @@ private:
     std::vector<VkDescriptorSet> m_fxaaDescriptorSets;
     bool m_fxaaEnabled = true;
     int m_fxaaQuality = 1;
+
+    // RP.9b — fog push-constant state fed into `tonemap.frag` each frame.
+    // `m_fogPush` is rebuilt by `SetFogParams` from panel-driven FogSettings
+    // and uploaded in the tonemap draw via vkCmdPushConstants. The enable
+    // flag is carried in the w channel of `fogColorEnabled` so the shader
+    // early-exits without a depth tap when fog is off (or under MSAA —
+    // SetFogParams force-clears the flag when m_samples > 1x since the
+    // depth pyramid at binding 3 is undefined in that mode).
+    TonemapPipeline::PushConstants m_fogPush{};
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;

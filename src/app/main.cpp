@@ -1528,6 +1528,16 @@ int main(int argc, char* argv[]) {
             renderLoop.SetFxaaParams(fxaaSettings.enabled, fxaaSettings.quality);
         }
 
+        // RP.9b — push fog colour + [start,end] range into the tonemap
+        // pipeline's fragment push constants. Under MSAA the renderer
+        // force-clears the enable flag (the depth pyramid bound at
+        // tonemap.frag binding 3 isn't built in that mode).
+        {
+            const auto& fogSettings = renderQualityPanel->GetSettings().fog;
+            renderLoop.SetFogParams(fogSettings.color, fogSettings.start,
+                                    fogSettings.end, fogSettings.enabled);
+        }
+
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + key light direction, and (re)build the shadow map if resolution
         // or enabled-state changed.

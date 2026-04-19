@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <glm/glm.hpp>
+
 #include <vulkan/vulkan.h>
 
 namespace bimeup::renderer {
@@ -18,6 +20,18 @@ class Shader;
 /// Target is the sRGB swapchain so the final gamma encode is implicit.
 class TonemapPipeline {
 public:
+    /// RP.9b fog knobs fed into `tonemap.frag` via push constants. `w` of
+    /// `fogColorEnabled` doubles as the enable flag (0.0 = disabled early-
+    /// out, 1.0 = apply `mix(colour, fogColor, factor)` pre-ACES). Packed
+    /// to match the 24-byte std430 push-constant block declared in the
+    /// shader — `vec4` aligns to 16 at offset 0, two trailing floats pack
+    /// naturally starting at offset 16.
+    struct PushConstants {
+        glm::vec4 fogColorEnabled{0.55F, 0.60F, 0.70F, 0.0F};
+        float fogStart{20.0F};
+        float fogEnd{120.0F};
+    };
+
     TonemapPipeline(const Device& device,
                     const Shader& vertexShader,
                     const Shader& fragmentShader,
