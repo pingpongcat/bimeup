@@ -40,6 +40,7 @@ add_executable(renderer_tests
     FxaaMathTest.cpp
     FxaaPipelineTest.cpp
     SmaaMathTest.cpp
+    SmaaLutTest.cpp
     FogMathTest.cpp
     BloomMathTest.cpp
     BloomDownPipelineTest.cpp

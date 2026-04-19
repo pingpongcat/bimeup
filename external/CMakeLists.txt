@@ -44,6 +44,14 @@ add_subdirectory(poly2tri)
 target_include_directories(poly2tri PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/poly2tri)
 
+# iryoku/smaa (header-only LUTs — AreaTex + SearchTex vendored for SMAA 1x).
+# Exposed as an INTERFACE target so renderer can include
+# `Textures/AreaTex.h` / `Textures/SearchTex.h` without leaking the submodule
+# root to other consumers.
+add_library(smaa_lut INTERFACE)
+target_include_directories(smaa_lut INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/smaa)
+add_library(smaa::lut ALIAS smaa_lut)
+
 # googletest (only when tests are enabled)
 if(BIMEUP_BUILD_TESTS)
     add_subdirectory(googletest)

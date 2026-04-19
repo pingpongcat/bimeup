@@ -39,6 +39,7 @@ add_library(bimeup_renderer STATIC
     src/FxaaMath.cpp
     src/FxaaPipeline.cpp
     src/SmaaMath.cpp
+    src/SmaaLut.cpp
     src/FogMath.cpp
     src/BloomMath.cpp
     src/BloomDownPipeline.cpp
@@ -46,5 +47,5 @@ add_library(bimeup_renderer STATIC
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(bimeup_renderer PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator glm::glm PRIVATE bimeup_tools)
+target_link_libraries(bimeup_renderer PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator glm::glm PRIVATE bimeup_tools smaa::lut)
 bimeup_enable_sanitizers(bimeup_renderer)
