@@ -210,6 +210,23 @@ TEST_F(RenderLoopTest, StencilGBufferSurvivesSampleCountChange) {
     m_renderLoop->WaitIdle();
 }
 
+// RP.12b — bit 4 = "transparent surface" rides alongside the base category
+// in the stencil G-buffer, so values become {0, 1, 2, 4, 5, 6}. R8_UINT
+// trivially holds that range, but pin the contract so a future format
+// downgrade (e.g. to a packed format that drops the high bits) trips this
+// test rather than silently breaking glass-vs-outline detection.
+//
+// Limits of this test: it does NOT exercise the basic.frag push (4 → 8 byte
+// range) or the main.cpp transparent-pipeline `transparentBit = 4` push —
+// those are caught by Vulkan validation layers on any draw and by visual
+// smoke testing of glass-on-selection. The CPU mirror semantics are pinned
+// by `OutlineEdgeTest.EdgeFromStencil*Glass*`.
+TEST_F(RenderLoopTest, StencilFormatHoldsTransparentBit) {
+    EXPECT_EQ(RenderLoop::STENCIL_FORMAT, VK_FORMAT_R8_UINT);
+    static_assert(0x6U <= 0xFFU,
+                  "RP.12b stencil range {0,1,2,4,5,6} must fit in R8");
+}
+
 // RP.4d — Linear depth + depth pyramid: a 4-mip R32_SFLOAT pyramid per swap
 // image, built by a compute pass between the main HDR pass and the tonemap
 // pass. MSAA path gates off for now (shader needs sampler2DMS; can be added
@@ -499,48 +516,3 @@ TEST_F(RenderLoopTest, FogSurvivesSampleCountChange) {
     m_renderLoop->WaitIdle();
 }
 
-// RP.10c — bloom dispatches a 3-mip dual-filter down/up chain each frame
-// when enabled, then the tonemap pass reads binding 4 (bloom mip 0) and
-// adds `bloom * intensity` pre-ACES. Exercises the full pyramid build +
-// composite under Vulkan validation.
-TEST_F(RenderLoopTest, BloomAppliedDuringFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
-                                 /*enabled=*/true);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, BloomDisabledStillCyclesFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
-                                 /*enabled=*/false);
-    // Disabled path — push constants zero the shader's bloomEnabled flag so
-    // the bloom sample + add is skipped. A regression that accidentally
-    // always sampled binding 4 would read the creation-time-cleared mip 0
-    // on the first frame but would still exercise the binding; this cycle
-    // under Vulkan validation guards the shape.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, BloomSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
-                                 /*enabled=*/true);
-    // Under MSAA the bloom chain's source (HDR) would require sampler2DMS.
-    // `bloom_down.frag` uses sampler2D, so SetBloomParams force-clears the
-    // enable flag in that mode. Exercises the bloom-descriptor rebuild on
-    // MSAA change + guards against a regression that left the flag on and
-    // produced validation errors from sampling the multisample HDR target.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}

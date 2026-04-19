@@ -15,11 +15,17 @@ float SobelMagnitude(const std::array<float, 9>& p) {
 }
 
 std::uint8_t EdgeFromStencil(const std::array<std::uint8_t, 9>& p) {
-    std::uint8_t lo = p[0];
-    std::uint8_t hi = p[0];
+    // RP.12b: bit 4 = "transparent surface" rides alongside the base id
+    // (0/1/2). Mask it out before the max-reduction so a glass overlay can't
+    // hijack the edge category (and an interior of "selected through glass"
+    // still reduces to a uniform value with no edge).
+    constexpr std::uint8_t kCategoryMask = 0x3U;
+    std::uint8_t lo = p[0] & kCategoryMask;
+    std::uint8_t hi = lo;
     for (std::uint8_t v : p) {
-        lo = std::min(lo, v);
-        hi = std::max(hi, v);
+        std::uint8_t base = v & kCategoryMask;
+        lo = std::min(lo, base);
+        hi = std::max(hi, base);
     }
     return (lo == hi) ? static_cast<std::uint8_t>(0) : hi;
 }

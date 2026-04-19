@@ -151,4 +151,64 @@ TEST(OutlineEdgeTest, EdgeFromStencilThreeCategoriesReturnsMax) {
     EXPECT_EQ(EdgeFromStencil(patch), 2U);
 }
 
+// RP.12b: bit 4 = "transparent surface" so stencil values become
+// {0, 1, 2, 4, 5, 6}. The outline edge detector must mask out bit 4 before
+// the max-reduction so a transparent layer over a selected element still
+// shows the selection outline (and a glass-only patch produces no edge).
+
+TEST(OutlineEdgeTest, EdgeFromStencilGlassOnlyHasNoEdge) {
+    // Pure transparent surface (bit 4 set, base id 0) bordering background
+    // (0). After masking bit 4 the patch is uniform 0 → no edge. Without the
+    // mask this would fire as an edge with category 4 and pick a bogus colour.
+    std::array<std::uint8_t, 9> patch = {
+        0, 0, 0,
+        0, 4, 4,
+        0, 4, 4,
+    };
+    EXPECT_EQ(EdgeFromStencil(patch), 0U);
+}
+
+TEST(OutlineEdgeTest, EdgeFromStencilSelectionSurvivesGlass) {
+    // A selected element (id 1) viewed through glass (bit 4 set) bordered by
+    // background (0). Stencil values seen: 0 = bg, 5 = selected-through-glass.
+    // After masking bit 4 → {0, 1} → edge fires with category 1 (selected),
+    // i.e. the outline survives the glass overlay.
+    std::array<std::uint8_t, 9> patch = {
+        0, 0, 5,
+        0, 5, 5,
+        0, 5, 5,
+    };
+    EXPECT_EQ(EdgeFromStencil(patch), 1U);
+}
+
+TEST(OutlineEdgeTest, EdgeFromStencilHoverSurvivesGlass) {
+    // Hovered element (id 2) seen through glass (bit 4 set → 6) bordered by
+    // background. After masking bit 4 → {0, 2} → category 2 (hover).
+    std::array<std::uint8_t, 9> patch = {
+        0, 0, 0,
+        0, 6, 6,
+        0, 6, 6,
+    };
+    EXPECT_EQ(EdgeFromStencil(patch), 2U);
+}
+
+TEST(OutlineEdgeTest, EdgeFromStencilHoverBeatsSelectThroughGlass) {
+    // Both selected (1 / 5) and hovered (2 / 6) layers are visible. After
+    // masking bit 4 across all taps the reduction sees {1, 2} → hover wins.
+    std::array<std::uint8_t, 9> patch = {
+        1, 5, 2,
+        1, 5, 6,
+        1, 5, 2,
+    };
+    EXPECT_EQ(EdgeFromStencil(patch), 2U);
+}
+
+TEST(OutlineEdgeTest, EdgeFromStencilUniformGlassOverSelectionHasNoEdge) {
+    // Entire 3×3 patch is selected-through-glass (5). Masked → {1} uniform →
+    // no edge (interior of a selection that happens to be behind glass — same
+    // contract as the existing InteriorOfSelection test, but with the bit set).
+    std::array<std::uint8_t, 9> patch = {5, 5, 5, 5, 5, 5, 5, 5, 5};
+    EXPECT_EQ(EdgeFromStencil(patch), 0U);
+}
+
 }  // namespace

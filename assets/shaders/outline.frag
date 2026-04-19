@@ -10,9 +10,13 @@
 //     [6] [7] [8]
 //
 // The stencil attachment (binding 0, R8_UINT) is written during the main
-// pass per RP.6c — 0 = background, 1 = selected, 2 = hovered. Hover wins
-// when both appear in the 3×3 window so a cursor over an already-selected
-// element still renders the hover colour.
+// pass per RP.6c — low 2 bits hold 0 = background, 1 = selected, 2 = hovered.
+// Bit 4 is the RP.12b "transparent surface" flag (OR'd in by the transparent
+// draw pipeline) so the same texel can read 0/1/2 or 4/5/6. Mask out bit 4
+// before the max-reduction so glass overlays never hijack the edge category;
+// the outline still draws on the selection's silhouette regardless of what's
+// in front of it. Hover (2) still wins over selected (1) when both appear in
+// the 3×3 window.
 
 layout(set = 0, binding = 0) uniform usampler2D stencilTexture;
 layout(set = 0, binding = 1) uniform sampler2D linearDepthTexture;
@@ -29,11 +33,13 @@ layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
 
 uint edgeFromStencil(uint p[9]) {
-    uint lo = p[0];
-    uint hi = p[0];
+    // Mask bit 4 (transparent flag) — see header comment / RP.12b.
+    uint lo = p[0] & 0x3u;
+    uint hi = lo;
     for (int i = 1; i < 9; ++i) {
-        lo = min(lo, p[i]);
-        hi = max(hi, p[i]);
+        uint base = p[i] & 0x3u;
+        lo = min(lo, base);
+        hi = max(hi, base);
     }
     return (lo == hi) ? 0u : hi;
 }
@@ -63,12 +69,14 @@ void main() {
 
     // Depth-discontinuity fallback: when the stencil is uniform but the centre
     // is inside a selected element, a large Sobel-on-linear-depth signals a
-    // within-selection silhouette/crease that should still be outlined.
-    uint centerStencil = sPatch[4];
-    if (cat == 0u && centerStencil > 0u) {
+    // within-selection silhouette/crease that should still be outlined. Mask
+    // bit 4 (transparent flag) before the gate so a glass-only centre never
+    // promotes itself to an outline category.
+    uint centerCategory = sPatch[4] & 0x3u;
+    if (cat == 0u && centerCategory > 0u) {
         float depthMag = sobelMagnitude(dPatch);
         if (depthMag > pc.depthEdgeThreshold) {
-            cat = centerStencil;
+            cat = centerCategory;
         }
     }
 

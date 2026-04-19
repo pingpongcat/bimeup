@@ -12,29 +12,25 @@
 //   RP.5d: multiply the half-res SSAO term (binding 1) into the composited
 //          HDR. AO A is cleared to 1.0, so the multiply is a no-op when
 //          SSAO is gated off.
-//   RP.10: add the bloom chain's final mip 0 (binding 4) scaled by
-//          `bloomIntensity`. Gated by `pc.bloomEnabled > 0.5`; when off or
-//          under MSAA (RenderLoop force-clears the flag) the sample is
-//          skipped and the binding-4 sampler may be the null-safe fallback.
 //   RP.9:  linear distance fog `mix(lit, fogColor, factor)` where
 //          `factor = computeFog(viewZ, start, end)` — applied pre-ACES so
 //          the panel-picked fog colour goes through the same tonemap curve
 //          as the sky / scene. Gated by `pc.fogColorEnabled.w > 0.5`;
 //          under MSAA the depth pyramid binding 3 is undefined (pyramid
 //          build is gated off) so RenderLoop forces w = 0 in that mode.
+//
+// RP.12a retired the bloom composite that previously consumed binding 4
+// and the bloomIntensity / bloomEnabled push-constant fields.
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
 layout(set = 0, binding = 1) uniform sampler2D aoTexture;
 layout(set = 0, binding = 2) uniform sampler2D ssilTexture;
 layout(set = 0, binding = 3) uniform sampler2D linearDepthTexture;
-layout(set = 0, binding = 4) uniform sampler2D bloomTexture;
 
 layout(push_constant) uniform PushConstants {
     vec4 fogColorEnabled;  // rgb = colour, w = enabled (0.0 / 1.0)
     float fogStart;
     float fogEnd;
-    float bloomIntensity;
-    float bloomEnabled;
     float exposure;        // pre-ACES linear scale on composited HDR
 } pc;
 
@@ -67,11 +63,6 @@ void main() {
     vec3 ssil = texture(ssilTexture, inUv).rgb;
     float ao = texture(aoTexture, inUv).r;
     vec3 lit = (hdr + ssil) * ao;
-
-    if (pc.bloomEnabled > 0.5) {
-        vec3 bloom = texture(bloomTexture, inUv).rgb;
-        lit += bloom * pc.bloomIntensity;
-    }
 
     if (pc.fogColorEnabled.w > 0.5) {
         float viewZ = texture(linearDepthTexture, inUv).r;

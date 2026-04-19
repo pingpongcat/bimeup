@@ -961,6 +961,41 @@ RP.2 ── unlocks → RP.8, RP.9, RP.10
                                          └── RP.5 ── required for → RP.7
 ```
 
+### RP.12 Addendum — Architectural rendering polish (added 2026-04-19)
+
+bimeup is a BIM viewer, not a game renderer. Three concrete issues surfaced once the full RP chain shipped:
+
+1. **Bloom is noise on flat-shaded IFC geometry.** No self-emissive surfaces, no sun disc, no HDR point lights — bloom only produces halos that obscure edges.
+2. **SSIL reads as a "massive bloom effect."** Its additive output can drive HDR well above 1.0 on large wall panels, which then feeds the bloom threshold and doubles the glow. Even standalone (bloom off) the default intensity 0.5 produces a soft glow rather than the intended colour-bleed.
+3. **SSAO is invasive, noisy, and leaks through windows.** Translucent glass still writes depth + oct-packed normal, so SSAO treats glazing as a solid occluder and darkens the walls/floors behind window frames. The 64-sample hemisphere kernel is also visibly noisy after the 7-tap separable blur.
+
+**Scope**: retire bloom; fix SSIL (clamp + transparency gate + sane defaults); fix SSAO (transparency gate + tuned defaults now, algorithm upgrade later).
+
+**Tasks**
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.12a | Retire bloom. Delete `BloomDownPipeline`, `BloomUpPipeline`, `bloom*` shaders + math module, `BloomSettings`, `SetBloomParams`, the 3-mip chain in `RenderLoop`, tonemap binding 4 + `bloomIntensity`/`bloomEnabled` push-constant fields, panel "Bloom" section. Shrink `TonemapPipeline::PushConstants` 36 → 28 bytes (`exposure` slides from offset 32 → 24). | Drop `BloomMath*`, `Bloom*PipelineTest`, `RenderLoopTest.Bloom*`. Update `TonemapPipelinePushConstantsTest` to pin the new 28-byte contract. `ctest --output-on-failure` green. | `renderer/BloomPass.*`, `assets/shaders/bloom*`, `RenderLoop.{h,cpp}`, `TonemapPipeline.{h,cpp}`, `tonemap.frag`, `RenderQualityPanel.{h,cpp}`, `main.cpp` |
+| RP.12b | Transparency bit in stencil G-buffer. Existing `R8_UINT` stencil carries 0/1/2 (background/selected/hovered). Add bit 4 = "transparent surface" so values become `{0,1,2,4,5,6}`. `basic.frag` fragment-stage push range grows 4 → 8 bytes with a new `uint transparentBit` field (0 or 4); transparent-pipeline draws push `4`, opaque draws push `0`. `outline.frag`'s `edgeFromStencil` masks out bit 4 before the max-reduction so outlines still draw on glass. CPU `EdgeFromStencil` mirror updated in the same commit. | Unit: extend `OutlineEdgeTest` with patches mixing the new transparent bit (outline survives on glass; transparent-only background → no edge). Vulkan: `RenderLoopTest.StencilCarriesTransparentBit` cycles a frame that pushes the bit and re-reads mip 0 of the stencil image. | `basic.frag`, `outline.frag`, `OutlineEdge.{h,cpp}`, `main.cpp` (transparent-draw push) |
+| RP.12c | SSIL transparency-gate + clamp + toned-down defaults. `ssil_main.comp` samples the stencil G-buffer at each tap; taps flagged transparent contribute 0 (translucent walls don't bounce colour into the room). Post-accumulation clamp `clamp(indirect, 0, ssilMaxLuminance)` per channel — prevents wide-area glow even when 64 taps all agree. New panel slider "Max luminance" (0.1–2.0, default 0.5); default intensity 0.5 → 0.15. CPU mirror `renderer::SsilClampLuminance(rgb, cap)` with per-channel clamp test. | Unit: `SsilClampLuminance` test (below/at/above cap across three channels, cap = 0 zeroes output). Vulkan: existing `SsilDispatchedDuringFrame` retargeted at the new descriptor layout (add stencil CIS binding). | `ssil_main.comp`, `SsilPipeline.{h,cpp}`, `SsilMath.{h,cpp}`, `RenderLoop.{h,cpp}`, `RenderQualityPanel.{h,cpp}`, `main.cpp` |
+| RP.12d | SSAO transparency-gate + tuned architectural defaults. `ssao_main.comp` samples the stencil G-buffer: centre pixel flagged transparent → early-out AO = 1.0 (glass asks for no AO); sample taps flagged transparent contribute 0. Radius default 0.5 → 0.35 m (contact-AO only, not room-scale dimming), intensity 1.0 → 0.5. Panel ranges unchanged. | Vulkan: existing `SsaoDispatchedDuringFrame` retargeted at the new descriptor layout (add stencil CIS binding). No new CPU math — transparency gate is a pure shader change. | `ssao_main.comp`, `SsaoPipeline.{h,cpp}`, `RenderLoop.{h,cpp}`, `RenderQualityPanel.{h,cpp}` |
+| RP.12e | SSAO → XeGTAO port. Replace the Chapman hemisphere-kernel pass with horizon-based integration (Intel XeGTAO, 2022) — quieter at fewer taps, better temporal stability on top of the blur, matches the RP.5 PLAN's original target. Reuses the existing depth pyramid + normal G-buffer + RP.12d transparency gate. Likely multi-session; sub-split at kickoff as **RP.12e.1** CPU math mirrors (slice-sample trigonometry + cosine-lobe integral) → **RP.12e.2** `ssao_xegtao.comp` + `SsaoXeGtaoPipeline` → **RP.12e.3** swap into `RenderLoop`, retire the old `SsaoKernel`/`ssao_main.comp`. Adaptive-base temporal refinement from the paper skipped on first pass (no motion-vector infrastructure). | Unit: horizon-integration math mirror vs. analytical cosine lobe on known configs. Vulkan: pipeline-build + full-frame cycle tests mirroring today's `SsaoPipelineTest`. | `renderer/XeGtaoMath.{h,cpp}`, `ssao_xegtao.comp`, `SsaoXeGtaoPipeline.{h,cpp}`, `RenderLoop.{h,cpp}` |
+
+**Ordering**
+
+```
+RP.12a ── stand-alone (pure deletion)
+RP.12b ── prerequisite for → RP.12c, RP.12d
+                                     │
+RP.12c ── independent of 12d ────────┤
+                                     │
+RP.12d ── independent of 12c ────────┘
+
+RP.12e ── after RP.12d (reuses transparency-gate contract)
+```
+
+If RP.12c tuning can't deliver useful colour-bleed, a follow-up **RP.12f — Retire SSIL** is the escape hatch (symmetric to RP.12a's bloom removal).
+
 ---
 
 ## Stage 9 — Ray Tracing (Optional Advanced Rendering)

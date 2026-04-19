@@ -443,13 +443,16 @@ int main(int argc, char* argv[]) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.6d fragment-stage push constant: `uint stencilId` at offset 64. Per
-    // draw the loop pushes 0 / 1 / 2 (background / selected / hovered) so
-    // basic.frag can write outStencilId for the outline pass to sample.
+    // RP.6d / RP.12b fragment-stage push range at offset 64: `{uint stencilId,
+    // uint transparentBit}` (8 bytes). Per draw the loop pushes the per-mesh
+    // category (0/1/2) and the per-pipeline transparent flag (0 for opaque,
+    // 4 for the transparent pipeline) — basic.frag OR's them into the stencil
+    // G-buffer so the outline / SSAO / SSIL passes can detect glass without
+    // losing the underlying selection.
     VkPushConstantRange stencilPushRange{};
     stencilPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     stencilPushRange.offset = 64;
-    stencilPushRange.size = sizeof(uint32_t);
+    stencilPushRange.size = sizeof(uint32_t) * 2;
 
     bimeup::renderer::PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderLoop.GetRenderPass();
@@ -1541,16 +1544,6 @@ int main(int argc, char* argv[]) {
                                     fogSettings.end, fogSettings.enabled);
         }
 
-        // RP.10c — push bloom threshold + intensity into the renderer. Knee
-        // derives as threshold * 0.5 internally. Under MSAA the renderer
-        // force-clears the enable flag (the bloom chain samples the HDR
-        // resolve via sampler2D, which isn't built in that mode).
-        {
-            const auto& bloomSettings = renderQualityPanel->GetSettings().bloom;
-            renderLoop.SetBloomParams(bloomSettings.threshold, bloomSettings.intensity,
-                                      bloomSettings.enabled);
-        }
-
         // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR
         // space, so the tonemap needs a multiplier to keep direct-lit
         // surfaces off the ACES curve shoulder. Panel default is 0.6.
@@ -1650,10 +1643,10 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                uint32_t stencilId = resolveStencilId(handle);
+                uint32_t stencilPush[2] = {resolveStencilId(handle), 0U};
                 vkCmdPushConstants(cmd, opaquePipeline.GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilId),
-                                   &stencilId);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilPush),
+                                   stencilPush);
                 meshBuffer.Draw(cmd, handle);
             }
         }
@@ -1713,10 +1706,12 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
                                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
-                uint32_t stencilId = resolveStencilId(handle);
+                // RP.12b: transparent pipeline OR's bit 4 into the stencil
+                // G-buffer so SSAO / SSIL / outline can detect glass.
+                uint32_t stencilPush[2] = {resolveStencilId(handle), 0x4U};
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilId),
-                                   &stencilId);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(stencilPush),
+                                   stencilPush);
                 meshBuffer.Draw(cmd, handle);
             }
         }

@@ -18,13 +18,16 @@ namespace bimeup::renderer {
 // resolve an edge cleanly).
 float SobelMagnitude(const std::array<float, 9>& patch);
 
-// Detect a stencil-id boundary in a 3x3 patch of outline-stencil values
-// (0 = nothing, 1 = selected, 2 = hovered — written by the main pass per
-// RP.6c). Returns 0 when the patch is uniform (interior of a region or empty
-// background), otherwise the max stencil id present in the window. Hover (2)
-// beats selected (1) by construction so a cursor hovering over an already-
-// selected element still shows the hover colour. CPU mirror of the
-// stencil-edge branch of `outline.frag`.
+// Detect a stencil-id boundary in a 3x3 patch of outline-stencil values.
+// The low 2 bits carry the category (0 = nothing, 1 = selected, 2 = hovered —
+// written by the main pass per RP.6c); bit 4 is the RP.12b "transparent
+// surface" flag, OR'd in by the transparent draw pipeline so the same texel
+// can read 0/1/2 or 4/5/6. The reduction masks out bit 4 first, so a glass
+// overlay never hijacks the edge category — interior-of-selection-through-
+// glass stays uniform (no edge), and the outline still draws on the
+// selection's silhouette regardless of what's in front of it. Returns 0 when
+// the masked patch is uniform, otherwise the max masked id; hover (2) still
+// beats selected (1). CPU mirror of `edgeFromStencil` in `outline.frag`.
 std::uint8_t EdgeFromStencil(const std::array<std::uint8_t, 9>& patch);
 
 }  // namespace bimeup::renderer

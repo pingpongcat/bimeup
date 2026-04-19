@@ -57,7 +57,6 @@ struct RenderQualitySettings {
     SsilSettings ssil{};
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     renderer::FogSettings fog{};      // RP.9b
-    renderer::BloomSettings bloom{};  // RP.10c
 };
 
 class RenderQualityPanel : public Panel {

@@ -72,16 +72,14 @@ protected:
         m_renderPass = CreateColorOnlyRenderPass(m_device->GetDevice());
         // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
         // (RP.5d), binding 2 = half-res SSIL (RP.7d), binding 3 = depth
-        // pyramid mip 0 for the RP.9b fog factor, binding 4 = bloom mip 0
-        // (RP.10c).
+        // pyramid mip 0 for the RP.9b fog factor.
         m_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *m_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
@@ -220,31 +218,29 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
         << "tonemap.frag SPIR-V missing expected binding 3 (depth pyramid)";
 }
 
-// The push-constant contract between tonemap.frag and the CPU struct.
-// `vec4 fogColorEnabled` at offset 0 + `float fogStart` at 16 + `float
-// fogEnd` at 20 + `float bloomIntensity` at 24 + `float bloomEnabled` at
-// 28 + `float exposure` at 32 = 36 bytes total. A reorder that still
-// totals 36 bytes would need another guard but would not fail *this*
-// test — that guard lives in FieldOffsetsMatchShaderLayout below.
-TEST(TonemapPushConstantsTest, SizeIsThirtySixBytes) {
-    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 36U);
+// RP.12a push-constant contract between tonemap.frag and the CPU struct
+// after bloom retirement. `vec4 fogColorEnabled` at offset 0 + `float
+// fogStart` at 16 + `float fogEnd` at 20 + `float exposure` at 24 = 28
+// bytes total. A reorder that still totals 28 bytes would need another
+// guard but would not fail *this* test — that guard lives in
+// FieldOffsetsMatchShaderLayout below.
+TEST(TonemapPushConstantsTest, SizeIsTwentyEightBytes) {
+    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 28U);
 }
 
 TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogColorEnabled), 0U);
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogStart), 16U);
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, fogEnd), 20U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, bloomIntensity), 24U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, bloomEnabled), 28U);
-    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 32U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 24U);
 }
 
-// RP.10c — tonemap.frag's binding-4 sampler is the bloom pyramid mip 0
-// source for the composite. Walks the SPIR-V OpDecorate stream and asserts
-// a sampled image exists at (set 0, binding 4); a regression that dropped
-// the binding would let the renderer link a 4-binding layout against a
-// 5-binding shader and only trip at validation time.
-TEST_F(TonemapPipelineTest, FragmentShaderDeclaresBloomBindingAtLocationFour) {
+// RP.12a — tonemap.frag must NOT declare a binding-4 sampler after bloom
+// retirement. Walks the SPIR-V OpDecorate stream and asserts no sampled
+// image exists at (set 0, binding 4); a regression that re-added the
+// bloom binding would let a 5-binding shader link against the 4-binding
+// CPU layout and only trip at validation time.
+TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingFour) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
     ASSERT_TRUE(file.good());
@@ -271,6 +267,6 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresBloomBindingAtLocationFour) {
         }
         idx += len;
     }
-    EXPECT_TRUE(foundBinding4)
-        << "tonemap.frag SPIR-V missing expected binding 4 (bloom mip 0)";
+    EXPECT_FALSE(foundBinding4)
+        << "tonemap.frag SPIR-V still declares binding 4 (bloom retired in RP.12a)";
 }

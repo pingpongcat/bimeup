@@ -71,13 +71,6 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateSmaaResources();
     UpdateSmaaDescriptors();
     ClearSmaaChainToZero();
-    CreateBloomRenderPass();
-    CreateBloomDescriptors();
-    CreateBloomPipelines();
-    CreateBloomResources();
-    UpdateBloomDescriptors();
-    ClearBloomChainToZero();
-    UpdateTonemapDescriptors();  // re-run so the binding-4 bloom write lands
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
@@ -168,13 +161,6 @@ bool RenderLoop::EndFrame() {
     // pyramid gate) and when the panel disables it. Target A stays at the
     // cleared 0 when gated so the tonemap's add is a no-op.
     RunSsil(cmd);
-
-    // RP.10c — small-kernel bloom. 3-mip dual-filter down/up chain feeding
-    // the tonemap binding-4 composite. Gated off under MSAA (shader uses
-    // sampler2D on the HDR source) and when the panel disables bloom —
-    // mip 0 stays at its creation-time zero-clear so tonemap's bloom add
-    // is a no-op then.
-    RunBloom(cmd);
 
     // Post pass — tonemap + outline, writes to the per-swap LDR intermediate.
     // Its final layout is SHADER_READ_ONLY_OPTIMAL so the SMAA edge pass
@@ -443,20 +429,6 @@ void RenderLoop::SetFogParams(const glm::vec3& color, float start, float end,
     m_tonemapPush.fogEnd = end;
 }
 
-void RenderLoop::SetBloomParams(float threshold, float intensity, bool enabled) {
-    // Bloom inputs the HDR scene via a `sampler2D`; under MSAA the HDR
-    // resolve is still single-sample but the pyramid is built from the
-    // linear-depth pyramid for fog etc. Here we still gate bloom off
-    // under MSAA to match the fog / outline / SSAO pattern — a simpler
-    // guarantee than tracking which downstream passes need which
-    // single-sample inputs, and consistent with the other RP effects.
-    m_bloomThreshold = threshold;
-    m_bloomIntensity = intensity;
-    m_bloomEnabled = enabled && m_samples == VK_SAMPLE_COUNT_1_BIT;
-    m_tonemapPush.bloomIntensity = intensity;
-    m_tonemapPush.bloomEnabled = m_bloomEnabled ? 1.0F : 0.0F;
-}
-
 void RenderLoop::SetExposure(float exposure) {
     m_tonemapPush.exposure = exposure;
 }
@@ -485,27 +457,17 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateDepthPyramidResources();
     CreateSsaoResources();
     CreateSsilResources();
-    CreateBloomResources();
     CreateSmaaResources();
     CreateTonemapPipeline();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
     UpdateSsilDescriptors();
-    UpdateBloomDescriptors();
     UpdateSmaaDescriptors();
     ClearAoImagesToWhite();
     ClearSsilTargetsToZero();
-    ClearBloomChainToZero();
     ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
-    // MSAA gates bloom off — force-clear the enable flag so a frame cycled
-    // between SetSampleCount calls without a SetBloomParams refresh can't
-    // leave tonemap.frag sampling an un-dispatched (undefined) chain.
-    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
-        m_bloomEnabled = false;
-        m_tonemapPush.bloomEnabled = 0.0F;
-    }
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
     }
@@ -521,16 +483,13 @@ void RenderLoop::RecreateForSwapchain() {
     CreateDepthPyramidResources();
     CreateSsaoResources();
     CreateSsilResources();
-    CreateBloomResources();
     CreateSmaaResources();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
     UpdateSsilDescriptors();
-    UpdateBloomDescriptors();
     UpdateSmaaDescriptors();
     ClearAoImagesToWhite();
     ClearSsilTargetsToZero();
-    ClearBloomChainToZero();
     ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();
@@ -1110,13 +1069,11 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Five bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8),
+    // Four bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8),
     // 2 = post-blur SSIL (half-res RGBA16F), 3 = depth pyramid mip 0 (linear
-    // view-space Z, RP.4), 4 = bloom pyramid mip 0 (half-res HDR, RP.10).
-    // tonemap.frag adds SSIL + multiplies AO pre-ACES, samples linear depth
-    // at binding 3 for the RP.9 fog factor, and (when bloom is enabled)
-    // adds `bloom * intensity` pre-ACES from binding 4.
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    // view-space Z, RP.4). tonemap.frag adds SSIL + multiplies AO pre-ACES
+    // and samples linear depth at binding 3 for the RP.9 fog factor.
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1137,7 +1094,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * 5;  // HDR + AO + SSIL + depth + bloom per set
+    poolSize.descriptorCount = imageCount * 4;  // HDR + AO + SSIL + depth per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1201,19 +1158,7 @@ void RenderLoop::UpdateTonemapDescriptors() {
                                   : VK_NULL_HANDLE;
         depthInfo.sampler = m_depthPyramidSampler;
 
-        // RP.10c bloom mip 0 binding — sampled only when `pc.bloomEnabled`
-        // is set, but the descriptor is populated whenever the chain
-        // exists. Lazy-init path: null until CreateBloomResources runs,
-        // re-run UpdateTonemapDescriptors after that so the write lands
-        // before the first frame.
-        VkDescriptorImageInfo bloomInfo{};
-        bloomInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        bloomInfo.imageView = (i < m_bloomMipViews.size())
-                                  ? m_bloomMipViews[i][0]
-                                  : VK_NULL_HANDLE;
-        bloomInfo.sampler = m_bloomSampler;
-
-        std::array<VkWriteDescriptorSet, 5> writes{};
+        std::array<VkWriteDescriptorSet, 4> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_tonemapDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -1249,15 +1194,6 @@ void RenderLoop::UpdateTonemapDescriptors() {
             writes[writeCount].pImageInfo = &depthInfo;
             ++writeCount;
         }
-        if (bloomInfo.imageView != VK_NULL_HANDLE && bloomInfo.sampler != VK_NULL_HANDLE) {
-            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
-            writes[writeCount].dstBinding = 4;
-            writes[writeCount].descriptorCount = 1;
-            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[writeCount].pImageInfo = &bloomInfo;
-            ++writeCount;
-        }
         vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);
     }
 }
@@ -1266,7 +1202,6 @@ void RenderLoop::CleanupFrameResources() {
     VkDevice device = m_device.GetDevice();
 
     CleanupSmaaResources();
-    CleanupBloomResources();
     CleanupSsilResources();
     CleanupSsaoResources();
     CleanupDepthPyramidResources();
@@ -2389,502 +2324,6 @@ void RenderLoop::CleanupSmaaDescriptors() {
     }
 }
 
-void RenderLoop::CreateBloomRenderPass() {
-    // Single HDR_FORMAT colour attachment at 1× samples, LOAD_OP_LOAD so the
-    // upsample passes can preserve the higher mip's existing content under
-    // additive blend. Initial layout SHADER_READ_ONLY_OPTIMAL matches the
-    // post-state of each mip (written by a previous down/up pass, or the
-    // creation-time ClearBloomChainToZero transition). Final layout is the
-    // same so subsequent passes + the tonemap binding-4 sample Just Work.
-    VkAttachmentDescription color{};
-    color.format = HDR_FORMAT;
-    color.samples = VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    // Each bloom dispatch reads the previous mip (written by the previous
-    // bloom pass) and writes the current mip. Dep makes the prior pass's
-    // colour-write visible as a fragment shader read, and the layout
-    // transition for LOAD_OP_LOAD visible to the colour-attachment stage.
-    std::array<VkSubpassDependency, 2> deps{};
-    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    deps[0].dstSubpass = 0;
-    deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    deps[0].dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    deps[0].dstAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-    deps[1].srcSubpass = 0;
-    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    VkRenderPassCreateInfo rpInfo{};
-    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = 1;
-    rpInfo.pAttachments = &color;
-    rpInfo.subpassCount = 1;
-    rpInfo.pSubpasses = &subpass;
-    rpInfo.dependencyCount = static_cast<uint32_t>(deps.size());
-    rpInfo.pDependencies = deps.data();
-
-    if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_bloomRenderPass) !=
-        VK_SUCCESS) {
-        throw std::runtime_error("Failed to create bloom render pass");
-    }
-}
-
-void RenderLoop::CreateBloomDescriptors() {
-    // Linear sampler — dual-filter taps at half-texel offsets are the whole
-    // point of the algorithm, so linear is load-bearing. CLAMP_TO_EDGE so
-    // taps at the attachment border don't pull in wrap-around data. maxLod
-    // = 0 — we always sample single-mip views (per-mip descriptor sets).
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.minLod = 0.0F;
-    samplerInfo.maxLod = 0.0F;
-    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_bloomSampler) !=
-        VK_SUCCESS) {
-        throw std::runtime_error("Failed to create bloom sampler");
-    }
-
-    // Single CIS binding — same layout for down and up pipelines. Both
-    // shaders sample exactly one source: HDR / previous-mip for down,
-    // lower-mip for up. Framebuffer selects the write target.
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
-                                    &m_bloomSetLayout) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create bloom descriptor set layout");
-    }
-
-    // Per swap: 3 down sets (HDR→0, 0→1, 1→2) + 2 up sets (2→1, 1→0).
-    uint32_t imageCount = m_swapchain.GetImageCount();
-    const uint32_t setsPerImage = BLOOM_MIPS + (BLOOM_MIPS - 1);
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * setsPerImage;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = imageCount * setsPerImage;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
-                               &m_bloomDescriptorPool) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create bloom descriptor pool");
-    }
-
-    std::vector<VkDescriptorSetLayout> layouts(setsPerImage, m_bloomSetLayout);
-    m_bloomDownSets.assign(imageCount, {});
-    m_bloomUpSets.assign(imageCount, {});
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        std::array<VkDescriptorSet, BLOOM_MIPS + (BLOOM_MIPS - 1)> sets{};
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = m_bloomDescriptorPool;
-        allocInfo.descriptorSetCount = setsPerImage;
-        allocInfo.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo, sets.data()) !=
-            VK_SUCCESS) {
-            throw std::runtime_error("Failed to allocate bloom descriptor sets");
-        }
-        for (uint32_t m = 0; m < BLOOM_MIPS; ++m) {
-            m_bloomDownSets[i][m] = sets[m];
-        }
-        for (uint32_t m = 0; m < BLOOM_MIPS - 1; ++m) {
-            m_bloomUpSets[i][m] = sets[BLOOM_MIPS + m];
-        }
-    }
-}
-
-void RenderLoop::CreateBloomPipelines() {
-    m_bloomVertShader = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
-                                                 m_shaderDir + "/bloom.vert.spv");
-    m_bloomDownFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
-                                                     m_shaderDir + "/bloom_down.frag.spv");
-    m_bloomUpFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
-                                                   m_shaderDir + "/bloom_up.frag.spv");
-    m_bloomDownPipeline = std::make_unique<BloomDownPipeline>(
-        m_device, *m_bloomVertShader, *m_bloomDownFragShader, m_bloomRenderPass,
-        m_bloomSetLayout, VK_SAMPLE_COUNT_1_BIT);
-    m_bloomUpPipeline = std::make_unique<BloomUpPipeline>(
-        m_device, *m_bloomVertShader, *m_bloomUpFragShader, m_bloomRenderPass,
-        m_bloomSetLayout, VK_SAMPLE_COUNT_1_BIT);
-}
-
-void RenderLoop::CreateBloomResources() {
-    VkExtent2D extent = m_swapchain.GetExtent();
-    uint32_t imageCount = m_swapchain.GetImageCount();
-
-    // Mip sizes: mip 0 = half res, mip 1 = quarter, mip 2 = eighth.
-    // Guard against pathological 1-pixel swapchains — max(1, …) clamps so
-    // the attachment never has a zero extent.
-    for (uint32_t m = 0; m < BLOOM_MIPS; ++m) {
-        uint32_t shift = m + 1;
-        m_bloomMipExtents[m] = {std::max(1U, extent.width >> shift),
-                                std::max(1U, extent.height >> shift)};
-    }
-
-    m_bloomImages.assign(imageCount, VK_NULL_HANDLE);
-    m_bloomAllocations.assign(imageCount, VK_NULL_HANDLE);
-    m_bloomMipViews.assign(imageCount, {});
-    m_bloomFramebuffers.assign(imageCount, {});
-
-    VkExtent2D baseExtent = m_bloomMipExtents[0];
-
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = HDR_FORMAT;
-        imageInfo.extent = {baseExtent.width, baseExtent.height, 1};
-        imageInfo.mipLevels = BLOOM_MIPS;
-        imageInfo.arrayLayers = 1;
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        // COLOR_ATTACHMENT for the down/up framebuffer writes; SAMPLED for
-        // the down/up shader reads + tonemap composite; TRANSFER_DST so
-        // ClearBloomChainToZero can vkCmdClearColorImage the chain on
-        // creation/resize before the first dispatch (otherwise tonemap
-        // would sample undefined contents until bloom is enabled).
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                          VK_IMAGE_USAGE_SAMPLED_BIT |
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-        VmaAllocationCreateInfo allocInfo{};
-        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
-                           &m_bloomImages[i], &m_bloomAllocations[i], nullptr) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create bloom image");
-        }
-
-        for (uint32_t m = 0; m < BLOOM_MIPS; ++m) {
-            VkImageViewCreateInfo viewInfo{};
-            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            viewInfo.image = m_bloomImages[i];
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = HDR_FORMAT;
-            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            viewInfo.subresourceRange.baseMipLevel = m;
-            viewInfo.subresourceRange.levelCount = 1;
-            viewInfo.subresourceRange.baseArrayLayer = 0;
-            viewInfo.subresourceRange.layerCount = 1;
-            if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
-                                  &m_bloomMipViews[i][m]) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create bloom mip view");
-            }
-
-            VkFramebufferCreateInfo fbInfo{};
-            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fbInfo.renderPass = m_bloomRenderPass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &m_bloomMipViews[i][m];
-            fbInfo.width = m_bloomMipExtents[m].width;
-            fbInfo.height = m_bloomMipExtents[m].height;
-            fbInfo.layers = 1;
-            if (vkCreateFramebuffer(m_device.GetDevice(), &fbInfo, nullptr,
-                                    &m_bloomFramebuffers[i][m]) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create bloom framebuffer");
-            }
-        }
-    }
-}
-
-void RenderLoop::UpdateBloomDescriptors() {
-    // Source bindings per set:
-    //   down[0] ← HDR resolve (per-swap)
-    //   down[1] ← bloom mip 0
-    //   down[2] ← bloom mip 1
-    //   up[0]   ← bloom mip 2    (writes mip 1)
-    //   up[1]   ← bloom mip 1    (writes mip 0)
-    // All sampled at SHADER_READ_ONLY_OPTIMAL — the bloom render pass's
-    // final layout matches so sets are valid across passes.
-    for (uint32_t i = 0; i < m_bloomDownSets.size(); ++i) {
-        if (m_bloomMipViews.size() <= i) {
-            continue;
-        }
-        std::array<VkDescriptorImageInfo, BLOOM_MIPS + (BLOOM_MIPS - 1)> infos{};
-        std::array<VkWriteDescriptorSet, BLOOM_MIPS + (BLOOM_MIPS - 1)> writes{};
-
-        // Down[0] reads HDR; down[n>0] reads mip (n-1).
-        infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        infos[0].imageView = m_hdrImageViews[i];
-        infos[0].sampler = m_bloomSampler;
-        for (uint32_t m = 1; m < BLOOM_MIPS; ++m) {
-            infos[m].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[m].imageView = m_bloomMipViews[i][m - 1];
-            infos[m].sampler = m_bloomSampler;
-        }
-        // Up[0] reads mip 2; up[1] reads mip 1.
-        for (uint32_t u = 0; u < BLOOM_MIPS - 1; ++u) {
-            uint32_t srcMip = BLOOM_MIPS - 1 - u;  // 2, 1
-            infos[BLOOM_MIPS + u].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[BLOOM_MIPS + u].imageView = m_bloomMipViews[i][srcMip];
-            infos[BLOOM_MIPS + u].sampler = m_bloomSampler;
-        }
-
-        for (uint32_t s = 0; s < writes.size(); ++s) {
-            VkDescriptorSet dst = s < BLOOM_MIPS
-                                      ? m_bloomDownSets[i][s]
-                                      : m_bloomUpSets[i][s - BLOOM_MIPS];
-            writes[s].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[s].dstSet = dst;
-            writes[s].dstBinding = 0;
-            writes[s].descriptorCount = 1;
-            writes[s].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[s].pImageInfo = &infos[s];
-        }
-        vkUpdateDescriptorSets(m_device.GetDevice(), static_cast<uint32_t>(writes.size()),
-                               writes.data(), 0, nullptr);
-    }
-}
-
-void RenderLoop::ClearBloomChainToZero() {
-    // One-shot command buffer: transition every mip from UNDEFINED to
-    // SHADER_READ_ONLY_OPTIMAL (matching the bloom pass's initial layout)
-    // via a TRANSFER_DST_OPTIMAL clear to zero. Runs at creation and on
-    // MSAA / resize so the first bloom-disabled frame samples
-    // deterministic zero at tonemap binding 4, and the first bloom pass
-    // finds every target mip in the expected layout.
-    if (m_bloomImages.empty()) {
-        return;
-    }
-
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = m_commandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    if (vkAllocateCommandBuffers(m_device.GetDevice(), &allocInfo, &cmd) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate bloom-clear command buffer");
-    }
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
-    VkClearColorValue zero{};
-    for (size_t i = 0; i < m_bloomImages.size(); ++i) {
-        VkImageMemoryBarrier toTransfer{};
-        toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toTransfer.srcAccessMask = 0;
-        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toTransfer.image = m_bloomImages[i];
-        toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        toTransfer.subresourceRange.baseMipLevel = 0;
-        toTransfer.subresourceRange.levelCount = BLOOM_MIPS;
-        toTransfer.subresourceRange.baseArrayLayer = 0;
-        toTransfer.subresourceRange.layerCount = 1;
-        toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &toTransfer);
-
-        VkImageSubresourceRange range{};
-        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        range.baseMipLevel = 0;
-        range.levelCount = BLOOM_MIPS;
-        range.baseArrayLayer = 0;
-        range.layerCount = 1;
-        vkCmdClearColorImage(cmd, m_bloomImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero,
-                             1, &range);
-
-        VkImageMemoryBarrier toShader{};
-        toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toShader.image = m_bloomImages[i];
-        toShader.subresourceRange = range;
-        toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-                             1, &toShader);
-    }
-
-    vkEndCommandBuffer(cmd);
-
-    VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_device.GetGraphicsQueue());
-    vkFreeCommandBuffers(m_device.GetDevice(), m_commandPool, 1, &cmd);
-}
-
-void RenderLoop::RunBloom(VkCommandBuffer cmd) {
-    // Gate: `bloom_down.frag` reads the HDR resolve as sampler2D, so MSAA
-    // must already be resolved (it is — HDR resolve target is 1×). The
-    // panel toggle lands here via `m_bloomEnabled`; when false the chain
-    // is skipped and mip 0 stays at its last-known contents (cleared at
-    // creation / last resize). The tonemap push constant's bloomEnabled
-    // flag is the primary gate — even if we skip RunBloom, the shader
-    // won't composite bloom because the flag is also zeroed.
-    if (!m_bloomEnabled || m_bloomImages.empty()) {
-        return;
-    }
-    const uint32_t i = m_currentImageIndex;
-    if (i >= m_bloomFramebuffers.size()) {
-        return;
-    }
-
-    const float knee = std::max(0.0F, m_bloomThreshold * 0.5F);
-
-    auto runPass = [&](uint32_t dstMip, VkDescriptorSet set, VkPipeline pipeline,
-                       VkPipelineLayout layout, VkExtent2D dstExtent, VkExtent2D srcExtent,
-                       bool isDown, int32_t applyPrefilter) {
-        VkRenderPassBeginInfo rpInfo{};
-        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rpInfo.renderPass = m_bloomRenderPass;
-        rpInfo.framebuffer = m_bloomFramebuffers[i][dstMip];
-        rpInfo.renderArea.offset = {0, 0};
-        rpInfo.renderArea.extent = dstExtent;
-        rpInfo.clearValueCount = 0;  // LOAD_OP_LOAD — no clear
-
-        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        VkViewport viewport{};
-        viewport.x = 0.0F;
-        viewport.y = 0.0F;
-        viewport.width = static_cast<float>(dstExtent.width);
-        viewport.height = static_cast<float>(dstExtent.height);
-        viewport.minDepth = 0.0F;
-        viewport.maxDepth = 1.0F;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-        VkRect2D scissor{{0, 0}, dstExtent};
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0,
-                                nullptr);
-
-        if (isDown) {
-            BloomDownPipeline::PushConstants push{};
-            push.rcpSrcSize = glm::vec2(1.0F / static_cast<float>(srcExtent.width),
-                                        1.0F / static_cast<float>(srcExtent.height));
-            push.threshold = m_bloomThreshold;
-            push.knee = knee;
-            push.applyPrefilter = applyPrefilter;
-            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
-                               &push);
-        } else {
-            BloomUpPipeline::PushConstants push{};
-            push.rcpSrcSize = glm::vec2(1.0F / static_cast<float>(srcExtent.width),
-                                        1.0F / static_cast<float>(srcExtent.height));
-            push.intensity = 1.0F;  // intermediate upsample; final composite lives in tonemap
-            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
-                               &push);
-        }
-
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRenderPass(cmd);
-    };
-
-    VkExtent2D hdrExtent = m_swapchain.GetExtent();
-    VkPipeline downPipeline = m_bloomDownPipeline->GetPipeline();
-    VkPipelineLayout downLayout = m_bloomDownPipeline->GetLayout();
-    VkPipeline upPipeline = m_bloomUpPipeline->GetPipeline();
-    VkPipelineLayout upLayout = m_bloomUpPipeline->GetLayout();
-
-    // Down chain: HDR → 0 (prefilter on), 0 → 1, 1 → 2.
-    runPass(0, m_bloomDownSets[i][0], downPipeline, downLayout, m_bloomMipExtents[0],
-            hdrExtent, /*isDown=*/true, /*applyPrefilter=*/1);
-    runPass(1, m_bloomDownSets[i][1], downPipeline, downLayout, m_bloomMipExtents[1],
-            m_bloomMipExtents[0], true, 0);
-    runPass(2, m_bloomDownSets[i][2], downPipeline, downLayout, m_bloomMipExtents[2],
-            m_bloomMipExtents[1], true, 0);
-
-    // Up chain: 2 → 1 (additive), 1 → 0 (additive).
-    runPass(1, m_bloomUpSets[i][0], upPipeline, upLayout, m_bloomMipExtents[1],
-            m_bloomMipExtents[2], /*isDown=*/false, 0);
-    runPass(0, m_bloomUpSets[i][1], upPipeline, upLayout, m_bloomMipExtents[0],
-            m_bloomMipExtents[1], false, 0);
-}
-
-void RenderLoop::CleanupBloomResources() {
-    VkDevice device = m_device.GetDevice();
-    for (size_t i = 0; i < m_bloomImages.size(); ++i) {
-        for (uint32_t m = 0; m < BLOOM_MIPS; ++m) {
-            if (m_bloomFramebuffers[i][m] != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, m_bloomFramebuffers[i][m], nullptr);
-                m_bloomFramebuffers[i][m] = VK_NULL_HANDLE;
-            }
-            if (m_bloomMipViews[i][m] != VK_NULL_HANDLE) {
-                vkDestroyImageView(device, m_bloomMipViews[i][m], nullptr);
-                m_bloomMipViews[i][m] = VK_NULL_HANDLE;
-            }
-        }
-        if (m_bloomImages[i] != VK_NULL_HANDLE) {
-            vmaDestroyImage(m_device.GetAllocator(), m_bloomImages[i], m_bloomAllocations[i]);
-            m_bloomImages[i] = VK_NULL_HANDLE;
-            m_bloomAllocations[i] = VK_NULL_HANDLE;
-        }
-    }
-    m_bloomImages.clear();
-    m_bloomAllocations.clear();
-    m_bloomMipViews.clear();
-    m_bloomFramebuffers.clear();
-}
-
-void RenderLoop::CleanupBloomDescriptors() {
-    VkDevice device = m_device.GetDevice();
-    if (m_bloomDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_bloomDescriptorPool, nullptr);
-        m_bloomDescriptorPool = VK_NULL_HANDLE;
-    }
-    m_bloomDownSets.clear();
-    m_bloomUpSets.clear();
-    if (m_bloomSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_bloomSetLayout, nullptr);
-        m_bloomSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_bloomSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(device, m_bloomSampler, nullptr);
-        m_bloomSampler = VK_NULL_HANDLE;
-    }
-}
-
 void RenderLoop::Cleanup() {
     VkDevice device = m_device.GetDevice();
 
@@ -2913,11 +2352,6 @@ void RenderLoop::Cleanup() {
     m_smaaEdgeFragShader.reset();
     m_smaaWeightsFragShader.reset();
     m_smaaBlendFragShader.reset();
-    m_bloomDownPipeline.reset();
-    m_bloomUpPipeline.reset();
-    m_bloomVertShader.reset();
-    m_bloomDownFragShader.reset();
-    m_bloomUpFragShader.reset();
 
     CleanupFrameResources();
     CleanupTonemapDescriptors();
@@ -2927,7 +2361,6 @@ void RenderLoop::Cleanup() {
     CleanupOutlineDescriptors();
     CleanupSmaaLuts();
     CleanupSmaaDescriptors();
-    CleanupBloomDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
@@ -2937,10 +2370,6 @@ void RenderLoop::Cleanup() {
     }
     if (m_presentRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_presentRenderPass, nullptr);
-    }
-    if (m_bloomRenderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(device, m_bloomRenderPass, nullptr);
-        m_bloomRenderPass = VK_NULL_HANDLE;
     }
     if (m_smaaRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_smaaRenderPass, nullptr);
