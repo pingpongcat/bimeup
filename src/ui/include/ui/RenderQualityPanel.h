@@ -19,12 +19,24 @@ struct OutlineSettings {
     float depthEdgeThreshold{0.05F};  // metres — Sobel cutoff for the within-selection fallback
 };
 
+// RP.7d SSIL (screen-space indirect lighting) knobs. The renderer gates the
+// pass off under MSAA (inherits the depth-pyramid gate) regardless of the
+// `enabled` flag; the flag primarily drives the dispatch for the non-MSAA
+// path. Defaults match the `RunSsil` fallback constants.
+struct SsilSettings {
+    bool enabled{false};
+    float radius{0.5F};
+    float intensity{1.0F};
+    float normalRejection{2.0F};
+};
+
 struct RenderQualitySettings {
     renderer::LightingScene lighting{renderer::MakeDefaultLighting()};
 
     int msaaSamples{1};          // R.2 — 1, 2, 4, 8
 
     OutlineSettings outline{};
+    SsilSettings ssil{};
 };
 
 class RenderQualityPanel : public Panel {

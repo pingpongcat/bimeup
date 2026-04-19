@@ -102,6 +102,16 @@ void RenderQualityPanel::OnDraw() {
         ImGui::EndDisabled();
     }
 
+    if (ImGui::CollapsingHeader("SSIL")) {
+        auto& ssil = m_settings.ssil;
+        ImGui::Checkbox("Enabled", &ssil.enabled);
+        ImGui::BeginDisabled(!ssil.enabled);
+        ImGui::SliderFloat("Radius (m)", &ssil.radius, 0.05F, 2.0F, "%.2f");
+        ImGui::SliderFloat("Intensity", &ssil.intensity, 0.0F, 4.0F, "%.2f");
+        ImGui::SliderFloat("Normal rejection", &ssil.normalRejection, 0.0F, 16.0F, "%.1f");
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Shadows")) {
         auto& shadow = m_settings.lighting.shadow;
         ImGui::Checkbox("Enabled", &shadow.enabled);

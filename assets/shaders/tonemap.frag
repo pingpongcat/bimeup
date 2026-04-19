@@ -5,12 +5,17 @@
 // rational form is non-monotonic below zero) and the result is clamped to
 // [0,1] since the sRGB swapchain does the final encode.
 //
-// RP.5d: multiply the half-res SSAO term (binding 1) into the HDR colour
-// before the curve. AO A is cleared to 1.0 at creation time and stays at
-// 1.0 when SSAO is gated off (MSAA), so this multiply is a no-op then.
+// Composite order before ACES:
+//   RP.7d: add the half-res SSIL indirect colour (binding 2) into the HDR.
+//          SSIL A is cleared to 0 at creation time and stays at 0 when the
+//          pass is gated off, so the add is a no-op then.
+//   RP.5d: multiply the half-res SSAO term (binding 1) into the composited
+//          HDR. AO A is cleared to 1.0, so the multiply is a no-op when
+//          SSAO is gated off.
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
 layout(set = 0, binding = 1) uniform sampler2D aoTexture;
+layout(set = 0, binding = 2) uniform sampler2D ssilTexture;
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
@@ -27,6 +32,7 @@ vec3 aces(vec3 x) {
 
 void main() {
     vec3 hdr = texture(hdrTexture, inUv).rgb;
+    vec3 ssil = texture(ssilTexture, inUv).rgb;
     float ao = texture(aoTexture, inUv).r;
-    outColor = vec4(aces(hdr * ao), 1.0);
+    outColor = vec4(aces((hdr + ssil) * ao), 1.0);
 }

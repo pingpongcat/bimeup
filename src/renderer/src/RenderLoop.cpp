@@ -8,6 +8,9 @@
 #include <renderer/SsaoBlurPipeline.h>
 #include <renderer/SsaoKernel.h>
 #include <renderer/SsaoPipeline.h>
+#include <renderer/SsilBlurPipeline.h>
+#include <renderer/SsilMath.h>
+#include <renderer/SsilPipeline.h>
 #include <renderer/Swapchain.h>
 #include <renderer/TonemapPipeline.h>
 #include <tools/Log.h>
@@ -49,7 +52,12 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateSsaoResources();
     UpdateSsaoDescriptors();
     ClearAoImagesToWhite();
-    UpdateTonemapDescriptors();  // re-run so the AO binding points at the freshly created images
+    CreateSsilDescriptors();
+    CreateSsilPipelines();
+    CreateSsilResources();
+    UpdateSsilDescriptors();
+    ClearSsilTargetsToZero();
+    UpdateTonemapDescriptors();  // re-run so AO + SSIL bindings point at the freshly created images
     CreateOutlineDescriptors();
     CreateOutlinePipeline();
     UpdateOutlineDescriptors();
@@ -138,6 +146,12 @@ bool RenderLoop::EndFrame() {
     // Produces the half-res AO target that the tonemap fragment samples.
     RunSsao(cmd);
 
+    // RP.7d — SSIL main + separable blur. Samples the previous-frame HDR
+    // through the reprojection matrix; gated off under MSAA (inherits the
+    // pyramid gate) and when the panel disables it. Target A stays at the
+    // cleared 0 when gated so the tonemap's add is a no-op.
+    RunSsil(cmd);
+
     // Begin the tonemap/present pass targeting the swapchain image.
     VkRenderPassBeginInfo presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -189,6 +203,13 @@ bool RenderLoop::EndFrame() {
     }
 
     vkCmdEndRenderPass(cmd);
+
+    // RP.7d — after the tonemap pass has finished sampling the current HDR,
+    // snapshot it into the prev-HDR slot for this swap image and cache the
+    // current viewProj as the "prev" matrix that next frame's SSIL pass will
+    // use when reprojecting. Runs every frame regardless of MSAA / SSIL
+    // enable so that toggling SSIL on later finds a valid prev-HDR waiting.
+    CopyHdrToPrevHdr(cmd);
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer");
@@ -302,10 +323,29 @@ VkImageView RenderLoop::GetAoImageView(uint32_t imageIndex) const {
     return m_aoViewsA[imageIndex];
 }
 
+VkImageView RenderLoop::GetSsilImageView(uint32_t imageIndex) const {
+    if (imageIndex >= m_ssilViewsA.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return m_ssilViewsA[imageIndex];
+}
+
 void RenderLoop::SetProjection(const glm::mat4& proj, float nearZ, float farZ) {
     m_proj = proj;
     m_nearZ = nearZ;
     m_farZ = farZ;
+}
+
+void RenderLoop::SetView(const glm::mat4& view) {
+    m_view = view;
+}
+
+void RenderLoop::SetSsilParams(float radius, float intensity, float normalRejection,
+                               bool enabled) {
+    m_ssilRadius = radius;
+    m_ssilIntensity = intensity;
+    m_ssilNormalRejection = normalRejection;
+    m_ssilEnabled = enabled;
 }
 
 void RenderLoop::SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled) {
@@ -335,10 +375,13 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateFramebuffers();
     CreateDepthPyramidResources();
     CreateSsaoResources();
+    CreateSsilResources();
     CreateTonemapPipeline();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
+    UpdateSsilDescriptors();
     ClearAoImagesToWhite();
+    ClearSsilTargetsToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
     if (bimeup::tools::Log::GetLogger()) {
@@ -354,9 +397,12 @@ void RenderLoop::RecreateForSwapchain() {
     CreateFramebuffers();
     CreateDepthPyramidResources();
     CreateSsaoResources();
+    CreateSsilResources();
     UpdateDepthPyramidDescriptors();
     UpdateSsaoDescriptors();
+    UpdateSsilDescriptors();
     ClearAoImagesToWhite();
+    ClearSsilTargetsToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();
 }
@@ -643,7 +689,11 @@ void RenderLoop::CreateHdrResources() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;  // single-sample resolve target
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // TRANSFER_SRC added for RP.7d — `CopyHdrToPrevHdr` snapshots this
+        // image into the prev-HDR slot at the end of each frame so the next
+        // frame's SSIL pass can sample the reprojected previous HDR.
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         VmaAllocationCreateInfo allocInfo{};
@@ -914,9 +964,10 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Two bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8).
-    // tonemap.frag multiplies the AO scalar into the HDR colour before ACES.
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    // Three bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8),
+    // 2 = post-blur SSIL (half-res RGBA16F). tonemap.frag adds the SSIL value
+    // to the HDR colour then multiplies by the AO scalar before ACES.
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -925,6 +976,10 @@ void RenderLoop::CreateTonemapDescriptors() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -939,7 +994,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * 2;  // HDR + AO per set
+    poolSize.descriptorCount = imageCount * 3;  // HDR + AO + SSIL per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -981,7 +1036,15 @@ void RenderLoop::UpdateTonemapDescriptors() {
         aoInfo.imageView = i < m_aoViewsA.size() ? m_aoViewsA[i] : VK_NULL_HANDLE;
         aoInfo.sampler = m_aoSampler;
 
-        std::array<VkWriteDescriptorSet, 2> writes{};
+        // SSIL binding — same lazy-init story as AO: null until SSIL
+        // resources exist, re-run of UpdateTonemapDescriptors after ctor
+        // lands a valid handle before the first frame.
+        VkDescriptorImageInfo ssilInfo{};
+        ssilInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ssilInfo.imageView = i < m_ssilViewsA.size() ? m_ssilViewsA[i] : VK_NULL_HANDLE;
+        ssilInfo.sampler = m_ssilSampler;
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_tonemapDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -991,13 +1054,22 @@ void RenderLoop::UpdateTonemapDescriptors() {
 
         uint32_t writeCount = 1;
         if (aoInfo.imageView != VK_NULL_HANDLE && aoInfo.sampler != VK_NULL_HANDLE) {
-            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet = m_tonemapDescriptorSets[i];
-            writes[1].dstBinding = 1;
-            writes[1].descriptorCount = 1;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[1].pImageInfo = &aoInfo;
-            writeCount = 2;
+            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
+            writes[writeCount].dstBinding = 1;
+            writes[writeCount].descriptorCount = 1;
+            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[writeCount].pImageInfo = &aoInfo;
+            ++writeCount;
+        }
+        if (ssilInfo.imageView != VK_NULL_HANDLE && ssilInfo.sampler != VK_NULL_HANDLE) {
+            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
+            writes[writeCount].dstBinding = 2;
+            writes[writeCount].descriptorCount = 1;
+            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[writeCount].pImageInfo = &ssilInfo;
+            ++writeCount;
         }
         vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);
     }
@@ -1006,6 +1078,7 @@ void RenderLoop::UpdateTonemapDescriptors() {
 void RenderLoop::CleanupFrameResources() {
     VkDevice device = m_device.GetDevice();
 
+    CleanupSsilResources();
     CleanupSsaoResources();
     CleanupDepthPyramidResources();
 
@@ -1271,6 +1344,10 @@ void RenderLoop::Cleanup() {
     m_ssaoBlurPipeline.reset();
     m_ssaoMainShader.reset();
     m_ssaoBlurShader.reset();
+    m_ssilPipeline.reset();
+    m_ssilBlurPipeline.reset();
+    m_ssilMainShader.reset();
+    m_ssilBlurShader.reset();
     m_outlinePipeline.reset();
     m_outlineVertShader.reset();
     m_outlineFragShader.reset();
@@ -1279,6 +1356,7 @@ void RenderLoop::Cleanup() {
     CleanupTonemapDescriptors();
     CleanupDepthPyramidDescriptors();
     CleanupSsaoDescriptors();
+    CleanupSsilDescriptors();
     CleanupOutlineDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
@@ -2299,6 +2377,775 @@ void RenderLoop::CleanupSsaoDescriptors() {
     if (m_aoSampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_aoSampler, nullptr);
         m_aoSampler = VK_NULL_HANDLE;
+    }
+}
+
+namespace {
+
+struct SsilUboLayout {
+    glm::mat4 proj;
+    glm::mat4 invProj;
+    glm::mat4 reprojection;
+    glm::vec4 kernel[SsilPipeline::kKernelSize];
+};
+
+}  // namespace
+
+void RenderLoop::CreateSsilDescriptors() {
+    // Linear sampler for both the half-res SSIL targets and the prev-HDR
+    // samples. CLAMP_TO_EDGE so reprojection taps that just barely leave the
+    // frustum don't smear a border pixel.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_ssilSampler) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSIL sampler");
+    }
+
+    // Main set layout: pyramid (CIS), normal (CIS), prev-HDR (CIS),
+    // SsilUbo (UBO), SSIL A (STORAGE_IMAGE). Matches SsilPipeline docs.
+    std::array<VkDescriptorSetLayoutBinding, 5> mainBindings{};
+    for (uint32_t b = 0; b < 3; ++b) {
+        mainBindings[b].binding = b;
+        mainBindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mainBindings[b].descriptorCount = 1;
+        mainBindings[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    mainBindings[3].binding = 3;
+    mainBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    mainBindings[3].descriptorCount = 1;
+    mainBindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[4].binding = 4;
+    mainBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    mainBindings[4].descriptorCount = 1;
+    mainBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo mainLayoutInfo{};
+    mainLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    mainLayoutInfo.bindingCount = static_cast<uint32_t>(mainBindings.size());
+    mainLayoutInfo.pBindings = mainBindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &mainLayoutInfo, nullptr,
+                                    &m_ssilMainSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSIL main descriptor set layout");
+    }
+
+    // Blur set layout: SSIL input (CIS), pyramid (CIS), normal (CIS),
+    // SSIL output (STORAGE_IMAGE).
+    std::array<VkDescriptorSetLayoutBinding, 4> blurBindings{};
+    for (uint32_t b = 0; b < 3; ++b) {
+        blurBindings[b].binding = b;
+        blurBindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        blurBindings[b].descriptorCount = 1;
+        blurBindings[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    blurBindings[3].binding = 3;
+    blurBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    blurBindings[3].descriptorCount = 1;
+    blurBindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo blurLayoutInfo{};
+    blurLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    blurLayoutInfo.bindingCount = static_cast<uint32_t>(blurBindings.size());
+    blurLayoutInfo.pBindings = blurBindings.data();
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &blurLayoutInfo, nullptr,
+                                    &m_ssilBlurSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSIL blur descriptor set layout");
+    }
+
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    const uint32_t mainSets = imageCount;
+    const uint32_t blurSets = imageCount * 2;
+    const uint32_t totalSets = mainSets + blurSets;
+
+    // Main: 3 CIS + 1 UBO + 1 STORAGE. Blur: 3 CIS + 1 STORAGE.
+    std::array<VkDescriptorPoolSize, 3> sizes{};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[0].descriptorCount = (mainSets * 3) + (blurSets * 3);
+    sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    sizes[1].descriptorCount = mainSets;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    sizes[2].descriptorCount = mainSets + blurSets;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = totalSets;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(sizes.size());
+    poolInfo.pPoolSizes = sizes.data();
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_ssilDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSIL descriptor pool");
+    }
+
+    std::vector<VkDescriptorSetLayout> mainLayouts(imageCount, m_ssilMainSetLayout);
+    VkDescriptorSetAllocateInfo mainAlloc{};
+    mainAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    mainAlloc.descriptorPool = m_ssilDescriptorPool;
+    mainAlloc.descriptorSetCount = imageCount;
+    mainAlloc.pSetLayouts = mainLayouts.data();
+    m_ssilMainSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &mainAlloc,
+                                 m_ssilMainSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSIL main descriptor sets");
+    }
+
+    std::vector<VkDescriptorSetLayout> blurLayouts(imageCount, m_ssilBlurSetLayout);
+    VkDescriptorSetAllocateInfo blurAlloc{};
+    blurAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    blurAlloc.descriptorPool = m_ssilDescriptorPool;
+    blurAlloc.descriptorSetCount = imageCount;
+    blurAlloc.pSetLayouts = blurLayouts.data();
+    m_ssilBlurSetsH.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &blurAlloc,
+                                 m_ssilBlurSetsH.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSIL blur H descriptor sets");
+    }
+    m_ssilBlurSetsV.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &blurAlloc,
+                                 m_ssilBlurSetsV.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSIL blur V descriptor sets");
+    }
+}
+
+void RenderLoop::CreateSsilPipelines() {
+    m_ssilMainShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/ssil_main.comp.spv");
+    m_ssilBlurShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/ssil_blur.comp.spv");
+    m_ssilPipeline = std::make_unique<SsilPipeline>(
+        m_device, *m_ssilMainShader, m_ssilMainSetLayout);
+    m_ssilBlurPipeline = std::make_unique<SsilBlurPipeline>(
+        m_device, *m_ssilBlurShader, m_ssilBlurSetLayout);
+}
+
+void RenderLoop::CreateSsilResources() {
+    VkExtent2D fullExtent = m_swapchain.GetExtent();
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    m_ssilExtent = {
+        std::max(1U, (fullExtent.width + 1U) / 2U),
+        std::max(1U, (fullExtent.height + 1U) / 2U)};
+
+    m_ssilImagesA.assign(imageCount, VK_NULL_HANDLE);
+    m_ssilImagesB.assign(imageCount, VK_NULL_HANDLE);
+    m_ssilAllocationsA.assign(imageCount, VK_NULL_HANDLE);
+    m_ssilAllocationsB.assign(imageCount, VK_NULL_HANDLE);
+    m_ssilViewsA.assign(imageCount, VK_NULL_HANDLE);
+    m_ssilViewsB.assign(imageCount, VK_NULL_HANDLE);
+    m_prevHdrImages.assign(imageCount, VK_NULL_HANDLE);
+    m_prevHdrAllocations.assign(imageCount, VK_NULL_HANDLE);
+    m_prevHdrImageViews.assign(imageCount, VK_NULL_HANDLE);
+    // Per-swap-image "prev viewProj" cache. Identity is fine on first frame
+    // since the matching prev-HDR image is cleared to zero (bounce = 0).
+    m_prevViewProj.assign(imageCount, glm::mat4(1.0F));
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        // SSIL A/B — same shape as SSAO A/B but RGBA16F and carrying colour.
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = SSIL_FORMAT;
+        imageInfo.extent = {m_ssilExtent.width, m_ssilExtent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_ssilImagesA[i], &m_ssilAllocationsA[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SSIL A image");
+        }
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo,
+                           &m_ssilImagesB[i], &m_ssilAllocationsB[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SSIL B image");
+        }
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = SSIL_FORMAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        viewInfo.image = m_ssilImagesA[i];
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
+                              &m_ssilViewsA[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SSIL A view");
+        }
+        viewInfo.image = m_ssilImagesB[i];
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr,
+                              &m_ssilViewsB[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create SSIL B view");
+        }
+
+        // Prev-HDR image — full-res RGBA16F, transfer dest for the per-frame
+        // copy from the current HDR target, sampled by ssil_main.comp's
+        // binding 2 through `m_ssilSampler`.
+        VkImageCreateInfo prevHdrInfo = imageInfo;
+        prevHdrInfo.format = HDR_FORMAT;
+        prevHdrInfo.extent = {fullExtent.width, fullExtent.height, 1};
+        prevHdrInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if (vmaCreateImage(m_device.GetAllocator(), &prevHdrInfo, &allocInfo,
+                           &m_prevHdrImages[i], &m_prevHdrAllocations[i], nullptr) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("Failed to create prev-HDR image");
+        }
+
+        VkImageViewCreateInfo prevHdrView = viewInfo;
+        prevHdrView.image = m_prevHdrImages[i];
+        prevHdrView.format = HDR_FORMAT;
+        if (vkCreateImageView(m_device.GetDevice(), &prevHdrView, nullptr,
+                              &m_prevHdrImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create prev-HDR view");
+        }
+    }
+
+    // UBO per swap image — matrices refresh each frame, kernel once.
+    m_ssilUbos.clear();
+    m_ssilUbos.reserve(imageCount);
+    const auto kernel = GenerateHemisphereKernel(SsilPipeline::kKernelSize, 0);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        auto ubo = std::make_unique<Buffer>(
+            m_device, BufferType::Uniform, sizeof(SsilUboLayout), nullptr);
+        auto* mapped = static_cast<SsilUboLayout*>(ubo->Map());
+        mapped->proj = m_proj;
+        mapped->invProj = glm::inverse(m_proj);
+        mapped->reprojection = glm::mat4(1.0F);
+        for (std::size_t k = 0; k < kernel.size(); ++k) {
+            mapped->kernel[k] = glm::vec4(kernel[k], 0.0F);
+        }
+        ubo->Unmap();
+        m_ssilUbos.push_back(std::move(ubo));
+    }
+}
+
+void RenderLoop::UpdateSsilDescriptors() {
+    const uint32_t imageCount = static_cast<uint32_t>(m_ssilMainSets.size());
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        // --- Main set: pyramid(CIS), normal(CIS), prev-HDR(CIS), ubo(UBO),
+        //     SSIL A(STORAGE_IMAGE).
+        VkDescriptorImageInfo pyramidInfo{};
+        pyramidInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        pyramidInfo.imageView = m_depthPyramidSampledViews[i];
+        pyramidInfo.sampler = m_depthPyramidSampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_normalImageViews[i];
+        normalInfo.sampler = m_depthPyramidSampler;
+
+        VkDescriptorImageInfo prevHdrInfo{};
+        prevHdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        prevHdrInfo.imageView = m_prevHdrImageViews[i];
+        prevHdrInfo.sampler = m_ssilSampler;
+
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_ssilUbos[i]->GetBuffer();
+        uboInfo.offset = 0;
+        uboInfo.range = sizeof(SsilUboLayout);
+
+        VkDescriptorImageInfo ssilAOutInfo{};
+        ssilAOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ssilAOutInfo.imageView = m_ssilViewsA[i];
+
+        std::array<VkWriteDescriptorSet, 5> mainWrites{};
+        auto makeImageWrite = [&](uint32_t idx, uint32_t binding,
+                                  VkDescriptorType type,
+                                  const VkDescriptorImageInfo* img) {
+            mainWrites[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            mainWrites[idx].dstSet = m_ssilMainSets[i];
+            mainWrites[idx].dstBinding = binding;
+            mainWrites[idx].descriptorCount = 1;
+            mainWrites[idx].descriptorType = type;
+            mainWrites[idx].pImageInfo = img;
+        };
+        makeImageWrite(0, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &pyramidInfo);
+        makeImageWrite(1, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo);
+        makeImageWrite(2, 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevHdrInfo);
+        mainWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[3].dstSet = m_ssilMainSets[i];
+        mainWrites[3].dstBinding = 3;
+        mainWrites[3].descriptorCount = 1;
+        mainWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        mainWrites[3].pBufferInfo = &uboInfo;
+        makeImageWrite(4, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ssilAOutInfo);
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(mainWrites.size()), mainWrites.data(),
+                               0, nullptr);
+
+        // --- Blur H: read A, read pyramid, read normal, write B.
+        VkDescriptorImageInfo ssilA_In{};
+        ssilA_In.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ssilA_In.imageView = m_ssilViewsA[i];
+        ssilA_In.sampler = m_ssilSampler;
+
+        VkDescriptorImageInfo ssilBOut{};
+        ssilBOut.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ssilBOut.imageView = m_ssilViewsB[i];
+
+        std::array<VkWriteDescriptorSet, 4> hWrites{};
+        auto makeBlurWrite = [&](std::array<VkWriteDescriptorSet, 4>& writes,
+                                 VkDescriptorSet set, uint32_t idx,
+                                 uint32_t binding, VkDescriptorType type,
+                                 const VkDescriptorImageInfo* img) {
+            writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[idx].dstSet = set;
+            writes[idx].dstBinding = binding;
+            writes[idx].descriptorCount = 1;
+            writes[idx].descriptorType = type;
+            writes[idx].pImageInfo = img;
+        };
+        makeBlurWrite(hWrites, m_ssilBlurSetsH[i], 0, 0,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ssilA_In);
+        makeBlurWrite(hWrites, m_ssilBlurSetsH[i], 1, 1,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &pyramidInfo);
+        makeBlurWrite(hWrites, m_ssilBlurSetsH[i], 2, 2,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo);
+        makeBlurWrite(hWrites, m_ssilBlurSetsH[i], 3, 3,
+                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ssilBOut);
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(hWrites.size()), hWrites.data(),
+                               0, nullptr);
+
+        // --- Blur V: read B, read pyramid, read normal, write A.
+        VkDescriptorImageInfo ssilB_In{};
+        ssilB_In.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ssilB_In.imageView = m_ssilViewsB[i];
+        ssilB_In.sampler = m_ssilSampler;
+
+        VkDescriptorImageInfo ssilAOutV{};
+        ssilAOutV.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ssilAOutV.imageView = m_ssilViewsA[i];
+
+        std::array<VkWriteDescriptorSet, 4> vWrites{};
+        makeBlurWrite(vWrites, m_ssilBlurSetsV[i], 0, 0,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ssilB_In);
+        makeBlurWrite(vWrites, m_ssilBlurSetsV[i], 1, 1,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &pyramidInfo);
+        makeBlurWrite(vWrites, m_ssilBlurSetsV[i], 2, 2,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo);
+        makeBlurWrite(vWrites, m_ssilBlurSetsV[i], 3, 3,
+                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ssilAOutV);
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(vWrites.size()), vWrites.data(),
+                               0, nullptr);
+    }
+}
+
+void RenderLoop::ClearSsilTargetsToZero() {
+    // One-shot: transition every SSIL A/B image UNDEFINED → TRANSFER_DST,
+    // clear to 0, then transition A → SHADER_READ_ONLY_OPTIMAL (tonemap
+    // samples this) and B → GENERAL (next frame's H-blur source/sink).
+    // Also clears the prev-HDR images to 0 so the first frame's SSIL
+    // contribution is "no bounce" and transitions them to
+    // SHADER_READ_ONLY_OPTIMAL for the main-pass sampler.
+    if (m_ssilImagesA.empty()) {
+        return;
+    }
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(m_device.GetDevice(), &allocInfo, &cmd) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSIL-clear command buffer");
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    std::vector<VkImage> allImages;
+    allImages.reserve(m_ssilImagesA.size() + m_ssilImagesB.size() + m_prevHdrImages.size());
+    for (VkImage img : m_ssilImagesA) { allImages.push_back(img); }
+    for (VkImage img : m_ssilImagesB) { allImages.push_back(img); }
+    for (VkImage img : m_prevHdrImages) { allImages.push_back(img); }
+
+    std::vector<VkImageMemoryBarrier> toTransferDst;
+    toTransferDst.reserve(allImages.size());
+    for (VkImage img : allImages) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        toTransferDst.push_back(b);
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         static_cast<uint32_t>(toTransferDst.size()), toTransferDst.data());
+
+    VkClearColorValue zero{};
+    zero.float32[0] = 0.0F;
+    zero.float32[1] = 0.0F;
+    zero.float32[2] = 0.0F;
+    zero.float32[3] = 0.0F;
+    VkImageSubresourceRange range{};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    for (VkImage img : allImages) {
+        vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &zero, 1, &range);
+    }
+
+    std::vector<VkImageMemoryBarrier> finalBarriers;
+    finalBarriers.reserve(allImages.size());
+    const size_t aCount = m_ssilImagesA.size();
+    const size_t bCount = m_ssilImagesB.size();
+    // SSIL A → SHADER_READ_ONLY_OPTIMAL (tonemap samples), SSIL B → GENERAL,
+    // prev-HDR → SHADER_READ_ONLY_OPTIMAL (ssil_main.comp samples).
+    for (size_t i = 0; i < aCount; ++i) {
+        VkImageMemoryBarrier b = toTransferDst[i];
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        finalBarriers.push_back(b);
+    }
+    for (size_t i = 0; i < bCount; ++i) {
+        VkImageMemoryBarrier b = toTransferDst[aCount + i];
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        finalBarriers.push_back(b);
+    }
+    for (size_t i = 0; i < m_prevHdrImages.size(); ++i) {
+        VkImageMemoryBarrier b = toTransferDst[aCount + bCount + i];
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        finalBarriers.push_back(b);
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr,
+                         static_cast<uint32_t>(finalBarriers.size()), finalBarriers.data());
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_device.GetGraphicsQueue(), 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_device.GetGraphicsQueue());
+    vkFreeCommandBuffers(m_device.GetDevice(), m_commandPool, 1, &cmd);
+}
+
+void RenderLoop::UploadSsilUbo(uint32_t imageIndex) {
+    if (imageIndex >= m_ssilUbos.size()) {
+        return;
+    }
+    auto* mapped = static_cast<SsilUboLayout*>(m_ssilUbos[imageIndex]->Map());
+    mapped->proj = m_proj;
+    mapped->invProj = glm::inverse(m_proj);
+    // Reprojection = prevViewProj * currInvViewProj — `SsilMath.h` RP.7a.
+    // Cached `prev` is from the last time this swap slot rendered (updated
+    // in `CopyHdrToPrevHdr`), so the matrix matches the prev-HDR contents.
+    const glm::mat4 currViewProj = m_proj * m_view;
+    mapped->reprojection = ComputeReprojectionMatrix(m_prevViewProj[imageIndex],
+                                                     glm::inverse(currViewProj));
+    m_ssilUbos[imageIndex]->Unmap();
+}
+
+void RenderLoop::RunSsil(VkCommandBuffer cmd) {
+    // MSAA path inherits the pyramid gate (SSIL reads the pyramid + the
+    // single-sample G-buffer normal the shader needs, neither of which the
+    // MSAA path provides in the right shape). Target A stays at the cleared
+    // 0 so the tonemap's additive composite is a no-op.
+    if (m_samples != VK_SAMPLE_COUNT_1_BIT || !m_ssilEnabled) {
+        return;
+    }
+
+    const uint32_t i = m_currentImageIndex;
+    UploadSsilUbo(i);
+    ++m_ssilFrameCounter;
+
+    // SSIL A: SHADER_READ_ONLY (tonemap ended last frame) → GENERAL for write.
+    // SSIL B: GENERAL → GENERAL (WAR + RAW safety).
+    {
+        std::array<VkImageMemoryBarrier, 2> barriers{};
+        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].image = m_ssilImagesA[i];
+        barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barriers[0].subresourceRange.levelCount = 1;
+        barriers[0].subresourceRange.layerCount = 1;
+
+        barriers[1] = barriers[0];
+        barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[1].image = m_ssilImagesB[i];
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+            static_cast<uint32_t>(barriers.size()), barriers.data());
+    }
+
+    // --- Main SSIL: pyramid + normal + prev-HDR → SSIL A.
+    m_ssilPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssilPipeline->GetLayout(), 0, 1,
+                            &m_ssilMainSets[i], 0, nullptr);
+    SsilPipeline::PushConstants mainPush{
+        m_ssilRadius, m_ssilIntensity, m_ssilNormalRejection,
+        static_cast<float>(m_ssilFrameCounter & 0xFFFFu)};
+    vkCmdPushConstants(cmd, m_ssilPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(mainPush), &mainPush);
+    vkCmdDispatch(cmd, (m_ssilExtent.width + 7) / 8, (m_ssilExtent.height + 7) / 8, 1);
+
+    // SSIL A W → R before H-blur.
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_ssilImagesA[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+
+    // --- Blur H: A → B.
+    m_ssilBlurPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssilBlurPipeline->GetLayout(), 0, 1,
+                            &m_ssilBlurSetsH[i], 0, nullptr);
+    SsilBlurPipeline::PushConstants hPush{1, 0, 4.0F, 8.0F};
+    vkCmdPushConstants(cmd, m_ssilBlurPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(hPush), &hPush);
+    vkCmdDispatch(cmd, (m_ssilExtent.width + 7) / 8, (m_ssilExtent.height + 7) / 8, 1);
+
+    // SSIL B W → R before V-blur + SSIL A R → W for V-blur target.
+    {
+        std::array<VkImageMemoryBarrier, 2> barriers{};
+        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[0].image = m_ssilImagesB[i];
+        barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barriers[0].subresourceRange.levelCount = 1;
+        barriers[0].subresourceRange.layerCount = 1;
+
+        barriers[1] = barriers[0];
+        barriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barriers[1].image = m_ssilImagesA[i];
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             static_cast<uint32_t>(barriers.size()), barriers.data());
+    }
+
+    // --- Blur V: B → A.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_ssilBlurPipeline->GetLayout(), 0, 1,
+                            &m_ssilBlurSetsV[i], 0, nullptr);
+    SsilBlurPipeline::PushConstants vPush{0, 1, 4.0F, 8.0F};
+    vkCmdPushConstants(cmd, m_ssilBlurPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(vPush), &vPush);
+    vkCmdDispatch(cmd, (m_ssilExtent.width + 7) / 8, (m_ssilExtent.height + 7) / 8, 1);
+
+    // SSIL A → SHADER_READ_ONLY_OPTIMAL for the tonemap fragment sample.
+    {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = m_ssilImagesA[i];
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &b);
+    }
+}
+
+void RenderLoop::CopyHdrToPrevHdr(VkCommandBuffer cmd) {
+    // Runs after the present pass has ended, so the HDR target is in
+    // SHADER_READ_ONLY_OPTIMAL (the main pass's finalLayout for non-MSAA,
+    // or the hdrResolveAttachment's finalLayout for MSAA — both land at
+    // SHADER_READ_ONLY). Skipping under MSAA would leave prev-HDR stale
+    // if the user toggles SSAA/MSAA mid-session and then re-enables SSIL,
+    // so copy regardless.
+    const uint32_t i = m_currentImageIndex;
+    if (i >= m_hdrImages.size() || i >= m_prevHdrImages.size()) {
+        return;
+    }
+
+    VkExtent2D extent = m_swapchain.GetExtent();
+
+    // HDR → TRANSFER_SRC, prev-HDR → TRANSFER_DST.
+    std::array<VkImageMemoryBarrier, 2> pre{};
+    pre[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    pre[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    pre[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    pre[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    pre[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    pre[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre[0].image = m_hdrImages[i];
+    pre[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    pre[0].subresourceRange.levelCount = 1;
+    pre[0].subresourceRange.layerCount = 1;
+
+    pre[1] = pre[0];
+    pre[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    pre[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pre[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    pre[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre[1].image = m_prevHdrImages[i];
+
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         static_cast<uint32_t>(pre.size()), pre.data());
+
+    VkImageCopy region{};
+    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.srcSubresource.layerCount = 1;
+    region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.dstSubresource.layerCount = 1;
+    region.extent = {extent.width, extent.height, 1};
+
+    vkCmdCopyImage(cmd,
+                   m_hdrImages[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   m_prevHdrImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &region);
+
+    // prev-HDR → SHADER_READ_ONLY_OPTIMAL for next frame's SSIL sample.
+    // HDR: leave in TRANSFER_SRC; the next render pass's initialLayout is
+    // UNDEFINED so it doesn't care about the current layout.
+    VkImageMemoryBarrier post{};
+    post.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    post.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    post.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    post.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    post.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    post.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    post.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    post.image = m_prevHdrImages[i];
+    post.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    post.subresourceRange.levelCount = 1;
+    post.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &post);
+
+    // Cache the viewProj that produced this HDR content — next time this swap
+    // slot renders, `UploadSsilUbo` builds the reprojection matrix against it.
+    m_prevViewProj[i] = m_proj * m_view;
+}
+
+void RenderLoop::CleanupSsilResources() {
+    VkDevice device = m_device.GetDevice();
+    for (size_t i = 0; i < m_ssilViewsA.size(); ++i) {
+        if (m_ssilViewsA[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_ssilViewsA[i], nullptr);
+        }
+        if (m_ssilImagesA[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_ssilImagesA[i], m_ssilAllocationsA[i]);
+        }
+    }
+    for (size_t i = 0; i < m_ssilViewsB.size(); ++i) {
+        if (m_ssilViewsB[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_ssilViewsB[i], nullptr);
+        }
+        if (m_ssilImagesB[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_ssilImagesB[i], m_ssilAllocationsB[i]);
+        }
+    }
+    for (size_t i = 0; i < m_prevHdrImageViews.size(); ++i) {
+        if (m_prevHdrImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_prevHdrImageViews[i], nullptr);
+        }
+        if (m_prevHdrImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_prevHdrImages[i],
+                            m_prevHdrAllocations[i]);
+        }
+    }
+    m_ssilViewsA.clear();
+    m_ssilViewsB.clear();
+    m_ssilImagesA.clear();
+    m_ssilImagesB.clear();
+    m_ssilAllocationsA.clear();
+    m_ssilAllocationsB.clear();
+    m_prevHdrImages.clear();
+    m_prevHdrAllocations.clear();
+    m_prevHdrImageViews.clear();
+    m_prevViewProj.clear();
+    m_ssilUbos.clear();
+}
+
+void RenderLoop::CleanupSsilDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_ssilDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_ssilDescriptorPool, nullptr);
+        m_ssilDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_ssilMainSets.clear();
+    m_ssilBlurSetsH.clear();
+    m_ssilBlurSetsV.clear();
+    if (m_ssilMainSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_ssilMainSetLayout, nullptr);
+        m_ssilMainSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_ssilBlurSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_ssilBlurSetLayout, nullptr);
+        m_ssilBlurSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_ssilSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_ssilSampler, nullptr);
+        m_ssilSampler = VK_NULL_HANDLE;
     }
 }
 

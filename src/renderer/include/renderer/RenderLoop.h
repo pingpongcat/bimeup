@@ -24,6 +24,8 @@ class DepthLinearizePipeline;
 class DepthMipPipeline;
 class SsaoPipeline;
 class SsaoBlurPipeline;
+class SsilPipeline;
+class SsilBlurPipeline;
 
 class RenderLoop {
 public:
@@ -57,6 +59,10 @@ public:
     // separable blur smooths away the hemisphere-sample noise. Sampled by
     // the tonemap fragment shader and multiplied into the HDR colour.
     static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
+    // SSIL half-res indirect colour format (RP.7d). RGBA16F — the pass carries
+    // bounced colour (not just a scalar like SSAO), and the values need enough
+    // headroom for a composite-add into the HDR target before ACES.
+    static constexpr VkFormat SSIL_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir,
@@ -120,6 +126,11 @@ public:
     /// tonemap fragment shader. Returns VK_NULL_HANDLE if the index is out
     /// of range.
     [[nodiscard]] VkImageView GetAoImageView(uint32_t imageIndex) const;
+    /// Final post-blur SSIL target (RGBA16F, half-res) for the given swap
+    /// image. Written by the RP.7d SSIL compute chain and sampled by the
+    /// tonemap fragment shader as an additive indirect-colour contribution.
+    /// Returns VK_NULL_HANDLE if the index is out of range.
+    [[nodiscard]] VkImageView GetSsilImageView(uint32_t imageIndex) const;
 
     /// Camera projection matrix + near/far plane values. Projection feeds
     /// the SSAO UBO (mat4 proj + mat4 invProj) so view-space sample
@@ -128,6 +139,23 @@ public:
     /// `renderer::LinearizeDepth`. Call each frame after the camera has
     /// been updated. Defaults are (identity, 0.1, 10000).
     void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
+
+    /// Camera view matrix for the current frame. Fed into the SSIL reprojection
+    /// (RP.7d): the ssil_main.comp UBO carries
+    /// `prevViewProj * currInvViewProj`, so `SetView` must be called before
+    /// `EndFrame` any frame SSIL is enabled. Defaults to identity.
+    void SetView(const glm::mat4& view);
+
+    /// RP.7d — SSIL (screen-space indirect lighting) parameters.
+    /// `radius`  : view-space sample radius (metres)
+    /// `intensity` : scale on the accumulated indirect colour
+    /// `normalRejection` : exponent on the `dot(nCurr, nSampled)` lobe (higher
+    ///                     narrows the acceptance cone; 0 disables rejection)
+    /// `enabled` : when false (or when MSAA is on — SSIL inherits the depth-
+    ///             pyramid gate) the compute dispatches are skipped and the
+    ///             target stays at its cleared 0 so the tonemap add is a no-op.
+    void SetSsilParams(float radius, float intensity, float normalRejection,
+                       bool enabled);
 
     /// RP.6d — selection/hover outline pass parameters. The outline draw is
     /// recorded inside the present pass between the tonemap fullscreen tri
@@ -184,6 +212,16 @@ private:
     void RunSsao(VkCommandBuffer cmd);
     void CleanupSsaoResources();
     void CleanupSsaoDescriptors();
+    void CreateSsilDescriptors();
+    void CreateSsilPipelines();
+    void CreateSsilResources();
+    void UpdateSsilDescriptors();
+    void ClearSsilTargetsToZero();
+    void UploadSsilUbo(uint32_t imageIndex);
+    void RunSsil(VkCommandBuffer cmd);
+    void CopyHdrToPrevHdr(VkCommandBuffer cmd);
+    void CleanupSsilResources();
+    void CleanupSsilDescriptors();
     void CreateOutlineDescriptors();
     void CreateOutlinePipeline();
     void UpdateOutlineDescriptors();
@@ -314,6 +352,48 @@ private:
     std::unique_ptr<Shader> m_ssaoBlurShader;
     std::unique_ptr<SsaoPipeline> m_ssaoPipeline;
     std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
+
+    // SSIL (RP.7d). Mirrors the SSAO resource layout with two key additions:
+    // (1) a previous-frame HDR ring sampled by `ssil_main.comp` through the
+    //     binding-2 UBO — one image per swap slot; HDR is copied into it at the
+    //     end of each frame so the next time that swap slot renders, the
+    //     previous contents are available. On resize / MSAA-change we rebuild
+    //     + clear to 0 so the first frame's SSIL contribution is "no bounce".
+    // (2) a cached `prevViewProj` per swap image; combined with the current
+    //     frame's inverse viewProj it produces the `reprojection` matrix that
+    //     `ssil_main.comp` uses to find a tap's UV in the previous frame.
+    // Target A/B ping-pong layout matches SSAO exactly: main writes A, H-blur
+    // reads A writes B, V-blur reads B writes A; A is sampled by the tonemap
+    // pass at the end of the frame.
+    glm::mat4 m_view{1.0F};
+    std::vector<glm::mat4> m_prevViewProj;
+    std::vector<VkImage> m_ssilImagesA;
+    std::vector<VkImage> m_ssilImagesB;
+    std::vector<VmaAllocation> m_ssilAllocationsA;
+    std::vector<VmaAllocation> m_ssilAllocationsB;
+    std::vector<VkImageView> m_ssilViewsA;
+    std::vector<VkImageView> m_ssilViewsB;
+    std::vector<VkImage> m_prevHdrImages;
+    std::vector<VmaAllocation> m_prevHdrAllocations;
+    std::vector<VkImageView> m_prevHdrImageViews;
+    VkExtent2D m_ssilExtent = {0, 0};
+    VkSampler m_ssilSampler = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<Buffer>> m_ssilUbos;
+    VkDescriptorSetLayout m_ssilMainSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssilBlurSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_ssilDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_ssilMainSets;
+    std::vector<VkDescriptorSet> m_ssilBlurSetsH;
+    std::vector<VkDescriptorSet> m_ssilBlurSetsV;
+    std::unique_ptr<Shader> m_ssilMainShader;
+    std::unique_ptr<Shader> m_ssilBlurShader;
+    std::unique_ptr<SsilPipeline> m_ssilPipeline;
+    std::unique_ptr<SsilBlurPipeline> m_ssilBlurPipeline;
+    float m_ssilRadius = 0.5F;
+    float m_ssilIntensity = 1.0F;
+    float m_ssilNormalRejection = 2.0F;
+    bool m_ssilEnabled = false;
+    uint32_t m_ssilFrameCounter = 0;
 
     // Outline pass (RP.6d). Per swap image: one combined descriptor set
     // sampling (binding 0 = stencil id R8_UINT usampler2D, binding 1 =

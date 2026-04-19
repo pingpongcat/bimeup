@@ -6,10 +6,14 @@
 #include <renderer/TonemapPipeline.h>
 #include <renderer/VulkanContext.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using bimeup::renderer::DescriptorSetLayout;
 using bimeup::renderer::Device;
@@ -63,12 +67,14 @@ protected:
         m_context = std::make_unique<VulkanContext>(true);
         m_device = std::make_unique<Device>(m_context->GetInstance());
         m_renderPass = CreateColorOnlyRenderPass(m_device->GetDevice());
-        // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO (RP.5d).
+        // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
+        // (RP.5d), binding 2 = half-res SSIL (RP.7d).
         m_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *m_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
+                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
@@ -119,6 +125,44 @@ TEST_F(TonemapPipelineTest, ConstructsWithMsaa4x) {
         m_samplerLayout->GetLayout(), VK_SAMPLE_COUNT_4_BIT);
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+}
+
+// RP.7d — tonemap.frag's third sampled binding is the half-res SSIL target.
+// Walks the SPIR-V OpDecorate stream and asserts a sampled image exists at
+// (set 0, binding 2); a regression that drops the binding would let the
+// renderer link a 2-binding layout against a 3-binding shader and only trip
+// at validation time.
+TEST_F(TonemapPipelineTest, FragmentShaderDeclaresSsilBindingAtLocationTwo) {
+    std::string shaderDir = BIMEUP_SHADER_DIR;
+    std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
+    ASSERT_TRUE(file.good());
+    std::vector<char> bytes((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    ASSERT_GE(bytes.size(), 5U * sizeof(uint32_t));
+    const uint32_t* w = reinterpret_cast<const uint32_t*>(bytes.data());
+    const size_t wordCount = bytes.size() / sizeof(uint32_t);
+
+    bool foundBinding2 = false;
+    size_t idx = 5;  // skip SPIR-V header
+    while (idx < wordCount) {
+        uint32_t word = w[idx];
+        uint32_t opcode = word & 0xFFFFU;
+        uint32_t len = (word >> 16U) & 0xFFFFU;
+        if (len == 0 || idx + len > wordCount) {
+            break;
+        }
+        // OpDecorate = 71. Arguments: target, decoration, literals...
+        if (opcode == 71 && len >= 4) {
+            uint32_t decoration = w[idx + 2];
+            // Decoration::Binding = 33.
+            if (decoration == 33 && w[idx + 3] == 2U) {
+                foundBinding2 = true;
+            }
+        }
+        idx += len;
+    }
+    EXPECT_TRUE(foundBinding2)
+        << "tonemap.frag SPIR-V missing expected binding 2 (SSIL)";
 }
 
 TEST_F(TonemapPipelineTest, DestructorCleansUp) {
