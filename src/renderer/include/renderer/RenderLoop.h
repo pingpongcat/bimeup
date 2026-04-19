@@ -63,8 +63,7 @@ public:
     static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
 
     RenderLoop(const Device& device, Swapchain& swapchain,
-               const std::string& shaderDir,
-               VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+               const std::string& shaderDir);
     ~RenderLoop();
 
     RenderLoop(const RenderLoop&) = delete;
@@ -95,10 +94,10 @@ public:
     [[nodiscard]] VkCommandBuffer GetCurrentCommandBuffer() const;
     [[nodiscard]] uint32_t GetCurrentFrameIndex() const;
     [[nodiscard]] uint32_t GetCurrentImageIndex() const;
-    /// Render pass for scene geometry — HDR colour (+ depth, + optional MSAA
-    /// resolve) targeting the offscreen HDR image. Bind scene pipelines here.
+    /// Render pass for scene geometry — HDR colour + depth targeting the
+    /// offscreen HDR image. Bind scene pipelines here. Sample count is
+    /// always 1× (MSAA retired in RP.14.1.a).
     [[nodiscard]] VkRenderPass GetRenderPass() const;
-    [[nodiscard]] VkSampleCountFlagBits GetSampleCount() const;
     /// Render pass for the final HDR→LDR tonemap + UI overlay targeting the
     /// swapchain. Bind ImGui and any other post-tonemap pipelines here;
     /// sample count is always 1× (the swapchain is never multisampled).
@@ -137,9 +136,8 @@ public:
     /// recorded inside the present pass between the tonemap fullscreen tri
     /// and the in-present-pass callback (where ImGui lands), so the outline
     /// composes over the tonemapped image but underneath UI overlays. When
-    /// `enabled` is false (or when MSAA is on — the depth-pyramid input is
-    /// gated off in that mode) the draw is skipped and the swapchain image
-    /// is unaffected. Push constants drive the panel-tweakable knobs
+    /// `enabled` is false the draw is skipped and the swapchain image is
+    /// unaffected. Push constants drive the panel-tweakable knobs
     /// (selected/hover colours, tap thickness in pixels, depth-edge cutoff);
     /// the texelSize field should be (1/width, 1/height) in pixels — caller
     /// updates per-frame so resize lands cleanly.
@@ -151,7 +149,6 @@ public:
     /// skipped and the blend shader's push-constant gate short-circuits
     /// to a passthrough via `smaa_blend.frag`'s early-return branch —
     /// 3 draws → 1 draw and stale weights can't influence the output.
-    /// LDR intermediate is always 1-sample so SMAA needs no MSAA gate.
     void SetSmaaParams(bool enabled);
 
     /// Pre-ACES exposure multiplier applied to the composited HDR colour
@@ -165,13 +162,7 @@ public:
         return VK_SAMPLE_COUNT_1_BIT;
     }
 
-    /// Change the MSAA sample count. Waits for GPU idle, tears down the main
-    /// render pass / HDR & depth attachments / framebuffers, and rebuilds them.
-    /// Both render pass handles are recreated — any pipeline bound to the
-    /// previous passes must be rebuilt by the caller before the next BeginFrame().
-    void SetSampleCount(VkSampleCountFlagBits samples);
-
-    /// Rebuild HDR/depth/MSAA images, framebuffers, and tonemap descriptor
+    /// Rebuild HDR/depth images, framebuffers, and tonemap descriptor
     /// bindings to match the current swapchain extent. Call after
     /// `Swapchain::Recreate(...)` on a resize. The render pass handles are
     /// preserved (format/samples unchanged) so pipelines stay valid.
@@ -257,11 +248,6 @@ private:
     VkImage m_depthImage = VK_NULL_HANDLE;
     VkImageView m_depthImageView = VK_NULL_HANDLE;
     VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
-    // Multisampled HDR colour attachment (only used when m_samples > 1x; resolved into the
-    // single-sample HDR image each frame).
-    VkImage m_colorImage = VK_NULL_HANDLE;
-    VkImageView m_colorImageView = VK_NULL_HANDLE;
-    VmaAllocation m_colorAllocation = VK_NULL_HANDLE;
     // Per-swapchain-image HDR colour target (R16G16B16A16_SFLOAT). Written by the main pass,
     // sampled by the tonemap pass.
     std::vector<VkImage> m_hdrImages;
@@ -273,21 +259,12 @@ private:
     std::vector<VkImage> m_normalImages;
     std::vector<VkImageView> m_normalImageViews;
     std::vector<VmaAllocation> m_normalAllocations;
-    // Multisampled normal attachment (transient, only when m_samples > 1x).
-    VkImage m_normalMsaaImage = VK_NULL_HANDLE;
-    VkImageView m_normalMsaaImageView = VK_NULL_HANDLE;
-    VmaAllocation m_normalMsaaAllocation = VK_NULL_HANDLE;
     // Per-swapchain-image outline-stencil G-buffer target (R8_UINT).
     // Written by `basic.frag` at layout(location=2) and sampled by the RP.6b
-    // outline pass. Same shape as the normal G-buffer: single-sample target,
-    // transient MSAA sibling when m_samples > 1x.
+    // outline pass.
     std::vector<VkImage> m_stencilImages;
     std::vector<VkImageView> m_stencilImageViews;
     std::vector<VmaAllocation> m_stencilAllocations;
-    VkImage m_stencilMsaaImage = VK_NULL_HANDLE;
-    VkImageView m_stencilMsaaImageView = VK_NULL_HANDLE;
-    VmaAllocation m_stencilMsaaAllocation = VK_NULL_HANDLE;
-    VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkFramebuffer> m_framebuffers;
     std::vector<VkFramebuffer> m_postFramebuffers;
     std::vector<VkFramebuffer> m_presentFramebuffers;
@@ -301,7 +278,7 @@ private:
     std::vector<VkImageView> m_ldrImageViews;
     std::vector<VmaAllocation> m_ldrAllocations;
 
-    // Tonemap pass: shaders loaded once in the ctor, pipeline rebuilt on MSAA/size changes.
+    // Tonemap pass: shaders loaded once in the ctor, pipeline rebuilt on size changes.
     // Descriptor set layout + pool built once; descriptor sets recreated on swapchain resize
     // so they point at the fresh per-image HDR views.
     std::unique_ptr<Shader> m_tonemapVert;
@@ -319,7 +296,7 @@ private:
     // [0] = linearize (depth → mip 0), [N≥1] = mip downsample (mip N-1 →
     // mip N). Sampler/layout/pool live for the RenderLoop's lifetime; the
     // images and views are torn down + rebuilt alongside the HDR/normal
-    // targets on resize or MSAA change.
+    // targets on resize.
     std::vector<VkImage> m_depthPyramidImages;
     std::vector<VmaAllocation> m_depthPyramidAllocations;
     std::vector<VkImageView> m_depthPyramidSampledViews;
@@ -347,9 +324,8 @@ private:
     // V-blur set reads B and writes A. A is sampled by the tonemap
     // fragment shader at the end of each frame, so its final layout after
     // `RunSsao` is SHADER_READ_ONLY_OPTIMAL; B stays in GENERAL between
-    // frames. Under MSAA the pyramid gate above applies — SSAO never
-    // dispatches; AO A stays at the init-time (1.0) clear so the tonemap
-    // multiply is a no-op.
+    // frames. AO A is cleared to 1.0 at creation so the tonemap multiply
+    // starts as a no-op before the first SSAO dispatch lands.
     std::vector<VkImage> m_aoImagesA;
     std::vector<VkImage> m_aoImagesB;
     std::vector<VmaAllocation> m_aoAllocationsA;
@@ -378,12 +354,10 @@ private:
     // sampling (binding 0 = stencil id R8_UINT usampler2D, binding 1 =
     // depth pyramid mip 0 sampler2D). One sampler shared across both
     // bindings (linear, CLAMP_TO_EDGE, maxLod = 0.25 — clamped to mip 0
-    // for the depth tap). Pipeline targets the present pass; rebuilt on
-    // sample-count change alongside the tonemap pipeline. Push-constant
-    // values + the enable toggle come from the panel via SetOutlineParams.
-    // The pass is skipped under MSAA — the depth pyramid is gated off in
-    // that mode and the outline shader's depth-discontinuity fallback
-    // would otherwise sample an undefined image.
+    // for the depth tap). Pipeline targets the present pass. Push-constant
+    // values + the enable toggle come from the panel via SetOutlineParams;
+    // the pass runs every frame when the flag is on (RP.14.1.a retired the
+    // MSAA gate along with the rest of the MSAA path).
     std::unique_ptr<Shader> m_outlineVertShader;
     std::unique_ptr<Shader> m_outlineFragShader;
     std::unique_ptr<OutlinePipeline> m_outlinePipeline;
@@ -405,15 +379,14 @@ private:
     // LDR to the swapchain). When `m_smaaEnabled` is false, the edge +
     // weights passes are skipped entirely and the blend shader's
     // push-constant gate (`enabled` at offset 8) short-circuits before
-    // the weights sample. LDR is always 1-sample, so SMAA runs under MSAA
-    // without a gate (unlike outline).
+    // the weights sample.
     //
     // The AreaTex (160×560 RG8) + SearchTex (64×16 R8) LUTs live for the
     // RenderLoop's lifetime — uploaded once in `CreateSmaaLuts` from the
     // vendored byte arrays in `renderer::SmaaAreaTex::Data()` +
     // `renderer::SmaaSearchTex::Data()` (RP.11b.1). The per-swap edges +
-    // weights images / framebuffers / descriptor sets rebuild on MSAA
-    // change or swapchain resize alongside the HDR / LDR chains.
+    // weights images / framebuffers / descriptor sets rebuild on
+    // swapchain resize alongside the HDR / LDR chains.
     std::unique_ptr<Shader> m_smaaVertShader;
     std::unique_ptr<Shader> m_smaaEdgeFragShader;
     std::unique_ptr<Shader> m_smaaWeightsFragShader;

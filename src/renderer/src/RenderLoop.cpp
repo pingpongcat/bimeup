@@ -23,12 +23,10 @@
 namespace bimeup::renderer {
 
 RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
-                       const std::string& shaderDir,
-                       VkSampleCountFlagBits samples)
+                       const std::string& shaderDir)
     : m_device(device),
       m_swapchain(swapchain),
-      m_shaderDir(shaderDir),
-      m_samples(samples) {
+      m_shaderDir(shaderDir) {
     CreateCommandPool();
     CreateCommandBuffers();
     CreateSyncObjects();
@@ -64,8 +62,7 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     ClearSmaaChainToZero();
 
     if (bimeup::tools::Log::GetLogger()) {
-        LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
-                 MAX_FRAMES_IN_FLIGHT, static_cast<int>(m_samples));
+        LOG_INFO("RenderLoop created (max {} frames in flight)", MAX_FRAMES_IN_FLIGHT);
     }
 }
 
@@ -139,12 +136,12 @@ bool RenderLoop::EndFrame() {
     vkCmdEndRenderPass(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
-    // tonemap pass. No-op under MSAA (shader needs sampler2DMS); non-MSAA
-    // path dispatches linearize then three mip downsamples with barriers.
+    // tonemap pass. Dispatches linearize then three mip downsamples with
+    // barriers.
     BuildDepthPyramid(cmd);
 
-    // RP.5d — SSAO main + separable blur, also gated off under MSAA.
-    // Produces the half-res AO target that the tonemap fragment samples.
+    // RP.5d — SSAO main + separable blur. Produces the half-res AO target
+    // that the tonemap fragment samples.
     RunSsao(cmd);
 
     // Post pass — tonemap + outline, writes to the per-swap LDR intermediate.
@@ -182,9 +179,8 @@ bool RenderLoop::EndFrame() {
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // RP.6d outline pass — composes the selection/hover outline over the
-    // tonemapped image. Gated off under MSAA (the depth pyramid the shader
-    // samples is gated off in that mode) and when the panel disables it.
-    if (m_outlineEnabled && m_samples == VK_SAMPLE_COUNT_1_BIT) {
+    // tonemapped image. Skipped when the panel disables it.
+    if (m_outlineEnabled) {
         OutlinePipeline::PushConstants framePush = m_outlinePush;
         framePush.texelSize = glm::vec2(1.0F / static_cast<float>(extent.width),
                                         1.0F / static_cast<float>(extent.height));
@@ -380,43 +376,6 @@ void RenderLoop::SetExposure(float exposure) {
     m_exposurePush.exposure = exposure;
 }
 
-VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
-    return m_samples;
-}
-
-void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
-    if (samples == m_samples) {
-        return;
-    }
-    WaitIdle();
-    m_tonemapPipeline.reset();  // depends on the main pass sample count? only for parity — rebuild anyway
-    CleanupFrameResources();
-    if (m_renderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(m_device.GetDevice(), m_renderPass, nullptr);
-        m_renderPass = VK_NULL_HANDLE;
-    }
-    m_samples = samples;
-    CreateRenderPass();
-    CreateHdrResources();
-    CreateDepthResources();
-    CreateLdrResources();
-    CreateFramebuffers();
-    CreateDepthPyramidResources();
-    CreateSsaoResources();
-    CreateSmaaResources();
-    CreateTonemapPipeline();
-    UpdateDepthPyramidDescriptors();
-    UpdateSsaoDescriptors();
-    UpdateSmaaDescriptors();
-    ClearAoImagesToWhite();
-    ClearSmaaChainToZero();
-    UpdateTonemapDescriptors();
-    UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
-    if (bimeup::tools::Log::GetLogger()) {
-        LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
-    }
-}
-
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -490,98 +449,54 @@ void RenderLoop::CreateSyncObjects() {
 
 void RenderLoop::CreateRenderPass() {
     m_depthFormat = FindDepthFormat(m_device.GetPhysicalDevice());
-    const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
     // Attachment layout (MRT — scene colour + oct-packed normal G-buffer +
-    // outline stencil id):
-    //   Non-MSAA: [0] HDR colour, [1] normal, [2] stencil id, [3] depth.
-    //   MSAA:     [0] HDR MSAA, [1] normal MSAA, [2] stencil MSAA, [3] depth,
-    //             [4] HDR resolve, [5] normal resolve, [6] stencil resolve.
-    // Final layouts on the sampled single-sample targets (HDR + normal +
-    // stencil resolve) are SHADER_READ_ONLY_OPTIMAL so tonemap / SSAO /
-    // outline can bind them straight as samplers.
+    // outline stencil id): [0] HDR colour, [1] normal, [2] stencil id,
+    // [3] depth. Final layouts on the sampled targets are
+    // SHADER_READ_ONLY_OPTIMAL so tonemap / SSAO / outline can bind them
+    // straight as samplers.
 
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = HDR_FORMAT;
-    colorAttachment.samples = m_samples;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                           : VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription normalAttachment{};
     normalAttachment.format = NORMAL_FORMAT;
-    normalAttachment.samples = m_samples;
+    normalAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     normalAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    normalAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                            : VK_ATTACHMENT_STORE_OP_STORE;
+    normalAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     normalAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     normalAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     normalAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    normalAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    normalAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription stencilAttachment{};
     stencilAttachment.format = STENCIL_FORMAT;
-    stencilAttachment.samples = m_samples;
+    stencilAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     stencilAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    stencilAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                             : VK_ATTACHMENT_STORE_OP_STORE;
+    stencilAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     stencilAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     stencilAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     stencilAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    stencilAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    stencilAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = m_depthFormat;
-    depthAttachment.samples = m_samples;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    // Non-MSAA: keep depth and transition to SHADER_READ_ONLY so the RP.4
-    // linearize compute pass can sample it. MSAA: the pyramid is gated off
-    // (shader wants sampler2D, not sampler2DMS) so discarding depth at pass
-    // end is fine and avoids an extra resolve.
-    depthAttachment.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                           : VK_ATTACHMENT_STORE_OP_STORE;
+    // Keep depth and transition to SHADER_READ_ONLY so the RP.4 linearize
+    // compute pass can sample it.
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = multisampled ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentDescription hdrResolveAttachment{};
-    hdrResolveAttachment.format = HDR_FORMAT;
-    hdrResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    hdrResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    hdrResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    hdrResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    hdrResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    hdrResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    hdrResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentDescription normalResolveAttachment{};
-    normalResolveAttachment.format = NORMAL_FORMAT;
-    normalResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    normalResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    normalResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    normalResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    normalResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    normalResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    normalResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentDescription stencilResolveAttachment{};
-    stencilResolveAttachment.format = STENCIL_FORMAT;
-    stencilResolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    stencilResolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    stencilResolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    stencilResolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    stencilResolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    stencilResolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    stencilResolveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     std::array<VkAttachmentReference, 3> colorRefs{};
     colorRefs[0] = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -592,19 +507,11 @@ void RenderLoop::CreateRenderPass() {
     depthRef.attachment = 3;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    std::array<VkAttachmentReference, 3> resolveRefs{};
-    resolveRefs[0] = {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    resolveRefs[1] = {5, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    resolveRefs[2] = {6, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
     subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
-    if (multisampled) {
-        subpass.pResolveAttachments = resolveRefs.data();
-    }
 
     std::array<VkSubpassDependency, 2> dependencies{};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -620,8 +527,7 @@ void RenderLoop::CreateRenderPass() {
     // Post-pass dependency: the RP.4 linearize compute shader samples the
     // depth attachment immediately after vkCmdEndRenderPass. Makes the
     // layout transition to SHADER_READ_ONLY visible to compute reads and
-    // the depth writes themselves available. No-op on MSAA since we never
-    // sample the multisample depth image.
+    // the depth writes themselves available.
     dependencies[1].srcSubpass = 0;
     dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -629,13 +535,12 @@ void RenderLoop::CreateRenderPass() {
     dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    std::array<VkAttachmentDescription, 7> attachments = {
-        colorAttachment, normalAttachment, stencilAttachment, depthAttachment,
-        hdrResolveAttachment, normalResolveAttachment, stencilResolveAttachment};
+    std::array<VkAttachmentDescription, 4> attachments = {
+        colorAttachment, normalAttachment, stencilAttachment, depthAttachment};
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = multisampled ? 7U : 4U;
+    rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
     rpInfo.pAttachments = attachments.data();
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
@@ -745,9 +650,8 @@ void RenderLoop::CreateHdrResources() {
             throw std::runtime_error("Failed to create HDR image view");
         }
 
-        // Normal G-buffer target — single-sample (resolve destination when
-        // MSAA is on, direct target otherwise). SAMPLED is required because
-        // SSAO later bind this view through a descriptor.
+        // Normal G-buffer target — single-sample. SAMPLED is required
+        // because SSAO later binds this view through a descriptor.
         VkImageCreateInfo normalInfo = imageInfo;
         normalInfo.format = NORMAL_FORMAT;
         if (vmaCreateImage(m_device.GetAllocator(), &normalInfo, &allocInfo,
@@ -792,12 +696,10 @@ void RenderLoop::CreateDepthResources() {
     imageInfo.extent = {extent.width, extent.height, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.samples = m_samples;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     // SAMPLED_BIT so the RP.4 depth-linearize compute shader can bind this
-    // image as sampler2D post-render-pass (non-MSAA path; MSAA depth is
-    // never sampled today). Cheap addition even when the pyramid is gated
-    // off, since the image is always resident.
+    // image as sampler2D post-render-pass.
     imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -824,84 +726,11 @@ void RenderLoop::CreateDepthResources() {
         VK_SUCCESS) {
         throw std::runtime_error("Failed to create depth image view");
     }
-
-    // Multisampled HDR colour target (transient — resolved into the 1× HDR
-    // image each frame). Same format as m_hdrImages so subpass resolve is legal.
-    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
-        VkImageCreateInfo colorInfo{};
-        colorInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        colorInfo.imageType = VK_IMAGE_TYPE_2D;
-        colorInfo.format = HDR_FORMAT;
-        colorInfo.extent = {extent.width, extent.height, 1};
-        colorInfo.mipLevels = 1;
-        colorInfo.arrayLayers = 1;
-        colorInfo.samples = m_samples;
-        colorInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        colorInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                          VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-        colorInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-        if (vmaCreateImage(m_device.GetAllocator(), &colorInfo, &allocInfo,
-                           &m_colorImage, &m_colorAllocation, nullptr) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA color image");
-        }
-
-        VkImageViewCreateInfo colorView{};
-        colorView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        colorView.image = m_colorImage;
-        colorView.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        colorView.format = HDR_FORMAT;
-        colorView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        colorView.subresourceRange.baseMipLevel = 0;
-        colorView.subresourceRange.levelCount = 1;
-        colorView.subresourceRange.baseArrayLayer = 0;
-        colorView.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(m_device.GetDevice(), &colorView, nullptr,
-                              &m_colorImageView) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA color image view");
-        }
-
-        // Multisampled normal G-buffer (transient, same shape as MSAA colour).
-        VkImageCreateInfo normalMsaaInfo = colorInfo;
-        normalMsaaInfo.format = NORMAL_FORMAT;
-        if (vmaCreateImage(m_device.GetAllocator(), &normalMsaaInfo, &allocInfo,
-                           &m_normalMsaaImage, &m_normalMsaaAllocation, nullptr) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA normal image");
-        }
-
-        VkImageViewCreateInfo normalMsaaView = colorView;
-        normalMsaaView.image = m_normalMsaaImage;
-        normalMsaaView.format = NORMAL_FORMAT;
-        if (vkCreateImageView(m_device.GetDevice(), &normalMsaaView, nullptr,
-                              &m_normalMsaaImageView) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA normal image view");
-        }
-
-        // Multisampled outline-stencil G-buffer (transient, resolved into the
-        // per-swap-image stencil target each frame).
-        VkImageCreateInfo stencilMsaaInfo = colorInfo;
-        stencilMsaaInfo.format = STENCIL_FORMAT;
-        if (vmaCreateImage(m_device.GetAllocator(), &stencilMsaaInfo, &allocInfo,
-                           &m_stencilMsaaImage, &m_stencilMsaaAllocation,
-                           nullptr) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA stencil image");
-        }
-
-        VkImageViewCreateInfo stencilMsaaView = colorView;
-        stencilMsaaView.image = m_stencilMsaaImage;
-        stencilMsaaView.format = STENCIL_FORMAT;
-        if (vkCreateImageView(m_device.GetDevice(), &stencilMsaaView, nullptr,
-                              &m_stencilMsaaImageView) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create MSAA stencil image view");
-        }
-    }
 }
 
 void RenderLoop::CreateFramebuffers() {
     const auto& swapImageViews = m_swapchain.GetImageViews();
     VkExtent2D extent = m_swapchain.GetExtent();
-    const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
     m_framebuffers.resize(swapImageViews.size());
     m_postFramebuffers.resize(swapImageViews.size());
@@ -909,32 +738,17 @@ void RenderLoop::CreateFramebuffers() {
 
     for (size_t i = 0; i < swapImageViews.size(); ++i) {
         // Main (HDR) framebuffer — attachment order must match CreateRenderPass:
-        //   non-MSAA: [hdr, normal, stencil, depth]
-        //   MSAA:     [hdr MSAA, normal MSAA, stencil MSAA, depth,
-        //              hdr resolve, normal resolve, stencil resolve]
-        std::array<VkImageView, 7> attachments{};
-        uint32_t count = 0;
-        if (multisampled) {
-            attachments[0] = m_colorImageView;
-            attachments[1] = m_normalMsaaImageView;
-            attachments[2] = m_stencilMsaaImageView;
-            attachments[3] = m_depthImageView;
-            attachments[4] = m_hdrImageViews[i];
-            attachments[5] = m_normalImageViews[i];
-            attachments[6] = m_stencilImageViews[i];
-            count = 7;
-        } else {
-            attachments[0] = m_hdrImageViews[i];
-            attachments[1] = m_normalImageViews[i];
-            attachments[2] = m_stencilImageViews[i];
-            attachments[3] = m_depthImageView;
-            count = 4;
-        }
+        //   [hdr, normal, stencil, depth]
+        std::array<VkImageView, 4> attachments{};
+        attachments[0] = m_hdrImageViews[i];
+        attachments[1] = m_normalImageViews[i];
+        attachments[2] = m_stencilImageViews[i];
+        attachments[3] = m_depthImageView;
 
         VkFramebufferCreateInfo fbInfo{};
         fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fbInfo.renderPass = m_renderPass;
-        fbInfo.attachmentCount = count;
+        fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         fbInfo.pAttachments = attachments.data();
         fbInfo.width = extent.width;
         fbInfo.height = extent.height;
@@ -1143,39 +957,6 @@ void RenderLoop::CleanupFrameResources() {
         vmaDestroyImage(m_device.GetAllocator(), m_depthImage, m_depthAllocation);
         m_depthImage = VK_NULL_HANDLE;
         m_depthAllocation = VK_NULL_HANDLE;
-    }
-
-    if (m_colorImageView != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, m_colorImageView, nullptr);
-        m_colorImageView = VK_NULL_HANDLE;
-    }
-
-    if (m_colorImage != VK_NULL_HANDLE) {
-        vmaDestroyImage(m_device.GetAllocator(), m_colorImage, m_colorAllocation);
-        m_colorImage = VK_NULL_HANDLE;
-        m_colorAllocation = VK_NULL_HANDLE;
-    }
-
-    if (m_normalMsaaImageView != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, m_normalMsaaImageView, nullptr);
-        m_normalMsaaImageView = VK_NULL_HANDLE;
-    }
-
-    if (m_normalMsaaImage != VK_NULL_HANDLE) {
-        vmaDestroyImage(m_device.GetAllocator(), m_normalMsaaImage, m_normalMsaaAllocation);
-        m_normalMsaaImage = VK_NULL_HANDLE;
-        m_normalMsaaAllocation = VK_NULL_HANDLE;
-    }
-
-    if (m_stencilMsaaImageView != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, m_stencilMsaaImageView, nullptr);
-        m_stencilMsaaImageView = VK_NULL_HANDLE;
-    }
-
-    if (m_stencilMsaaImage != VK_NULL_HANDLE) {
-        vmaDestroyImage(m_device.GetAllocator(), m_stencilMsaaImage, m_stencilMsaaAllocation);
-        m_stencilMsaaImage = VK_NULL_HANDLE;
-        m_stencilMsaaAllocation = VK_NULL_HANDLE;
     }
 
     for (size_t i = 0; i < m_hdrImages.size(); ++i) {
@@ -1989,7 +1770,7 @@ void RenderLoop::ClearSmaaChainToZero() {
     // Transition edges + weights images from UNDEFINED to
     // SHADER_READ_ONLY_OPTIMAL (matching the SMAA render pass's initial
     // layout and the descriptor writes above) via a TRANSFER_DST clear
-    // to zero. Runs at creation and on MSAA / swapchain resize so the
+    // to zero. Runs at creation and on swapchain resize so the
     // first blend sample of a disabled-SMAA frame reads deterministic
     // zeros (the blend shader short-circuits via the push-constant gate
     // anyway, but this keeps the weights texture in a known layout +
@@ -2439,21 +2220,18 @@ void RenderLoop::CreateDepthPyramidResources() {
 }
 
 void RenderLoop::UpdateDepthPyramidDescriptors() {
-    const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
     const uint32_t imageCount = static_cast<uint32_t>(m_depthPyramidSets.size());
     for (uint32_t i = 0; i < imageCount; ++i) {
         for (uint32_t level = 0; level < DEPTH_PYRAMID_MIPS; ++level) {
-            // Linearize (level == 0): source is the non-linear depth attachment
-            // (non-MSAA only). Under MSAA we never dispatch this set but still
-            // point it at a valid single-sample view (mip 0) so descriptor
-            // validation is happy if the set is ever bound.
+            // Linearize (level == 0): source is the non-linear depth
+            // attachment, sampled in SHADER_READ_ONLY_OPTIMAL after the
+            // render pass end.
             // Downsample (level ≥ 1): source is the previous mip, sampled in GENERAL.
             VkImageView srcView = VK_NULL_HANDLE;
             VkImageLayout srcLayout = VK_IMAGE_LAYOUT_GENERAL;
             if (level == 0) {
-                srcView = multisampled ? m_depthPyramidMipViews[i][0] : m_depthImageView;
-                srcLayout = multisampled ? VK_IMAGE_LAYOUT_GENERAL
-                                         : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                srcView = m_depthImageView;
+                srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             } else {
                 srcView = m_depthPyramidMipViews[i][level - 1];
                 srcLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -2491,12 +2269,6 @@ void RenderLoop::UpdateDepthPyramidDescriptors() {
 }
 
 void RenderLoop::BuildDepthPyramid(VkCommandBuffer cmd) {
-    // MSAA path gated off — depth_linearize.comp wants sampler2D, not
-    // sampler2DMS. Revisit when SSAO (RP.5) needs MSAA support.
-    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
-        return;
-    }
-
     const uint32_t i = m_currentImageIndex;
     const VkExtent2D extent = m_depthPyramidExtent;
 
@@ -2820,8 +2592,8 @@ void RenderLoop::CreateSsaoResources() {
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         // STORAGE for compute writes; SAMPLED for the blur + tonemap reads;
         // TRANSFER_DST for the init-time vkCmdClearColorImage that seeds
-        // AO A at 1.0 under MSAA (so tonemap's multiply is a no-op when
-        // SSAO is gated off).
+        // AO A at 1.0 so tonemap's multiply is a no-op before the first
+        // SSAO dispatch lands.
         imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                           VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2900,9 +2672,8 @@ void RenderLoop::UpdateSsaoDescriptors() {
 
         // RP.12d — stencil G-buffer (R8_UINT, usampler2D) for the per-tap
         // transparency gate. The main render pass transitions the single-
-        // sample stencil image to SHADER_READ_ONLY_OPTIMAL at end, and SSAO
-        // is gated off under MSAA (where only the resolve target would carry
-        // that layout), so this layout is valid whenever SSAO dispatches.
+        // sample stencil image to SHADER_READ_ONLY_OPTIMAL at end, so this
+        // layout is valid every time SSAO dispatches.
         VkDescriptorImageInfo stencilInfo{};
         stencilInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         stencilInfo.imageView = i < m_stencilImageViews.size()
@@ -3022,9 +2793,9 @@ void RenderLoop::UpdateSsaoDescriptors() {
 
 void RenderLoop::ClearAoImagesToWhite() {
     // One-shot command: transition every AO image UNDEFINED → TRANSFER_DST,
-    // clear to (1,0,0,0) so the multiply-composite is a no-op when SSAO is
-    // gated off (MSAA), then transition to SHADER_READ_ONLY_OPTIMAL so the
-    // tonemap descriptor can sample it immediately.
+    // clear to (1,0,0,0) so the multiply-composite is a no-op before the
+    // first SSAO dispatch lands, then transition to SHADER_READ_ONLY_OPTIMAL
+    // so the tonemap descriptor can sample it immediately.
     if (m_aoImagesA.empty()) {
         return;
     }
@@ -3138,13 +2909,6 @@ void RenderLoop::UploadSsaoUbo(uint32_t imageIndex) {
 }
 
 void RenderLoop::RunSsao(VkCommandBuffer cmd) {
-    // MSAA path: SSAO inputs (pyramid, normal G-buffer) are either gated off
-    // or resolved in shapes the compute shaders don't support cleanly.
-    // Tonemap samples the pre-cleared (1.0) AO so the multiply is a no-op.
-    if (m_samples != VK_SAMPLE_COUNT_1_BIT) {
-        return;
-    }
-
     const uint32_t i = m_currentImageIndex;
     UploadSsaoUbo(i);
 

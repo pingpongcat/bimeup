@@ -85,6 +85,22 @@ std::unique_ptr<VulkanContext> RenderLoopTest::s_context;
 std::unique_ptr<Device> RenderLoopTest::s_device;
 std::unique_ptr<Swapchain> RenderLoopTest::s_swapchain;
 
+// RP.14.1.a — symmetric guard against MSAA resurrection. SMAA covers
+// architectural AA and MSAA gated XeGTAO / outline / depth-pyramid off, which
+// is the wrong tradeoff for a BIM viewer. If someone adds SetSampleCount /
+// GetSampleCount back to RenderLoop, this concept becomes satisfied and the
+// static_assert breaks the build.
+template <typename T>
+concept RenderLoopExposesMsaaAccessors =
+    requires(T& mutableLoop, const T& constLoop) {
+        constLoop.GetSampleCount();
+        mutableLoop.SetSampleCount(VK_SAMPLE_COUNT_1_BIT);
+    };
+static_assert(!RenderLoopExposesMsaaAccessors<RenderLoop>,
+              "RP.14.1.a — RenderLoop::SetSampleCount/GetSampleCount retired; "
+              "do not bring MSAA back without revisiting the XeGTAO / outline / "
+              "depth-pyramid gates.");
+
 TEST_F(RenderLoopTest, CreatesSuccessfully) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
 }
@@ -191,31 +207,11 @@ TEST_F(RenderLoopTest, NormalGBufferImageViewsProvidedPerSwapImage) {
     }
 }
 
-// Merged baseline MSAA recreate check: constructing RenderLoop and flipping
-// SetSampleCount(4x) must rebuild all per-swap GBuffer attachments (normal,
-// stencil, depth-pyramid, AO) and a frame must still cycle. Feature-specific
-// MSAA gates (Outline/SMAA) live in their own SurvivesSampleCountChange
-// tests further down — those flip enable flags and exercise distinct paths.
-TEST_F(RenderLoopTest, GBuffersSurviveSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetNormalImageView(i), VK_NULL_HANDLE);
-        EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE);
-        EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE);
-        EXPECT_NE(m_renderLoop->GetAoImageView(i), VK_NULL_HANDLE);
-    }
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
 // RP.6c — MRT outline stencil G-buffer: the main render pass has a third
 // R8_UINT colour attachment per swap image (0 = background, 1 = selected,
 // 2 = hovered). Sampled by the RP.6b outline fragment shader. Layout mirrors
-// the normal G-buffer — per-swap-image single-sample target + a transient
-// MSAA attachment when m_samples > 1x.
+// the normal G-buffer — per-swap-image single-sample target (RP.14.1.a
+// retired the transient MSAA sibling along with the rest of the MSAA path).
 TEST_F(RenderLoopTest, StencilFormatIsR8Uint) {
     EXPECT_EQ(RenderLoop::STENCIL_FORMAT, VK_FORMAT_R8_UINT);
 }
@@ -249,8 +245,8 @@ TEST_F(RenderLoopTest, StencilFormatHoldsTransparentBit) {
 
 // RP.4d — Linear depth + depth pyramid: a 4-mip R32_SFLOAT pyramid per swap
 // image, built by a compute pass between the main HDR pass and the tonemap
-// pass. MSAA path gates off for now (shader needs sampler2DMS; can be added
-// when SSAO starts sampling the pyramid).
+// pass. Runs every frame now (RP.14.1.a retired the MSAA gate along with the
+// rest of the MSAA path).
 TEST_F(RenderLoopTest, DepthPyramidFormatIsR32Sfloat) {
     EXPECT_EQ(RenderLoop::DEPTH_PYRAMID_FORMAT, VK_FORMAT_R32_SFLOAT);
 }
@@ -283,9 +279,10 @@ TEST_F(RenderLoopTest, DepthPyramidBuiltDuringFrame) {
 // RP.5d — SSAO compute pass wired into RenderLoop: per-swap-image half-res
 // R8 AO target, main + 2 blur dispatches between the depth-pyramid build
 // and the tonemap pass, AO sampled by tonemap.frag and multiplied into the
-// HDR colour. MSAA path gates off (inherits the depth pyramid gate — no
-// pyramid means no SSAO inputs); AO image is cleared to 1.0 at creation so
-// the tonemap multiply stays a no-op when SSAO is skipped.
+// HDR colour. Runs every frame now (RP.14.1.a retired the MSAA gate along
+// with the rest of the MSAA path); AO image is still cleared to 1.0 at
+// creation so the tonemap multiply starts as a no-op before the first
+// SSAO dispatch lands.
 TEST_F(RenderLoopTest, AoFormatIsR8Unorm) {
     EXPECT_EQ(RenderLoop::AO_FORMAT, VK_FORMAT_R8_UNORM);
 }
@@ -329,8 +326,8 @@ bimeup::renderer::OutlinePipeline::PushConstants MakeDefaultOutlinePush() {
 // recorded into the present pass after the tonemap fullscreen draw. Push
 // constants and the enable toggle come from the panel via SetOutlineParams.
 // The outline pass samples the stencil G-buffer (RP.6c) and the depth
-// pyramid mip 0 (RP.4d), so it inherits the depth-pyramid MSAA gate — under
-// MSAA the dispatch is skipped and the frame cycles without the outline.
+// pyramid mip 0 (RP.4d). RP.14.1.a retired the MSAA gate so the dispatch
+// runs whenever the panel flag is on.
 TEST_F(RenderLoopTest, OutlineDrawnDuringFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
@@ -346,15 +343,6 @@ TEST_F(RenderLoopTest, OutlineDisabledStillCyclesFrame) {
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
     m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/false);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, OutlineSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/true);
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
@@ -393,21 +381,6 @@ TEST_F(RenderLoopTest, SmaaDisabledStillCyclesFrame) {
     // validation on present; a regression that left the shader sampling
     // stale weights would still work here but the flag's unit-level
     // contract is pinned by `SmaaBlendPipelinePushConstants`.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, SmaaSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    m_renderLoop->SetSmaaParams(/*enabled=*/true);
-    // MSAA path: the scene pass resolves to a single-sample HDR target,
-    // tonemap writes the single-sample LDR intermediate, and SMAA runs at
-    // 1× sample throughout (LDR is always 1-sample regardless of scene
-    // MSAA, same as FXAA before). Exercises the SMAA per-swap rebuild
-    // alongside the existing MSAA rebuild chain + guards against a
-    // regression that wired SMAA intermediates to the scene sample count.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

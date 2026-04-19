@@ -20,7 +20,6 @@
 #include <renderer/DiskMarkerPipeline.h>
 #include <renderer/FirstPersonController.h>
 #include <renderer/Lighting.h>
-#include <renderer/Msaa.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
@@ -189,11 +188,7 @@ int main(int argc, char* argv[]) {
     auto fbSize = window.GetFramebufferSize();
     bimeup::renderer::Swapchain swapchain(
         device, surface, VkExtent2D{static_cast<uint32_t>(fbSize.x), static_cast<uint32_t>(fbSize.y)});
-    VkSampleCountFlags supportedSamples =
-        bimeup::renderer::GetUsableSampleCounts(device.GetPhysicalDevice());
-    VkSampleCountFlagBits currentSamples = VK_SAMPLE_COUNT_1_BIT;
-    bimeup::renderer::RenderLoop renderLoop(device, swapchain, BIMEUP_SHADER_DIR,
-                                            currentSamples);
+    bimeup::renderer::RenderLoop renderLoop(device, swapchain, BIMEUP_SHADER_DIR);
 
     // Shaders
     std::string shaderDir = BIMEUP_SHADER_DIR;
@@ -477,7 +472,7 @@ int main(int argc, char* argv[]) {
                               std::unique_ptr<bimeup::renderer::Pipeline>& wire,
                               std::unique_ptr<bimeup::renderer::Pipeline>& transparent) {
         pipelineConfig.renderPass = renderLoop.GetRenderPass();
-        pipelineConfig.rasterizationSamples = renderLoop.GetSampleCount();
+        pipelineConfig.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         pipelineConfig.colorAttachmentCount = 3;
         pipelineConfig.disableSecondaryColorWrites = false;
         pipelineConfig.polygonMode =
@@ -517,22 +512,21 @@ int main(int argc, char* argv[]) {
         // stay at their clear values under section-fill triangles.
         sectionFillPipeline = std::make_unique<bimeup::renderer::SectionFillPipeline>(
             device, sectionFillVertShader, sectionFillFragShader,
-            renderLoop.GetRenderPass(), dsLayout.GetLayout(), renderLoop.GetSampleCount(),
+            renderLoop.GetRenderPass(), dsLayout.GetLayout(), VK_SAMPLE_COUNT_1_BIT,
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildSectionFillPipeline();
 
     bimeup::scene::SectionCapGeometry sectionCapGeometry(device);
 
-    // Disk marker pipeline + GPU buffer for the PoV hover preview. Rebuilt on
-    // MSAA change alongside the other scene pipelines.
+    // Disk marker pipeline + GPU buffer for the PoV hover preview.
     std::unique_ptr<bimeup::renderer::DiskMarkerPipeline> diskMarkerPipeline;
     auto buildDiskMarkerPipeline = [&] {
         // Same MRT treatment as the section-fill pipeline.
         diskMarkerPipeline = std::make_unique<bimeup::renderer::DiskMarkerPipeline>(
             device, diskMarkerVertShader, diskMarkerFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(),
-            renderLoop.GetSampleCount(),
+            VK_SAMPLE_COUNT_1_BIT,
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildDiskMarkerPipeline();
@@ -1381,28 +1375,6 @@ int main(int argc, char* argv[]) {
         if (fitToViewRequested) {
             fitToViewRequested = false;
             FitCameraToBounds(camera, ComputeSceneBounds(sceneResult->scene));
-        }
-
-        // MSAA sample-count change from the Render Quality panel. Clamp request
-        // against device support, then rebuild render pass / attachments /
-        // pipelines / ImGui backend to match.
-        {
-            int requested = renderQualityPanel->GetSettings().msaaSamples;
-            VkSampleCountFlagBits desired =
-                bimeup::renderer::ClampSampleCount(requested, supportedSamples);
-            if (desired != currentSamples) {
-                renderLoop.WaitIdle();
-                uiManager.ShutdownVulkanBackend();
-                renderLoop.SetSampleCount(desired);
-                currentSamples = desired;
-                buildPipelines(shadedPipeline, wireframePipeline, transparentPipeline);
-                buildSectionFillPipeline();
-                buildDiskMarkerPipeline();
-                initImGui();
-                // Reflect the clamped value back to the panel so the UI doesn't
-                // claim e.g. 8x when the device only supports 4x.
-                renderQualityPanel->MutableSettings().msaaSamples = static_cast<int>(desired);
-            }
         }
 
         // Sync overlay & toolbar state.
