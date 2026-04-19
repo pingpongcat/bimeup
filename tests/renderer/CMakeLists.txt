@@ -49,14 +49,15 @@ target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTe
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")
 bimeup_enable_sanitizers(renderer_tests)
 
-# Gtest suites that don't touch Vulkan/GLFW — pure CPU/math, safe to fan out
-# wide with `ctest -j`. Discovery splits the binary into per-test ctest entries
-# so `ctest -L cpu`, `ctest -L gpu`, or `ctest -R Smaa` all work.
-set(_renderer_cpu_filter
-    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:FogMathTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:MsaaClampTest.*:OctNormalTest.*:OutlineEdgeTest.*:OutlinePipelinePushConstants.*:PcfShadowTest.*:RenderModeTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SsaoKernelTest.*:SsaoXeGtaoPipelinePushConstants.*:SsilBlurPipelinePushConstants.*:SsilMathTest.*:SsilPipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
-
 set(_renderer_test_env
     "ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/cmake/asan_suppressions.txt")
+
+# CPU/math gtest suites — no Vulkan/GLFW. Discovery splits the binary into
+# per-test ctest entries so they fan out wide under `ctest -j` and individual
+# tests show up in `ctest -R`. Suite list mirrors `BIMEUP_RENDERER_CPU_FIXTURES`
+# below in negated form so any new GPU suite is automatically picked up there.
+set(_renderer_cpu_filter
+    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:FogMathTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:MsaaClampTest.*:OctNormalTest.*:OutlineEdgeTest.*:OutlinePipelinePushConstants.*:PcfShadowTest.*:RenderModeTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SsaoKernelTest.*:SsaoXeGtaoPipelinePushConstants.*:SsilBlurPipelinePushConstants.*:SsilMathTest.*:SsilPipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
 
 include(GoogleTest)
 
@@ -68,10 +69,47 @@ gtest_discover_tests(renderer_tests
         ENVIRONMENT "${_renderer_test_env}"
 )
 
-gtest_discover_tests(renderer_tests
-    TEST_PREFIX "gpu."
-    TEST_FILTER "-${_renderer_cpu_filter}"
-    PROPERTIES
-        LABELS "renderer\;gpu"
-        ENVIRONMENT "${_renderer_test_env}"
+# GPU suites are registered ONE ctest entry per fixture (not per test) so the
+# binary runs each fixture's tests in a single process. That lets fixtures
+# share their VulkanContext+Device+Swapchain via SetUpTestSuite — the dominant
+# cost — while still parallelising across fixtures under `ctest -j`. Per-test
+# discovery would force a fresh process (and a fresh Vulkan setup) per test.
+set(_renderer_gpu_fixtures
+    VulkanContextTest
+    DeviceTest
+    SwapchainTest
+    RenderLoopTest
+    BufferTest
+    ShaderTest
+    PipelineTest
+    DescriptorSetTest
+    BasicShaderTest
+    CubeRenderTest
+    MeshBufferTest
+    RenderModePipelineTest
+    ShadowMapTest
+    SectionFillPipelineTest
+    DiskMarkerPipelineTest
+    TonemapPipelineTest
+    DepthLinearizePipelineTest
+    DepthMipPipelineTest
+    SsaoBlurPipelineTest
+    SsaoXeGtaoPipelineTest
+    OutlinePipelineTest
+    SsilPipelineTest
+    SsilBlurPipelineTest
+    SmaaEdgePipelineTest
+    SmaaWeightsPipelineTest
+    SmaaBlendPipelineTest
 )
+
+foreach(_fixture IN LISTS _renderer_gpu_fixtures)
+    add_test(
+        NAME "gpu.${_fixture}"
+        COMMAND renderer_tests "--gtest_filter=${_fixture}.*"
+    )
+    set_tests_properties("gpu.${_fixture}" PROPERTIES
+        LABELS "renderer;gpu"
+        ENVIRONMENT "${_renderer_test_env}"
+    )
+endforeach()
