@@ -39,6 +39,7 @@ add_executable(renderer_tests
     SsilBlurPipelineTest.cpp
     FxaaMathTest.cpp
     FxaaPipelineTest.cpp
+    SmaaMathTest.cpp
     FogMathTest.cpp
     BloomMathTest.cpp
     BloomDownPipelineTest.cpp

@@ -38,6 +38,7 @@ add_library(bimeup_renderer STATIC
     src/SsilBlurPipeline.cpp
     src/FxaaMath.cpp
     src/FxaaPipeline.cpp
+    src/SmaaMath.cpp
     src/FogMath.cpp
     src/BloomMath.cpp
     src/BloomDownPipeline.cpp
