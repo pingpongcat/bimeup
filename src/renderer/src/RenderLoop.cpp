@@ -2756,9 +2756,29 @@ void RenderLoop::CreateSsaoDescriptors() {
         throw std::runtime_error("Failed to create AO sampler");
     }
 
+    // RP.12d — dedicated NEAREST sampler for the R8_UINT stencil binding on
+    // the SSAO main set. Mirrors the SSIL stencil sampler: integer formats
+    // can't use FILTER_LINEAR, and the gate reads raw texels so no filtering
+    // is wanted. CLAMP_TO_EDGE keeps out-of-frustum taps from sampling garbage.
+    VkSamplerCreateInfo stencilSamplerInfo{};
+    stencilSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    stencilSamplerInfo.magFilter = VK_FILTER_NEAREST;
+    stencilSamplerInfo.minFilter = VK_FILTER_NEAREST;
+    stencilSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    stencilSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.minLod = 0.0F;
+    stencilSamplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &stencilSamplerInfo, nullptr,
+                        &m_ssaoStencilSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSAO stencil sampler");
+    }
+
     // Main set layout: depth pyramid (CIS), normal G-buffer (CIS),
-    // SsaoUbo (UBO), AO output (STORAGE_IMAGE). Matches SsaoPipeline docs.
-    std::array<VkDescriptorSetLayoutBinding, 4> mainBindings{};
+    // SsaoUbo (UBO), AO output (STORAGE_IMAGE), stencil G-buffer (CIS, RP.12d).
+    // Matches SsaoPipeline docs.
+    std::array<VkDescriptorSetLayoutBinding, 5> mainBindings{};
     mainBindings[0].binding = 0;
     mainBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     mainBindings[0].descriptorCount = 1;
@@ -2775,6 +2795,10 @@ void RenderLoop::CreateSsaoDescriptors() {
     mainBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     mainBindings[3].descriptorCount = 1;
     mainBindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[4].binding = 4;
+    mainBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    mainBindings[4].descriptorCount = 1;
+    mainBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo mainLayoutInfo{};
     mainLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2818,7 +2842,8 @@ void RenderLoop::CreateSsaoDescriptors() {
 
     std::array<VkDescriptorPoolSize, 3> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sizes[0].descriptorCount = (mainSets * 2) + (blurSets * 2);  // main: 2 CIS; blur: 2 CIS
+    // main: 3 CIS (pyramid, normal, stencil — RP.12d); blur: 2 CIS.
+    sizes[0].descriptorCount = (mainSets * 3) + (blurSets * 2);
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[1].descriptorCount = mainSets;
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -2985,7 +3010,19 @@ void RenderLoop::UpdateSsaoDescriptors() {
         aoAOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         aoAOutInfo.imageView = m_aoViewsA[i];
 
-        std::array<VkWriteDescriptorSet, 4> mainWrites{};
+        // RP.12d — stencil G-buffer (R8_UINT, usampler2D) for the per-tap
+        // transparency gate. The main render pass transitions the single-
+        // sample stencil image to SHADER_READ_ONLY_OPTIMAL at end, and SSAO
+        // is gated off under MSAA (where only the resolve target would carry
+        // that layout), so this layout is valid whenever SSAO dispatches.
+        VkDescriptorImageInfo stencilInfo{};
+        stencilInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        stencilInfo.imageView = i < m_stencilImageViews.size()
+                                    ? m_stencilImageViews[i]
+                                    : VK_NULL_HANDLE;
+        stencilInfo.sampler = m_ssaoStencilSampler;
+
+        std::array<VkWriteDescriptorSet, 5> mainWrites{};
         mainWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         mainWrites[0].dstSet = m_ssaoMainSets[i];
         mainWrites[0].dstBinding = 0;
@@ -3010,6 +3047,19 @@ void RenderLoop::UpdateSsaoDescriptors() {
         mainWrites[3].descriptorCount = 1;
         mainWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         mainWrites[3].pImageInfo = &aoAOutInfo;
+        mainWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mainWrites[4].dstSet = m_ssaoMainSets[i];
+        mainWrites[4].dstBinding = 4;
+        mainWrites[4].descriptorCount = 1;
+        mainWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mainWrites[4].pImageInfo = &stencilInfo;
+        if (stencilInfo.imageView == VK_NULL_HANDLE) {
+            // Stencil image not yet built for this swap slot — skip this
+            // iteration's descriptor write rather than feed Vulkan a null
+            // view. UpdateSsaoDescriptors is called again alongside
+            // CreateSsaoResources after the stencil chain rebuilds.
+            continue;
+        }
         vkUpdateDescriptorSets(m_device.GetDevice(),
                                static_cast<uint32_t>(mainWrites.size()), mainWrites.data(),
                                0, nullptr);
@@ -3244,7 +3294,10 @@ void RenderLoop::RunSsao(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             m_ssaoPipeline->GetLayout(), 0, 1,
                             &m_ssaoMainSets[i], 0, nullptr);
-    SsaoPipeline::PushConstants mainPush{0.5F, 0.025F, 1.0F, 1.5F};
+    // RP.12d — architectural defaults: contact-AO radius (0.35 m) instead of
+    // the room-scale 0.5 m that darkened whole walls, and intensity 0.5 to
+    // match the toned-down palette chosen alongside the SSIL rework.
+    SsaoPipeline::PushConstants mainPush{0.35F, 0.025F, 0.5F, 1.5F};
     vkCmdPushConstants(cmd, m_ssaoPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(mainPush), &mainPush);
     vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);
@@ -3395,6 +3448,10 @@ void RenderLoop::CleanupSsaoDescriptors() {
     if (m_aoSampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_aoSampler, nullptr);
         m_aoSampler = VK_NULL_HANDLE;
+    }
+    if (m_ssaoStencilSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_ssaoStencilSampler, nullptr);
+        m_ssaoStencilSampler = VK_NULL_HANDLE;
     }
 }
 

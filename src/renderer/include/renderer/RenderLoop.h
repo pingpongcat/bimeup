@@ -408,6 +408,10 @@ private:
     std::vector<VkImageView> m_aoViewsB;
     VkExtent2D m_aoExtent = {0, 0};
     VkSampler m_aoSampler = VK_NULL_HANDLE;
+    // RP.12d — NEAREST sampler for the stencil-G-buffer binding (binding 4
+    // on the SSAO main set). Integer formats (R8_UINT) don't support linear
+    // filtering, and the SSAO per-tap gate reads the raw texel value.
+    VkSampler m_ssaoStencilSampler = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Buffer>> m_ssaoUbos;
     VkDescriptorSetLayout m_ssaoMainSetLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_ssaoBlurSetLayout = VK_NULL_HANDLE;

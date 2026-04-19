@@ -10,6 +10,10 @@
 //   set 0 / binding 2 : SsaoUbo — proj, invProj, and the hemisphere kernel
 //                       produced by `renderer::GenerateHemisphereKernel`
 //   set 0 / binding 3 : half-res R8 AO output (writeonly storage image)
+//   set 0 / binding 4 : outline stencil G-buffer (R8_UINT usampler2D) — RP.12d
+//                       transparency gate. Bit 4 = "transparent surface";
+//                       centre pixel transparent → early-out AO=1 (glass asks
+//                       for no contact AO), tap transparent → contribution 0.
 //
 // Push constants carry the runtime-tweakable knobs (radius, bias, intensity,
 // shadowPower). The output is the `1 - occlusion` AO term — tonemap (RP.5e)
@@ -28,6 +32,7 @@ layout(std140, set = 0, binding = 2) uniform SsaoUbo {
 } ubo;
 
 layout(set = 0, binding = 3, r8) uniform writeonly image2D aoOut;
+layout(set = 0, binding = 4) uniform usampler2D stencilGBuffer;
 
 layout(push_constant) uniform Push {
     float radius;
@@ -86,6 +91,16 @@ void main() {
         return;
     }
 
+    // RP.12d transparency gate — glass still writes depth + normal, so without
+    // this the classic hemisphere kernel would darken the room visible through
+    // a window. Early-out with AO=1 leaves the multiply-composite a no-op on
+    // every transparent pixel.
+    uint stencilCentre = texture(stencilGBuffer, uv).r;
+    if ((stencilCentre & 4u) != 0u) {
+        imageStore(aoOut, outCoord, vec4(1.0, 0.0, 0.0, 0.0));
+        return;
+    }
+
     vec3 viewPos = ReconstructViewPos(uv, centerDepth);
     vec2 normalEnc = texture(normalGBuffer, uv).rg;
     vec3 normal = OctUnpackNormal(normalEnc);
@@ -110,6 +125,14 @@ void main() {
         // would otherwise smear one border pixel across the screen edge.
         if (sampleUv.x < 0.0 || sampleUv.x > 1.0 ||
             sampleUv.y < 0.0 || sampleUv.y > 1.0) {
+            continue;
+        }
+
+        // RP.12d transparency gate — skip taps whose pixel is a translucent
+        // surface (bit 4 of the R8_UINT stencil). Prevents glass from reading
+        // as a solid occluder behind window frames.
+        uint stencilTap = texture(stencilGBuffer, sampleUv).r;
+        if ((stencilTap & 4u) != 0u) {
             continue;
         }
 
