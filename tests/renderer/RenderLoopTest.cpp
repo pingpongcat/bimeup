@@ -335,7 +335,8 @@ TEST_F(RenderLoopTest, SsilDispatchedDuringFrame) {
                                        glm::vec3(0.0F, 1.0F, 0.0F));
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
     m_renderLoop->SetView(view);
-    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*enabled=*/true);
+    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*maxLuminance=*/0.5F,
+                                /*enabled=*/true);
     // Exercises the full per-frame compute chain (pyramid + SSAO + SSIL main +
     // 2 blur passes + HDR→prev-HDR copy) under Vulkan validation.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
@@ -357,7 +358,8 @@ TEST_F(RenderLoopTest, SsilSurvivesSampleCountChange) {
     }
     // SSIL is gated off under MSAA — the pass early-returns so the cleared-0
     // target flows straight through to the tonemap add as a no-op.
-    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*enabled=*/true);
+    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*maxLuminance=*/0.5F,
+                                /*enabled=*/true);
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

@@ -1507,7 +1507,8 @@ int main(int argc, char* argv[]) {
         {
             const auto& ssilSettings = renderQualityPanel->GetSettings().ssil;
             renderLoop.SetSsilParams(ssilSettings.radius, ssilSettings.intensity,
-                                     ssilSettings.normalRejection, ssilSettings.enabled);
+                                     ssilSettings.normalRejection,
+                                     ssilSettings.maxLuminance, ssilSettings.enabled);
         }
 
         // RP.6d — push panel-driven selection-outline parameters. texelSize

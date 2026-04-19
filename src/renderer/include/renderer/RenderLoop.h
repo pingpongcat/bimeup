@@ -155,11 +155,14 @@ public:
     /// `intensity` : scale on the accumulated indirect colour
     /// `normalRejection` : exponent on the `dot(nCurr, nSampled)` lobe (higher
     ///                     narrows the acceptance cone; 0 disables rejection)
+    /// `maxLuminance` : RP.12c per-channel cap on the post-accumulation
+    ///                  indirect colour (caps wide-area glow on uniformly-lit
+    ///                  walls while preserving hue — see `ssil_main.comp`).
     /// `enabled` : when false (or when MSAA is on — SSIL inherits the depth-
     ///             pyramid gate) the compute dispatches are skipped and the
     ///             target stays at its cleared 0 so the tonemap add is a no-op.
     void SetSsilParams(float radius, float intensity, float normalRejection,
-                       bool enabled);
+                       float maxLuminance, bool enabled);
 
     /// RP.6d — selection/hover outline pass parameters. The outline draw is
     /// recorded inside the present pass between the tonemap fullscreen tri
@@ -460,8 +463,9 @@ private:
     float m_ssilRadius = 0.5F;
     float m_ssilIntensity = 1.0F;
     float m_ssilNormalRejection = 2.0F;
-    // RP.12c: placeholder until c.3 wires the panel "Max luminance" slider.
-    // Pushed every frame so the shader's clamp is always armed.
+    // RP.12c per-channel luminance cap pushed into `ssil_main.comp`'s post-
+    // accumulation clamp. Driven by the panel "Max luminance" slider via
+    // `SetSsilParams`; default matches `SsilSettings::maxLuminance`.
     float m_ssilMaxLuminance = 0.5F;
     bool m_ssilEnabled = false;
     uint32_t m_ssilFrameCounter = 0;

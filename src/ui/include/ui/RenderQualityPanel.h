@@ -22,12 +22,16 @@ struct OutlineSettings {
 // RP.7d SSIL (screen-space indirect lighting) knobs. The renderer gates the
 // pass off under MSAA (inherits the depth-pyramid gate) regardless of the
 // `enabled` flag; the flag primarily drives the dispatch for the non-MSAA
-// path. Defaults match the `RunSsil` fallback constants.
+// path. RP.12c tuning: default intensity lowered to 0.15 (wide-area bounces
+// were dominating the tonemapped frame at 1.0), and `maxLuminance` caps the
+// per-channel post-accumulation contribution so uniformly-lit walls can't
+// glow past the cap even when 64 taps all agree.
 struct SsilSettings {
     bool enabled{false};
     float radius{0.5F};
-    float intensity{1.0F};
+    float intensity{0.15F};
     float normalRejection{2.0F};
+    float maxLuminance{0.5F};
 };
 
 // RP.11c SMAA 1x post-process knobs. The renderer runs the blend draw

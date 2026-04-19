@@ -401,10 +401,11 @@ void RenderLoop::SetView(const glm::mat4& view) {
 }
 
 void RenderLoop::SetSsilParams(float radius, float intensity, float normalRejection,
-                               bool enabled) {
+                               float maxLuminance, bool enabled) {
     m_ssilRadius = radius;
     m_ssilIntensity = intensity;
     m_ssilNormalRejection = normalRejection;
+    m_ssilMaxLuminance = maxLuminance;
     m_ssilEnabled = enabled;
 }
 

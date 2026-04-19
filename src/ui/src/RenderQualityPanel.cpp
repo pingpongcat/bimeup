@@ -113,6 +113,7 @@ void RenderQualityPanel::OnDraw() {
         ImGui::SliderFloat("Radius (m)", &ssil.radius, 0.05F, 2.0F, "%.2f");
         ImGui::SliderFloat("Intensity", &ssil.intensity, 0.0F, 4.0F, "%.2f");
         ImGui::SliderFloat("Normal rejection", &ssil.normalRejection, 0.0F, 16.0F, "%.1f");
+        ImGui::SliderFloat("Max luminance", &ssil.maxLuminance, 0.1F, 2.0F, "%.2f");
         ImGui::EndDisabled();
     }
 
