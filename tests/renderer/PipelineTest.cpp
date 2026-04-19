@@ -123,26 +123,42 @@ VkRenderPass CreateSimpleRenderPass(VkDevice device, VkFormat format) {
 
 class PipelineTest : public ::testing::Test {
 protected:
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
+        s_renderPass = CreateSimpleRenderPass(s_device->GetDevice(), VK_FORMAT_B8G8R8A8_SRGB);
+    }
+
+    static void TearDownTestSuite() {
+        if (s_renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(s_device->GetDevice(), s_renderPass, nullptr);
+            s_renderPass = VK_NULL_HANDLE;
+        }
+        s_device.reset();
+        s_context.reset();
+    }
+
     void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
-        m_renderPass = CreateSimpleRenderPass(m_device->GetDevice(), VK_FORMAT_B8G8R8A8_SRGB);
+        m_device = s_device.get();
+        m_renderPass = s_renderPass;
     }
 
     void TearDown() override {
         m_pipeline.reset();
-        if (m_renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(m_device->GetDevice(), m_renderPass, nullptr);
-        }
-        m_device.reset();
-        m_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
+    Device* m_device = nullptr;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static VkRenderPass s_renderPass;
 };
+
+std::unique_ptr<VulkanContext> PipelineTest::s_context;
+std::unique_ptr<Device> PipelineTest::s_device;
+VkRenderPass PipelineTest::s_renderPass = VK_NULL_HANDLE;
 
 TEST_F(PipelineTest, CreateWithVertexAndFragmentShader) {
     Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());

@@ -5,20 +5,28 @@
 using bimeup::renderer::Device;
 using bimeup::renderer::VulkanContext;
 
+// Device construction is the unit under test, so m_device is per-test. Only
+// the (expensive) VulkanContext is shared across the suite.
 class DeviceTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
     }
 
-    void TearDown() override {
-        m_device.reset();
-        m_context.reset();
+    static void TearDownTestSuite() {
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
+    void SetUp() override { m_context = s_context.get(); }
+    void TearDown() override { m_device.reset(); }
+
+    VulkanContext* m_context = nullptr;
     std::unique_ptr<Device> m_device;
+
+    static std::unique_ptr<VulkanContext> s_context;
 };
+
+std::unique_ptr<VulkanContext> DeviceTest::s_context;
 
 TEST_F(DeviceTest, PhysicalDeviceSelected) {
     m_device = std::make_unique<Device>(m_context->GetInstance());

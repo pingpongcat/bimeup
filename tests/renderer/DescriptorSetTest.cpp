@@ -16,19 +16,26 @@ using bimeup::renderer::VulkanContext;
 
 class DescriptorSetTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
     }
 
-    void TearDown() override {
-        m_device.reset();
-        m_context.reset();
+    static void TearDownTestSuite() {
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
+    void SetUp() override { m_device = s_device.get(); }
+
+    Device* m_device = nullptr;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
 };
+
+std::unique_ptr<VulkanContext> DescriptorSetTest::s_context;
+std::unique_ptr<Device> DescriptorSetTest::s_device;
 
 TEST_F(DescriptorSetTest, CreateLayout) {
     DescriptorSetLayout layout(*m_device, {

@@ -20,39 +20,54 @@ using bimeup::renderer::VulkanContext;
 
 class DepthLinearizePipelineTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
 
         // binding 0: non-linear depth as combined-image-sampler (the depth
         // attachment post main-pass, layout SHADER_READ_ONLY_OPTIMAL).
         // binding 1: linear-depth output as storage image.
-        m_layout = std::make_unique<DescriptorSetLayout>(
-            *m_device,
+        s_layout = std::make_unique<DescriptorSetLayout>(
+            *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT},
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT},
             });
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
-        m_compute = std::make_unique<Shader>(*m_device, ShaderStage::Compute,
+        s_compute = std::make_unique<Shader>(*s_device, ShaderStage::Compute,
                                              shaderDir + "/depth_linearize.comp.spv");
     }
 
-    void TearDown() override {
-        m_pipeline.reset();
-        m_compute.reset();
-        m_layout.reset();
-        m_device.reset();
-        m_context.reset();
+    static void TearDownTestSuite() {
+        s_compute.reset();
+        s_layout.reset();
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
-    std::unique_ptr<DescriptorSetLayout> m_layout;
-    std::unique_ptr<Shader> m_compute;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_layout = s_layout.get();
+        m_compute = s_compute.get();
+    }
+    void TearDown() override { m_pipeline.reset(); }
+
+    Device* m_device = nullptr;
+    DescriptorSetLayout* m_layout = nullptr;
+    Shader* m_compute = nullptr;
     std::unique_ptr<DepthLinearizePipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static std::unique_ptr<DescriptorSetLayout> s_layout;
+    static std::unique_ptr<Shader> s_compute;
 };
+
+std::unique_ptr<VulkanContext> DepthLinearizePipelineTest::s_context;
+std::unique_ptr<Device> DepthLinearizePipelineTest::s_device;
+std::unique_ptr<DescriptorSetLayout> DepthLinearizePipelineTest::s_layout;
+std::unique_ptr<Shader> DepthLinearizePipelineTest::s_compute;
 
 TEST_F(DepthLinearizePipelineTest, ShaderCompiledToSpirv) {
     std::string shaderDir = BIMEUP_SHADER_DIR;

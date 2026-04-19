@@ -83,48 +83,67 @@ void MakeCube(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
 
 class CubeRenderTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-        m_window = glfwCreateWindow(800, 600, "CubeRenderTest", nullptr, nullptr);
-        ASSERT_NE(m_window, nullptr);
+        s_window = glfwCreateWindow(800, 600, "CubeRenderTest", nullptr, nullptr);
+        ASSERT_NE(s_window, nullptr);
 
         uint32_t glfwExtCount = 0;
         const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
         std::span<const char* const> requiredExts(glfwExts, glfwExtCount);
-        m_context = std::make_unique<VulkanContext>(true, requiredExts);
+        s_context = std::make_unique<VulkanContext>(true, requiredExts);
 
         VkResult result = glfwCreateWindowSurface(
-            m_context->GetInstance(), m_window, nullptr, &m_surface);
+            s_context->GetInstance(), s_window, nullptr, &s_surface);
         ASSERT_EQ(result, VK_SUCCESS);
 
-        m_device = std::make_unique<Device>(m_context->GetInstance(), m_surface);
-        m_swapchain = std::make_unique<Swapchain>(*m_device, m_surface, VkExtent2D{800, 600});
-        m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+        s_device = std::make_unique<Device>(s_context->GetInstance(), s_surface);
+        s_swapchain = std::make_unique<Swapchain>(*s_device, s_surface, VkExtent2D{800, 600});
+        s_renderLoop = std::make_unique<RenderLoop>(*s_device, *s_swapchain, BIMEUP_SHADER_DIR);
     }
 
-    void TearDown() override {
-        m_renderLoop.reset();
-        m_swapchain.reset();
-        m_device.reset();
-        if (m_surface != VK_NULL_HANDLE) {
-            vkDestroySurfaceKHR(m_context->GetInstance(), m_surface, nullptr);
+    static void TearDownTestSuite() {
+        s_renderLoop.reset();
+        s_swapchain.reset();
+        s_device.reset();
+        if (s_surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(s_context->GetInstance(), s_surface, nullptr);
+            s_surface = VK_NULL_HANDLE;
         }
-        m_context.reset();
-        if (m_window != nullptr) {
-            glfwDestroyWindow(m_window);
+        s_context.reset();
+        if (s_window != nullptr) {
+            glfwDestroyWindow(s_window);
+            s_window = nullptr;
         }
         glfwTerminate();
     }
 
-    GLFWwindow* m_window = nullptr;
-    VkSurfaceKHR m_surface = VK_NULL_HANDLE;
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
-    std::unique_ptr<Swapchain> m_swapchain;
-    std::unique_ptr<RenderLoop> m_renderLoop;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_swapchain = s_swapchain.get();
+        m_renderLoop = s_renderLoop.get();
+    }
+
+    Device* m_device = nullptr;
+    Swapchain* m_swapchain = nullptr;
+    RenderLoop* m_renderLoop = nullptr;
+
+    static GLFWwindow* s_window;
+    static VkSurfaceKHR s_surface;
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static std::unique_ptr<Swapchain> s_swapchain;
+    static std::unique_ptr<RenderLoop> s_renderLoop;
 };
+
+GLFWwindow* CubeRenderTest::s_window = nullptr;
+VkSurfaceKHR CubeRenderTest::s_surface = VK_NULL_HANDLE;
+std::unique_ptr<VulkanContext> CubeRenderTest::s_context;
+std::unique_ptr<Device> CubeRenderTest::s_device;
+std::unique_ptr<Swapchain> CubeRenderTest::s_swapchain;
+std::unique_ptr<RenderLoop> CubeRenderTest::s_renderLoop;
 
 TEST_F(CubeRenderTest, RenderLoopProvidesRenderPass) {
     EXPECT_NE(m_renderLoop->GetRenderPass(), VK_NULL_HANDLE);

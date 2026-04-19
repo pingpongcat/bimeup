@@ -66,15 +66,15 @@ VkRenderPass CreateColorOnlyRenderPass(VkDevice device) {
 
 class TonemapPipelineTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
-        m_renderPass = CreateColorOnlyRenderPass(m_device->GetDevice());
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
+        s_renderPass = CreateColorOnlyRenderPass(s_device->GetDevice());
         // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
         // (RP.5d), binding 2 = half-res SSIL (RP.7d), binding 3 = depth
         // pyramid mip 0 for the RP.9b fog factor.
-        m_samplerLayout = std::make_unique<DescriptorSetLayout>(
-            *m_device,
+        s_samplerLayout = std::make_unique<DescriptorSetLayout>(
+            *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
@@ -82,32 +82,54 @@ protected:
                 {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
-        m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
+        s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
                                           shaderDir + "/tonemap.vert.spv");
-        m_frag = std::make_unique<Shader>(*m_device, ShaderStage::Fragment,
+        s_frag = std::make_unique<Shader>(*s_device, ShaderStage::Fragment,
                                           shaderDir + "/tonemap.frag.spv");
     }
 
-    void TearDown() override {
-        m_pipeline.reset();
-        m_vert.reset();
-        m_frag.reset();
-        m_samplerLayout.reset();
-        if (m_renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(m_device->GetDevice(), m_renderPass, nullptr);
+    static void TearDownTestSuite() {
+        s_vert.reset();
+        s_frag.reset();
+        s_samplerLayout.reset();
+        if (s_renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(s_device->GetDevice(), s_renderPass, nullptr);
+            s_renderPass = VK_NULL_HANDLE;
         }
-        m_device.reset();
-        m_context.reset();
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_renderPass = s_renderPass;
+        m_samplerLayout = s_samplerLayout.get();
+        m_vert = s_vert.get();
+        m_frag = s_frag.get();
+    }
+    void TearDown() override { m_pipeline.reset(); }
+
+    Device* m_device = nullptr;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    std::unique_ptr<DescriptorSetLayout> m_samplerLayout;
-    std::unique_ptr<Shader> m_vert;
-    std::unique_ptr<Shader> m_frag;
+    DescriptorSetLayout* m_samplerLayout = nullptr;
+    Shader* m_vert = nullptr;
+    Shader* m_frag = nullptr;
     std::unique_ptr<TonemapPipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static VkRenderPass s_renderPass;
+    static std::unique_ptr<DescriptorSetLayout> s_samplerLayout;
+    static std::unique_ptr<Shader> s_vert;
+    static std::unique_ptr<Shader> s_frag;
 };
+
+std::unique_ptr<VulkanContext> TonemapPipelineTest::s_context;
+std::unique_ptr<Device> TonemapPipelineTest::s_device;
+VkRenderPass TonemapPipelineTest::s_renderPass = VK_NULL_HANDLE;
+std::unique_ptr<DescriptorSetLayout> TonemapPipelineTest::s_samplerLayout;
+std::unique_ptr<Shader> TonemapPipelineTest::s_vert;
+std::unique_ptr<Shader> TonemapPipelineTest::s_frag;
 
 TEST_F(TonemapPipelineTest, TonemapShadersCompiledToSpirv) {
     std::string shaderDir = BIMEUP_SHADER_DIR;

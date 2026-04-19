@@ -24,9 +24,9 @@ using bimeup::renderer::VulkanContext;
 
 class SsilPipelineTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
 
         // Descriptor set that ssil_main.comp expects:
         //   binding 0: linear depth pyramid          (combined-image-sampler)
@@ -36,8 +36,8 @@ protected:
         //   binding 4: RGBA16F half-res SSIL target  (storage image)
         //   binding 5: stencil G-buffer (R8_UINT)    (combined-image-sampler,
         //              RP.12c.2 — taps with bit 4 set contribute 0)
-        m_layout = std::make_unique<DescriptorSetLayout>(
-            *m_device,
+        s_layout = std::make_unique<DescriptorSetLayout>(
+            *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT},
@@ -48,24 +48,39 @@ protected:
             });
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
-        m_compute = std::make_unique<Shader>(*m_device, ShaderStage::Compute,
+        s_compute = std::make_unique<Shader>(*s_device, ShaderStage::Compute,
                                              shaderDir + "/ssil_main.comp.spv");
     }
 
-    void TearDown() override {
-        m_pipeline.reset();
-        m_compute.reset();
-        m_layout.reset();
-        m_device.reset();
-        m_context.reset();
+    static void TearDownTestSuite() {
+        s_compute.reset();
+        s_layout.reset();
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
-    std::unique_ptr<DescriptorSetLayout> m_layout;
-    std::unique_ptr<Shader> m_compute;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_layout = s_layout.get();
+        m_compute = s_compute.get();
+    }
+    void TearDown() override { m_pipeline.reset(); }
+
+    Device* m_device = nullptr;
+    DescriptorSetLayout* m_layout = nullptr;
+    Shader* m_compute = nullptr;
     std::unique_ptr<SsilPipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static std::unique_ptr<DescriptorSetLayout> s_layout;
+    static std::unique_ptr<Shader> s_compute;
 };
+
+std::unique_ptr<VulkanContext> SsilPipelineTest::s_context;
+std::unique_ptr<Device> SsilPipelineTest::s_device;
+std::unique_ptr<DescriptorSetLayout> SsilPipelineTest::s_layout;
+std::unique_ptr<Shader> SsilPipelineTest::s_compute;
 
 TEST_F(SsilPipelineTest, ShaderCompiledToSpirv) {
     std::string shaderDir = BIMEUP_SHADER_DIR;

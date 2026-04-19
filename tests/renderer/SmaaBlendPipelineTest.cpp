@@ -62,48 +62,70 @@ VkRenderPass CreateRgba8ColorOnlyRenderPass(VkDevice device) {
 
 class SmaaBlendPipelineTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
-        m_renderPass = CreateRgba8ColorOnlyRenderPass(m_device->GetDevice());
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
+        s_renderPass = CreateRgba8ColorOnlyRenderPass(s_device->GetDevice());
 
         // smaa_blend.frag expects at set 0:
         //   binding 0: input LDR colour (COMBINED_IMAGE_SAMPLER)
         //   binding 1: blend weights    (COMBINED_IMAGE_SAMPLER)
-        m_layout = std::make_unique<DescriptorSetLayout>(
-            *m_device,
+        s_layout = std::make_unique<DescriptorSetLayout>(
+            *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
             });
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
-        m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
+        s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
                                           shaderDir + "/smaa.vert.spv");
-        m_frag = std::make_unique<Shader>(*m_device, ShaderStage::Fragment,
+        s_frag = std::make_unique<Shader>(*s_device, ShaderStage::Fragment,
                                           shaderDir + "/smaa_blend.frag.spv");
     }
 
-    void TearDown() override {
-        m_pipeline.reset();
-        m_vert.reset();
-        m_frag.reset();
-        m_layout.reset();
-        if (m_renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(m_device->GetDevice(), m_renderPass, nullptr);
+    static void TearDownTestSuite() {
+        s_vert.reset();
+        s_frag.reset();
+        s_layout.reset();
+        if (s_renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(s_device->GetDevice(), s_renderPass, nullptr);
+            s_renderPass = VK_NULL_HANDLE;
         }
-        m_device.reset();
-        m_context.reset();
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_renderPass = s_renderPass;
+        m_layout = s_layout.get();
+        m_vert = s_vert.get();
+        m_frag = s_frag.get();
+    }
+    void TearDown() override { m_pipeline.reset(); }
+
+    Device* m_device = nullptr;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    std::unique_ptr<DescriptorSetLayout> m_layout;
-    std::unique_ptr<Shader> m_vert;
-    std::unique_ptr<Shader> m_frag;
+    DescriptorSetLayout* m_layout = nullptr;
+    Shader* m_vert = nullptr;
+    Shader* m_frag = nullptr;
     std::unique_ptr<SmaaBlendPipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static VkRenderPass s_renderPass;
+    static std::unique_ptr<DescriptorSetLayout> s_layout;
+    static std::unique_ptr<Shader> s_vert;
+    static std::unique_ptr<Shader> s_frag;
 };
+
+std::unique_ptr<VulkanContext> SmaaBlendPipelineTest::s_context;
+std::unique_ptr<Device> SmaaBlendPipelineTest::s_device;
+VkRenderPass SmaaBlendPipelineTest::s_renderPass = VK_NULL_HANDLE;
+std::unique_ptr<DescriptorSetLayout> SmaaBlendPipelineTest::s_layout;
+std::unique_ptr<Shader> SmaaBlendPipelineTest::s_vert;
+std::unique_ptr<Shader> SmaaBlendPipelineTest::s_frag;
 
 TEST_F(SmaaBlendPipelineTest, SmaaShadersCompiledToSpirv) {
     std::string shaderDir = BIMEUP_SHADER_DIR;

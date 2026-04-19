@@ -71,42 +71,64 @@ VkRenderPass CreateColorDepthRenderPass(VkDevice device) {
 
 class SectionFillPipelineTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        m_context = std::make_unique<VulkanContext>(true);
-        m_device = std::make_unique<Device>(m_context->GetInstance());
-        m_renderPass = CreateColorDepthRenderPass(m_device->GetDevice());
-        m_cameraLayout = std::make_unique<DescriptorSetLayout>(
-            *m_device,
+    static void SetUpTestSuite() {
+        s_context = std::make_unique<VulkanContext>(true);
+        s_device = std::make_unique<Device>(s_context->GetInstance());
+        s_renderPass = CreateColorDepthRenderPass(s_device->GetDevice());
+        s_cameraLayout = std::make_unique<DescriptorSetLayout>(
+            *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
-        m_vert = std::make_unique<Shader>(*m_device, ShaderStage::Vertex,
+        s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
                                           shaderDir + "/section_fill.vert.spv");
-        m_frag = std::make_unique<Shader>(*m_device, ShaderStage::Fragment,
+        s_frag = std::make_unique<Shader>(*s_device, ShaderStage::Fragment,
                                           shaderDir + "/section_fill.frag.spv");
     }
 
-    void TearDown() override {
-        m_pipeline.reset();
-        m_vert.reset();
-        m_frag.reset();
-        m_cameraLayout.reset();
-        if (m_renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(m_device->GetDevice(), m_renderPass, nullptr);
+    static void TearDownTestSuite() {
+        s_vert.reset();
+        s_frag.reset();
+        s_cameraLayout.reset();
+        if (s_renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(s_device->GetDevice(), s_renderPass, nullptr);
+            s_renderPass = VK_NULL_HANDLE;
         }
-        m_device.reset();
-        m_context.reset();
+        s_device.reset();
+        s_context.reset();
     }
 
-    std::unique_ptr<VulkanContext> m_context;
-    std::unique_ptr<Device> m_device;
+    void SetUp() override {
+        m_device = s_device.get();
+        m_renderPass = s_renderPass;
+        m_cameraLayout = s_cameraLayout.get();
+        m_vert = s_vert.get();
+        m_frag = s_frag.get();
+    }
+    void TearDown() override { m_pipeline.reset(); }
+
+    Device* m_device = nullptr;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    std::unique_ptr<DescriptorSetLayout> m_cameraLayout;
-    std::unique_ptr<Shader> m_vert;
-    std::unique_ptr<Shader> m_frag;
+    DescriptorSetLayout* m_cameraLayout = nullptr;
+    Shader* m_vert = nullptr;
+    Shader* m_frag = nullptr;
     std::unique_ptr<SectionFillPipeline> m_pipeline;
+
+    static std::unique_ptr<VulkanContext> s_context;
+    static std::unique_ptr<Device> s_device;
+    static VkRenderPass s_renderPass;
+    static std::unique_ptr<DescriptorSetLayout> s_cameraLayout;
+    static std::unique_ptr<Shader> s_vert;
+    static std::unique_ptr<Shader> s_frag;
 };
+
+std::unique_ptr<VulkanContext> SectionFillPipelineTest::s_context;
+std::unique_ptr<Device> SectionFillPipelineTest::s_device;
+VkRenderPass SectionFillPipelineTest::s_renderPass = VK_NULL_HANDLE;
+std::unique_ptr<DescriptorSetLayout> SectionFillPipelineTest::s_cameraLayout;
+std::unique_ptr<Shader> SectionFillPipelineTest::s_vert;
+std::unique_ptr<Shader> SectionFillPipelineTest::s_frag;
 
 TEST_F(SectionFillPipelineTest, SectionFillShadersCompiledToSpirv) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
