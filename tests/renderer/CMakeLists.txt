@@ -32,6 +32,7 @@ add_executable(renderer_tests
     SsaoKernelTest.cpp
     SsaoPipelineTest.cpp
     SsaoBlurPipelineTest.cpp
+    XeGtaoMathTest.cpp
     OutlineEdgeTest.cpp
     OutlinePipelineTest.cpp
     SsilMathTest.cpp

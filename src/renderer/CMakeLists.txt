@@ -31,6 +31,7 @@ add_library(bimeup_renderer STATIC
     src/SsaoKernel.cpp
     src/SsaoPipeline.cpp
     src/SsaoBlurPipeline.cpp
+    src/XeGtaoMath.cpp
     src/OutlineEdge.cpp
     src/OutlinePipeline.cpp
     src/SsilMath.cpp
