@@ -37,8 +37,7 @@ public:
                      const Shader& vertexShader,
                      const Shader& fragmentShader,
                      VkRenderPass renderPass,
-                     VkDescriptorSetLayout inputLayout,
-                     VkSampleCountFlagBits samples);
+                     VkDescriptorSetLayout inputLayout);
     ~SmaaEdgePipeline();
 
     SmaaEdgePipeline(const SmaaEdgePipeline&) = delete;

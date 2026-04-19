@@ -26,7 +26,6 @@ struct PipelineConfig {
     // tap or a composite shader. Mutually exclusive with `alphaBlendEnable`
     // (set at most one; setting both is caller error — alpha wins).
     bool additiveBlend = false;
-    VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     uint32_t colorAttachmentCount = 1;  // set to 0 for depth-only passes
     // If true, colour attachments beyond attachment 0 have colorWriteMask = 0 —
     // i.e. the fragment shader emits only `outColor` and leaves every other

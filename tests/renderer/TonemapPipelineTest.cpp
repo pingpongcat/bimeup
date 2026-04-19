@@ -137,25 +137,16 @@ TEST_F(TonemapPipelineTest, TonemapShadersCompiledToSpirv) {
 TEST_F(TonemapPipelineTest, ConstructsWithValidHandles) {
     m_pipeline = std::make_unique<TonemapPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_samplerLayout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+        m_samplerLayout->GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
 }
 
-TEST_F(TonemapPipelineTest, ConstructsWithMsaa4x) {
-    m_pipeline = std::make_unique<TonemapPipeline>(
-        *m_device, *m_vert, *m_frag, m_renderPass,
-        m_samplerLayout->GetLayout(), VK_SAMPLE_COUNT_4_BIT);
-
-    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
-}
-
 TEST_F(TonemapPipelineTest, DestructorCleansUp) {
     {
         TonemapPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                 m_samplerLayout->GetLayout(),
-                                 VK_SAMPLE_COUNT_1_BIT);
+                                 m_samplerLayout->GetLayout());
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
     // Validation layers would catch leaked pipeline/layout

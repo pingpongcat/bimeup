@@ -472,7 +472,6 @@ int main(int argc, char* argv[]) {
                               std::unique_ptr<bimeup::renderer::Pipeline>& wire,
                               std::unique_ptr<bimeup::renderer::Pipeline>& transparent) {
         pipelineConfig.renderPass = renderLoop.GetRenderPass();
-        pipelineConfig.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         pipelineConfig.colorAttachmentCount = 3;
         pipelineConfig.disableSecondaryColorWrites = false;
         pipelineConfig.polygonMode =
@@ -512,7 +511,7 @@ int main(int argc, char* argv[]) {
         // stay at their clear values under section-fill triangles.
         sectionFillPipeline = std::make_unique<bimeup::renderer::SectionFillPipeline>(
             device, sectionFillVertShader, sectionFillFragShader,
-            renderLoop.GetRenderPass(), dsLayout.GetLayout(), VK_SAMPLE_COUNT_1_BIT,
+            renderLoop.GetRenderPass(), dsLayout.GetLayout(),
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildSectionFillPipeline();
@@ -526,7 +525,6 @@ int main(int argc, char* argv[]) {
         diskMarkerPipeline = std::make_unique<bimeup::renderer::DiskMarkerPipeline>(
             device, diskMarkerVertShader, diskMarkerFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(),
-            VK_SAMPLE_COUNT_1_BIT,
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildDiskMarkerPipeline();
@@ -550,7 +548,6 @@ int main(int argc, char* argv[]) {
         cfg.depthWriteEnable = true;
         cfg.cullMode = VK_CULL_MODE_FRONT_BIT;  // reduce self-shadow acne on front faces
         cfg.colorAttachmentCount = 0;
-        cfg.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         shadowPipeline = std::make_unique<bimeup::renderer::Pipeline>(
             device, shadowVertShader, shadowFragShader, cfg);
     };

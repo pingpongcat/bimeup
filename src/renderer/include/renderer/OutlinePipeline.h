@@ -47,8 +47,7 @@ public:
                     const Shader& vertexShader,
                     const Shader& fragmentShader,
                     VkRenderPass renderPass,
-                    VkDescriptorSetLayout inputLayout,
-                    VkSampleCountFlagBits samples);
+                    VkDescriptorSetLayout inputLayout);
     ~OutlinePipeline();
 
     OutlinePipeline(const OutlinePipeline&) = delete;

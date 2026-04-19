@@ -799,7 +799,7 @@ void RenderLoop::CreateTonemapPipeline() {
                                              m_shaderDir + "/tonemap.frag.spv");
     m_tonemapPipeline = std::make_unique<TonemapPipeline>(
         m_device, *m_tonemapVert, *m_tonemapFrag, m_presentRenderPass,
-        m_tonemapSetLayout, VK_SAMPLE_COUNT_1_BIT);
+        m_tonemapSetLayout);
 }
 
 void RenderLoop::CreateTonemapDescriptors() {
@@ -1095,7 +1095,7 @@ void RenderLoop::CreateOutlinePipeline() {
                                                    m_shaderDir + "/outline.frag.spv");
     m_outlinePipeline = std::make_unique<OutlinePipeline>(
         m_device, *m_outlineVertShader, *m_outlineFragShader, m_presentRenderPass,
-        m_outlineSetLayout, VK_SAMPLE_COUNT_1_BIT);
+        m_outlineSetLayout);
 }
 
 void RenderLoop::UpdateOutlineDescriptors() {
@@ -1581,13 +1581,13 @@ void RenderLoop::CreateSmaaPipelines() {
     // pipeline targets the present pass (same shape as FXAA did).
     m_smaaEdgePipeline = std::make_unique<SmaaEdgePipeline>(
         m_device, *m_smaaVertShader, *m_smaaEdgeFragShader, m_smaaRenderPass,
-        m_smaaEdgeSetLayout, VK_SAMPLE_COUNT_1_BIT);
+        m_smaaEdgeSetLayout);
     m_smaaWeightsPipeline = std::make_unique<SmaaWeightsPipeline>(
         m_device, *m_smaaVertShader, *m_smaaWeightsFragShader, m_smaaRenderPass,
-        m_smaaWeightsSetLayout, VK_SAMPLE_COUNT_1_BIT);
+        m_smaaWeightsSetLayout);
     m_smaaBlendPipeline = std::make_unique<SmaaBlendPipeline>(
         m_device, *m_smaaVertShader, *m_smaaBlendFragShader, m_presentRenderPass,
-        m_smaaBlendSetLayout, VK_SAMPLE_COUNT_1_BIT);
+        m_smaaBlendSetLayout);
 }
 
 void RenderLoop::CreateSmaaResources() {

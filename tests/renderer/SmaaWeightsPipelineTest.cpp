@@ -141,26 +141,16 @@ TEST_F(SmaaWeightsPipelineTest, SmaaShadersCompiledToSpirv) {
 TEST_F(SmaaWeightsPipelineTest, ConstructsWithValidHandles) {
     m_pipeline = std::make_unique<SmaaWeightsPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_layout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+        m_layout->GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
 }
 
-TEST_F(SmaaWeightsPipelineTest, ConstructsWithMsaa4x) {
-    // SMAA 1x runs single-sampled in practice, but rasterisation-sample
-    // parity with Fxaa/Bloom/Outline keeps the future-proofing open.
-    m_pipeline = std::make_unique<SmaaWeightsPipeline>(
-        *m_device, *m_vert, *m_frag, m_renderPass,
-        m_layout->GetLayout(), VK_SAMPLE_COUNT_4_BIT);
-
-    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
-}
-
 TEST_F(SmaaWeightsPipelineTest, DestructorCleansUp) {
     {
         SmaaWeightsPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                     m_layout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+                                     m_layout->GetLayout());
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
 }

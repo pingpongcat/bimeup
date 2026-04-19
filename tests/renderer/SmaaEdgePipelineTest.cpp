@@ -135,28 +135,16 @@ TEST_F(SmaaEdgePipelineTest, SmaaShadersCompiledToSpirv) {
 TEST_F(SmaaEdgePipelineTest, ConstructsWithValidHandles) {
     m_pipeline = std::make_unique<SmaaEdgePipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_layout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+        m_layout->GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
 }
 
-TEST_F(SmaaEdgePipelineTest, ConstructsWithMsaa4x) {
-    // SMAA 1x always runs on a single-sampled LDR input in practice — but the
-    // rasterisation-sample parameter is kept in the contract for shape parity
-    // with Fxaa/Bloom/Outline, and so a future direct-MSAA LDR path isn't
-    // gated on a pipeline-API change.
-    m_pipeline = std::make_unique<SmaaEdgePipeline>(
-        *m_device, *m_vert, *m_frag, m_renderPass,
-        m_layout->GetLayout(), VK_SAMPLE_COUNT_4_BIT);
-
-    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
-}
-
 TEST_F(SmaaEdgePipelineTest, DestructorCleansUp) {
     {
         SmaaEdgePipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                  m_layout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+                                  m_layout->GetLayout());
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
 }

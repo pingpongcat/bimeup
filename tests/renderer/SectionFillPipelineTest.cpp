@@ -139,25 +139,16 @@ TEST_F(SectionFillPipelineTest, SectionFillShadersCompiledToSpirv) {
 TEST_F(SectionFillPipelineTest, ConstructsWithValidHandles) {
     m_pipeline = std::make_unique<SectionFillPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_cameraLayout->GetLayout(), VK_SAMPLE_COUNT_1_BIT);
+        m_cameraLayout->GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
 }
 
-TEST_F(SectionFillPipelineTest, ConstructsWithMsaa4x) {
-    m_pipeline = std::make_unique<SectionFillPipeline>(
-        *m_device, *m_vert, *m_frag, m_renderPass,
-        m_cameraLayout->GetLayout(), VK_SAMPLE_COUNT_4_BIT);
-
-    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
-}
-
 TEST_F(SectionFillPipelineTest, DestructorCleansUp) {
     {
         SectionFillPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                     m_cameraLayout->GetLayout(),
-                                     VK_SAMPLE_COUNT_1_BIT);
+                                     m_cameraLayout->GetLayout());
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
     // Validation layers would catch leaked pipeline/layout

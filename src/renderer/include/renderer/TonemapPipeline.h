@@ -32,8 +32,7 @@ public:
                     const Shader& vertexShader,
                     const Shader& fragmentShader,
                     VkRenderPass renderPass,
-                    VkDescriptorSetLayout hdrSamplerLayout,
-                    VkSampleCountFlagBits samples);
+                    VkDescriptorSetLayout hdrSamplerLayout);
     ~TonemapPipeline();
 
     TonemapPipeline(const TonemapPipeline&) = delete;

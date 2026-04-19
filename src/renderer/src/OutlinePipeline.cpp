@@ -8,8 +8,7 @@ OutlinePipeline::OutlinePipeline(const Device& device,
                                  const Shader& vertexShader,
                                  const Shader& fragmentShader,
                                  VkRenderPass renderPass,
-                                 VkDescriptorSetLayout inputLayout,
-                                 VkSampleCountFlagBits samples) {
+                                 VkDescriptorSetLayout inputLayout) {
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.offset = 0;
@@ -26,7 +25,6 @@ OutlinePipeline::OutlinePipeline(const Device& device,
     // Alpha-blend over the already-tonemapped swapchain image. The fragment
     // shader `discard`s non-edge pixels so this mostly costs nothing.
     config.alphaBlendEnable = true;
-    config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
     config.colorAttachmentCount = 1;
     config.descriptorSetLayouts = {inputLayout};
     config.pushConstantRanges = {pushRange};

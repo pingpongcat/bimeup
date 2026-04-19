@@ -8,8 +8,7 @@ TonemapPipeline::TonemapPipeline(const Device& device,
                                  const Shader& vertexShader,
                                  const Shader& fragmentShader,
                                  VkRenderPass renderPass,
-                                 VkDescriptorSetLayout hdrSamplerLayout,
-                                 VkSampleCountFlagBits samples) {
+                                 VkDescriptorSetLayout hdrSamplerLayout) {
     PipelineConfig config{};
     config.renderPass = renderPass;
     config.polygonMode = VK_POLYGON_MODE_FILL;
@@ -19,7 +18,6 @@ TonemapPipeline::TonemapPipeline(const Device& device,
     config.depthWriteEnable = false;
     config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     config.alphaBlendEnable = false;
-    config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
     config.colorAttachmentCount = 1;
     config.descriptorSetLayouts = {hdrSamplerLayout};
 
