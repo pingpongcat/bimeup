@@ -29,7 +29,6 @@ add_library(bimeup_renderer STATIC
     src/DepthLinearizePipeline.cpp
     src/DepthMipPipeline.cpp
     src/SsaoKernel.cpp
-    src/SsaoPipeline.cpp
     src/SsaoBlurPipeline.cpp
     src/XeGtaoMath.cpp
     src/SsaoXeGtaoPipeline.cpp

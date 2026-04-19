@@ -45,8 +45,8 @@ class Shader;
 ///
 /// Kernel count is a compile-time constant (64) mirrored on both sides to
 /// keep the UBO layout fixed; `renderer::GenerateHemisphereKernel(64, seed)`
-/// from RP.5a supplies the CPU source — SSIL and SSAO share the kernel shape
-/// since the same hemisphere geometry drives both.
+/// from RP.5a supplies the CPU source. (SSAO retired its hemisphere kernel
+/// with the RP.12e XeGTAO swap — SSIL is now the sole consumer.)
 ///
 /// Dispatch tiles are 8×8 sized to the **half-res** output:
 /// `ceil(halfSize.xy / 8)`.

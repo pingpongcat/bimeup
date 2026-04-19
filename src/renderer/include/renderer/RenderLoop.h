@@ -26,7 +26,7 @@ class Buffer;
 class TonemapPipeline;
 class DepthLinearizePipeline;
 class DepthMipPipeline;
-class SsaoPipeline;
+class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
 class SsilPipeline;
 class SsilBlurPipeline;
@@ -389,10 +389,12 @@ private:
     float m_farZ = 10000.0F;
     glm::mat4 m_proj{1.0F};
 
-    // SSAO (RP.5d). Per swap image: two half-res R8_UNORM AO images
-    // ping-ponged by the blur (A = main output + vertical-blur output,
-    // B = horizontal-blur intermediate); one SsaoUbo with proj/invProj and
-    // the hemisphere kernel. The main descriptor set binds AO A as its
+    // SSAO (RP.5d; XeGTAO pass from RP.12e). Per swap image: two half-res
+    // R8_UNORM AO images ping-ponged by the blur (A = main output +
+    // vertical-blur output, B = horizontal-blur intermediate); one
+    // XeGtaoUbo with only proj/invProj (RP.12e dropped the 64-sample
+    // hemisphere kernel — horizon-based integration walks screen-space
+    // slices instead). The main descriptor set binds AO A as its
     // storage-image output; the H-blur set reads A and writes B; the
     // V-blur set reads B and writes A. A is sampled by the tonemap
     // fragment shader at the end of each frame, so its final layout after
@@ -421,7 +423,7 @@ private:
     std::vector<VkDescriptorSet> m_ssaoBlurSetsV;  // B → A
     std::unique_ptr<Shader> m_ssaoMainShader;
     std::unique_ptr<Shader> m_ssaoBlurShader;
-    std::unique_ptr<SsaoPipeline> m_ssaoPipeline;
+    std::unique_ptr<SsaoXeGtaoPipeline> m_ssaoPipeline;
     std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
 
     // SSIL (RP.7d). Mirrors the SSAO resource layout with two key additions:

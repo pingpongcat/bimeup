@@ -8,7 +8,7 @@
 #include <renderer/SmaaLut.h>
 #include <renderer/SsaoBlurPipeline.h>
 #include <renderer/SsaoKernel.h>
-#include <renderer/SsaoPipeline.h>
+#include <renderer/SsaoXeGtaoPipeline.h>
 #include <renderer/SsilBlurPipeline.h>
 #include <renderer/SsilMath.h>
 #include <renderer/SsilPipeline.h>
@@ -2728,10 +2728,12 @@ void RenderLoop::CleanupDepthPyramidDescriptors() {
 
 namespace {
 
-struct SsaoUboLayout {
+// XeGTAO UBO (RP.12e) — proj + invProj only. The classic Chapman pass used
+// a 64-entry hemisphere kernel here; XeGTAO walks screen-space slices so no
+// kernel payload is needed. Layout mirrors `XeGtaoUbo` in `ssao_xegtao.comp`.
+struct XeGtaoUboLayout {
     glm::mat4 proj;
     glm::mat4 invProj;
-    glm::vec4 kernel[SsaoPipeline::kKernelSize];
 };
 
 }  // namespace
@@ -2776,8 +2778,8 @@ void RenderLoop::CreateSsaoDescriptors() {
     }
 
     // Main set layout: depth pyramid (CIS), normal G-buffer (CIS),
-    // SsaoUbo (UBO), AO output (STORAGE_IMAGE), stencil G-buffer (CIS, RP.12d).
-    // Matches SsaoPipeline docs.
+    // XeGtaoUbo (UBO), AO output (STORAGE_IMAGE), stencil G-buffer (CIS,
+    // RP.12d). Matches SsaoXeGtaoPipeline docs (RP.12e).
     std::array<VkDescriptorSetLayoutBinding, 5> mainBindings{};
     mainBindings[0].binding = 0;
     mainBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -2892,10 +2894,10 @@ void RenderLoop::CreateSsaoDescriptors() {
 
 void RenderLoop::CreateSsaoPipelines() {
     m_ssaoMainShader = std::make_unique<Shader>(
-        m_device, ShaderStage::Compute, m_shaderDir + "/ssao_main.comp.spv");
+        m_device, ShaderStage::Compute, m_shaderDir + "/ssao_xegtao.comp.spv");
     m_ssaoBlurShader = std::make_unique<Shader>(
         m_device, ShaderStage::Compute, m_shaderDir + "/ssao_blur.comp.spv");
-    m_ssaoPipeline = std::make_unique<SsaoPipeline>(
+    m_ssaoPipeline = std::make_unique<SsaoXeGtaoPipeline>(
         m_device, *m_ssaoMainShader, m_ssaoMainSetLayout);
     m_ssaoBlurPipeline = std::make_unique<SsaoBlurPipeline>(
         m_device, *m_ssaoBlurShader, m_ssaoBlurSetLayout);
@@ -2969,19 +2971,16 @@ void RenderLoop::CreateSsaoResources() {
         }
     }
 
-    // UBO per swap image — proj/invProj refresh each frame, kernel once.
+    // UBO per swap image — XeGTAO carries just proj + invProj; the classic
+    // hemisphere kernel is retired with the Chapman pass (RP.12e).
     m_ssaoUbos.clear();
     m_ssaoUbos.reserve(imageCount);
-    const auto kernel = GenerateHemisphereKernel(SsaoPipeline::kKernelSize, 0);
     for (uint32_t i = 0; i < imageCount; ++i) {
         auto ubo = std::make_unique<Buffer>(
-            m_device, BufferType::Uniform, sizeof(SsaoUboLayout), nullptr);
-        auto* mapped = static_cast<SsaoUboLayout*>(ubo->Map());
+            m_device, BufferType::Uniform, sizeof(XeGtaoUboLayout), nullptr);
+        auto* mapped = static_cast<XeGtaoUboLayout*>(ubo->Map());
         mapped->proj = m_proj;
         mapped->invProj = glm::inverse(m_proj);
-        for (std::size_t k = 0; k < kernel.size(); ++k) {
-            mapped->kernel[k] = glm::vec4(kernel[k], 0.0F);
-        }
         ubo->Unmap();
         m_ssaoUbos.push_back(std::move(ubo));
     }
@@ -3004,7 +3003,7 @@ void RenderLoop::UpdateSsaoDescriptors() {
         VkDescriptorBufferInfo uboInfo{};
         uboInfo.buffer = m_ssaoUbos[i]->GetBuffer();
         uboInfo.offset = 0;
-        uboInfo.range = sizeof(SsaoUboLayout);
+        uboInfo.range = sizeof(XeGtaoUboLayout);
 
         VkDescriptorImageInfo aoAOutInfo{};
         aoAOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -3241,8 +3240,9 @@ void RenderLoop::UploadSsaoUbo(uint32_t imageIndex) {
     if (imageIndex >= m_ssaoUbos.size()) {
         return;
     }
-    // Only the matrices change per frame — kernel stays from the ctor write.
-    auto* mapped = static_cast<SsaoUboLayout*>(m_ssaoUbos[imageIndex]->Map());
+    // XeGTAO UBO is just matrices; refresh them each frame so a zoom / FOV
+    // change takes effect next dispatch.
+    auto* mapped = static_cast<XeGtaoUboLayout*>(m_ssaoUbos[imageIndex]->Map());
     mapped->proj = m_proj;
     mapped->invProj = glm::inverse(m_proj);
     m_ssaoUbos[imageIndex]->Unmap();
@@ -3294,10 +3294,13 @@ void RenderLoop::RunSsao(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             m_ssaoPipeline->GetLayout(), 0, 1,
                             &m_ssaoMainSets[i], 0, nullptr);
-    // RP.12d — architectural defaults: contact-AO radius (0.35 m) instead of
-    // the room-scale 0.5 m that darkened whole walls, and intensity 0.5 to
-    // match the toned-down palette chosen alongside the SSIL rework.
-    SsaoPipeline::PushConstants mainPush{0.35F, 0.025F, 0.5F, 1.5F};
+    // RP.12d architectural defaults carried over to XeGTAO (RP.12e): contact-
+    // AO radius 0.35 m, intensity 0.5, shadowPower 1.5. `falloff` (new in the
+    // XeGTAO push layout, replacing the Chapman `bias`) is the [0, 1] ratio
+    // at which distant horizon taps begin fading toward the tangent-plane
+    // (cos=0); 0.6 gives full horizon inside 60 % of the radius and a smooth
+    // falloff over the outer 40 %.
+    SsaoXeGtaoPipeline::PushConstants mainPush{0.35F, 0.6F, 0.5F, 1.5F};
     vkCmdPushConstants(cmd, m_ssaoPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(mainPush), &mainPush);
     vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);

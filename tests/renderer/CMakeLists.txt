@@ -30,7 +30,6 @@ add_executable(renderer_tests
     DepthLinearizePipelineTest.cpp
     DepthMipPipelineTest.cpp
     SsaoKernelTest.cpp
-    SsaoPipelineTest.cpp
     SsaoBlurPipelineTest.cpp
     XeGtaoMathTest.cpp
     SsaoXeGtaoPipelineTest.cpp
