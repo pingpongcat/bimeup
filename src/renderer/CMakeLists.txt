@@ -35,6 +35,7 @@ add_library(bimeup_renderer STATIC
     src/OutlinePipeline.cpp
     src/SsilMath.cpp
     src/SsilPipeline.cpp
+    src/SsilBlurPipeline.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
