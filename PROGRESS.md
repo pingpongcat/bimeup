@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: RP — Render Polish (non-RT beauty pass)
-## Current Task: RP.10 Small-kernel bloom
+## Current Task: RP.10b shaders + `BloomPass` + pipeline tests
 
 ## Completed Tasks
 <!-- Mark tasks as they are done: - [x] 1.1 Description -->
