@@ -72,19 +72,6 @@ void RenderQualityPanel::OnDraw() {
         ImGui::SliderFloat("Exposure", &m_settings.exposure, 0.1F, 2.0F, "%.2f");
     }
 
-    if (ImGui::CollapsingHeader("MSAA")) {
-        static constexpr std::array<int, 4> kSamples{1, 2, 4, 8};
-        for (int s : kSamples) {
-            char label[8];
-            std::snprintf(label, sizeof(label), "%dx", s);
-            if (ImGui::RadioButton(label, m_settings.msaaSamples == s)) {
-                m_settings.msaaSamples = s;
-            }
-            ImGui::SameLine();
-        }
-        ImGui::NewLine();
-    }
-
     if (ImGui::CollapsingHeader("Selection outline")) {
         auto& outline = m_settings.outline;
         ImGui::Checkbox("Enabled", &outline.enabled);

@@ -13,7 +13,6 @@ add_library(bimeup_renderer STATIC
     src/MeshBuffer.cpp
     src/Highlight.cpp
     src/Lighting.cpp
-    src/Msaa.cpp
     src/ShadowPass.cpp
     src/ViewportNavigator.cpp
     src/FirstPersonController.cpp

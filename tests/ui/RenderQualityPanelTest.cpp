@@ -5,6 +5,19 @@
 using bimeup::ui::RenderQualityPanel;
 using bimeup::ui::RenderQualitySettings;
 
+// RP.14.2 — symmetric to RP.14.1.a's `RenderLoopExposesMsaaAccessors` and
+// RP.14.1.b's `PipelineConfigExposesRasterizationSamples` guards. The panel
+// was the last MSAA-shaped surface left in the UI — if someone re-adds the
+// `msaaSamples` field, this static_assert breaks the build before a user-
+// facing regression (MSAA radio disabling XeGTAO) can ship.
+template <typename T>
+concept RenderQualitySettingsExposesMsaaSamples =
+    requires(T s) { s.msaaSamples; };
+static_assert(!RenderQualitySettingsExposesMsaaSamples<RenderQualitySettings>,
+              "RP.14.2 — RenderQualitySettings::msaaSamples retired; MSAA is "
+              "gone project-wide and cannot come back without revisiting the "
+              "XeGTAO / outline / depth-pyramid gates that depend on 1×.");
+
 namespace {
 
 TEST(RenderQualityPanelTest, HasPanelName) {
@@ -20,10 +33,9 @@ TEST(RenderQualityPanelTest, DefaultSettingsEnableAllLights) {
     EXPECT_TRUE(settings.lighting.rim.enabled);
 }
 
-TEST(RenderQualityPanelTest, DefaultSettingsHaveMsaa1ShadowsOff) {
+TEST(RenderQualityPanelTest, DefaultSettingsHaveShadowsOff) {
     RenderQualityPanel panel;
     const auto& s = panel.GetSettings();
-    EXPECT_EQ(s.msaaSamples, 1);
     EXPECT_FALSE(s.lighting.shadow.enabled);
 }
 

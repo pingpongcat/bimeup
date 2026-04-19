@@ -33,8 +33,6 @@ struct SmaaSettings {
 struct RenderQualitySettings {
     renderer::LightingScene lighting{renderer::MakeDefaultLighting()};
 
-    int msaaSamples{1};          // R.2 — 1, 2, 4, 8
-
     // Pre-ACES linear multiplier on composited HDR in `tonemap.frag`. The
     // three-point lighting sum (ambient ~0.6 + key ~1.0 + fill ~0.45 + rim
     // ~0.35) can push bright surfaces to ~2.5 in HDR space, which ACES
