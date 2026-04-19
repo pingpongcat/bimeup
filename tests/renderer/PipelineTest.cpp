@@ -293,6 +293,23 @@ TEST_F(PipelineTest, CreateMrtWithAlphaBlendOnPrimaryOnly) {
     vkDestroyRenderPass(m_device->GetDevice(), mrt, nullptr);
 }
 
+TEST_F(PipelineTest, CreateWithAdditiveBlendEnabled) {
+    // RP.10c — bloom upsample composites additively onto the higher mip. The
+    // additiveBlend flag must flip the blend state to srcColor * ONE +
+    // dstColor * ONE = ADD, so the pipeline builds without validation errors.
+    // Mutually exclusive with alphaBlendEnable — asserting builds with the
+    // two flags not both set is the unit-level expectation.
+    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
+    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
+
+    PipelineConfig config{};
+    config.renderPass = m_renderPass;
+    config.additiveBlend = true;
+
+    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+}
+
 TEST_F(PipelineTest, DestructorCleansUp) {
     Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
     Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());

@@ -493,3 +493,49 @@ TEST_F(RenderLoopTest, FogSurvivesSampleCountChange) {
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
 }
+
+// RP.10c — bloom dispatches a 3-mip dual-filter down/up chain each frame
+// when enabled, then the tonemap pass reads binding 4 (bloom mip 0) and
+// adds `bloom * intensity` pre-ACES. Exercises the full pyramid build +
+// composite under Vulkan validation.
+TEST_F(RenderLoopTest, BloomAppliedDuringFrame) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
+                                 /*enabled=*/true);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, BloomDisabledStillCyclesFrame) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
+                                 /*enabled=*/false);
+    // Disabled path — push constants zero the shader's bloomEnabled flag so
+    // the bloom sample + add is skipped. A regression that accidentally
+    // always sampled binding 4 would read the creation-time-cleared mip 0
+    // on the first frame but would still exercise the binding; this cycle
+    // under Vulkan validation guards the shape.
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+TEST_F(RenderLoopTest, BloomSurvivesSampleCountChange) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
+    m_renderLoop->SetBloomParams(/*threshold=*/1.0F, /*intensity=*/0.04F,
+                                 /*enabled=*/true);
+    // Under MSAA the bloom chain's source (HDR) would require sampler2DMS.
+    // `bloom_down.frag` uses sampler2D, so SetBloomParams force-clears the
+    // enable flag in that mode. Exercises the bloom-descriptor rebuild on
+    // MSAA change + guards against a regression that left the flag on and
+    // produced validation errors from sampling the multisample HDR target.
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}

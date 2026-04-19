@@ -19,6 +19,13 @@ struct PipelineConfig {
     bool depthWriteEnable = false;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
     bool alphaBlendEnable = false;
+    // RP.10c — when true, attachment 0's blend state is configured as
+    // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =
+    // ADD so the fragment output is added to the target. Used by the bloom
+    // upsample pipeline to composite onto the higher mip without a second
+    // tap or a composite shader. Mutually exclusive with `alphaBlendEnable`
+    // (set at most one; setting both is caller error — alpha wins).
+    bool additiveBlend = false;
     VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     uint32_t colorAttachmentCount = 1;  // set to 0 for depth-only passes
     // If true, colour attachments beyond attachment 0 have colorWriteMask = 0 —

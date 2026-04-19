@@ -41,6 +41,17 @@ struct FogSettings {
     float end{120.0F};
 };
 
+// RP.10 — small-kernel bloom. 3-mip dual-filter downsample/upsample chain
+// is built by `RenderLoop` from the HDR scene; `tonemap.frag` samples the
+// final mip 0 and adds `bloomColor * intensity` pre-ACES. Panel exposes
+// two knobs (threshold + intensity); `RenderLoop::SetBloomParams` derives
+// the soft-knee half-width as `threshold * 0.5` internally.
+struct BloomSettings {
+    bool enabled{false};
+    float threshold{1.0F};
+    float intensity{0.04F};
+};
+
 struct LightingScene {
     DirectionalLight key;
     DirectionalLight fill;

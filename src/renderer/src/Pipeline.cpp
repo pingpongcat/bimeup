@@ -122,14 +122,24 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
         auto& b = blendAttachments[i];
         const bool suppress = (i > 0) && config.disableSecondaryColorWrites;
         b.colorWriteMask = suppress ? 0U : kFullWriteMask;
-        b.blendEnable = (config.alphaBlendEnable && !suppress) ? VK_TRUE : VK_FALSE;
+        const bool blendOn = (config.alphaBlendEnable || config.additiveBlend) && !suppress;
+        b.blendEnable = blendOn ? VK_TRUE : VK_FALSE;
         if (b.blendEnable == VK_TRUE) {
-            b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            b.colorBlendOp = VK_BLEND_OP_ADD;
-            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            b.alphaBlendOp = VK_BLEND_OP_ADD;
+            if (config.alphaBlendEnable) {
+                b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                b.colorBlendOp = VK_BLEND_OP_ADD;
+                b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                b.alphaBlendOp = VK_BLEND_OP_ADD;
+            } else {
+                b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.colorBlendOp = VK_BLEND_OP_ADD;
+                b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
         }
     }
 

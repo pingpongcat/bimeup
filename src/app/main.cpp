@@ -1538,6 +1538,16 @@ int main(int argc, char* argv[]) {
                                     fogSettings.end, fogSettings.enabled);
         }
 
+        // RP.10c — push bloom threshold + intensity into the renderer. Knee
+        // derives as threshold * 0.5 internally. Under MSAA the renderer
+        // force-clears the enable flag (the bloom chain samples the HDR
+        // resolve via sampler2D, which isn't built in that mode).
+        {
+            const auto& bloomSettings = renderQualityPanel->GetSettings().bloom;
+            renderLoop.SetBloomParams(bloomSettings.threshold, bloomSettings.intensity,
+                                      bloomSettings.enabled);
+        }
+
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + key light direction, and (re)build the shadow map if resolution
         // or enabled-state changed.

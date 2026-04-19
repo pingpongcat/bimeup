@@ -23,8 +23,11 @@ BloomUpPipeline::BloomUpPipeline(const Device& device,
     config.depthTestEnable = false;
     config.depthWriteEnable = false;
     config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-    // Upsample shader writes the tent-upsampled value; composite is RP.10c.
+    // Upsample composites onto the higher mip additively: dstColor += srcColor
+    // with srcFactor = dstFactor = ONE, colorBlendOp = ADD. Hardware blend
+    // avoids a 2-input shader or tonemap sampling every mip separately.
     config.alphaBlendEnable = false;
+    config.additiveBlend = true;
     config.rasterizationSamples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
     config.colorAttachmentCount = 1;
     config.descriptorSetLayouts = {inputLayout};

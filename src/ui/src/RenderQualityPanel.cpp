@@ -141,6 +141,15 @@ void RenderQualityPanel::OnDraw() {
         ImGui::EndDisabled();
     }
 
+    if (ImGui::CollapsingHeader("Bloom")) {
+        auto& bloom = m_settings.bloom;
+        ImGui::Checkbox("Enabled", &bloom.enabled);
+        ImGui::BeginDisabled(!bloom.enabled);
+        ImGui::SliderFloat("Threshold", &bloom.threshold, 0.0F, 5.0F, "%.2f");
+        ImGui::SliderFloat("Intensity", &bloom.intensity, 0.0F, 0.5F, "%.3f");
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Shadows")) {
         auto& shadow = m_settings.lighting.shadow;
         ImGui::Checkbox("Enabled", &shadow.enabled);

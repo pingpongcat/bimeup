@@ -48,7 +48,8 @@ struct RenderQualitySettings {
     OutlineSettings outline{};
     SsilSettings ssil{};
     FxaaSettings fxaa{};
-    renderer::FogSettings fog{};  // RP.9b
+    renderer::FogSettings fog{};      // RP.9b
+    renderer::BloomSettings bloom{};  // RP.10c
 };
 
 class RenderQualityPanel : public Panel {

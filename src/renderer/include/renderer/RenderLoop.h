@@ -1,5 +1,7 @@
 #pragma once
 
+#include <renderer/BloomDownPipeline.h>
+#include <renderer/BloomUpPipeline.h>
 #include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
 #include <renderer/TonemapPipeline.h>
@@ -188,6 +190,18 @@ public:
     /// off in that mode regardless of `enabled`, matching the
     /// SSAO/SSIL/outline gating pattern.
     void SetFogParams(const glm::vec3& color, float start, float end, bool enabled);
+
+    /// RP.10c — small-kernel bloom parameters. `threshold` drives the
+    /// soft-knee prefilter (in the first downsample) and `knee` is
+    /// derived as `threshold * 0.5` internally so the panel only needs
+    /// two knobs. `intensity` scales the final composite in `tonemap.frag`.
+    /// When `enabled` is false the bloom chain is skipped and the tonemap
+    /// push constant's `bloomEnabled` flag is zeroed (shader early-exits
+    /// without the binding-4 sample). Under MSAA the chain is gated off
+    /// (`bloom_down.frag` uses `sampler2D`, not `sampler2DMS`); this
+    /// method forces the flag off in that mode regardless of `enabled`,
+    /// matching the fog / SSAO / SSIL gating pattern.
+    void SetBloomParams(float threshold, float intensity, bool enabled);
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -252,6 +266,15 @@ private:
     void CreateFxaaPipeline();
     void UpdateFxaaDescriptors();
     void CleanupFxaaDescriptors();
+    void CreateBloomRenderPass();
+    void CreateBloomDescriptors();
+    void CreateBloomPipelines();
+    void CreateBloomResources();
+    void UpdateBloomDescriptors();
+    void ClearBloomChainToZero();
+    void RunBloom(VkCommandBuffer cmd);
+    void CleanupBloomResources();
+    void CleanupBloomDescriptors();
     void CleanupFrameResources();
     void CleanupTonemapDescriptors();
     void Cleanup();
@@ -473,14 +496,48 @@ private:
     bool m_fxaaEnabled = true;
     int m_fxaaQuality = 1;
 
-    // RP.9b — fog push-constant state fed into `tonemap.frag` each frame.
-    // `m_fogPush` is rebuilt by `SetFogParams` from panel-driven FogSettings
-    // and uploaded in the tonemap draw via vkCmdPushConstants. The enable
-    // flag is carried in the w channel of `fogColorEnabled` so the shader
-    // early-exits without a depth tap when fog is off (or under MSAA —
-    // SetFogParams force-clears the flag when m_samples > 1x since the
-    // depth pyramid at binding 3 is undefined in that mode).
-    TonemapPipeline::PushConstants m_fogPush{};
+    // RP.9b / RP.10c — shared tonemap push-constant state fed into
+    // `tonemap.frag` each frame. `SetFogParams` updates the fog fields and
+    // `SetBloomParams` updates the bloom fields; the struct is uploaded
+    // once per tonemap draw via vkCmdPushConstants. Enable flags are
+    // carried in the vec4 w channel (fog) and a dedicated float
+    // (bloom) so the shader short-circuits the corresponding sample +
+    // contribution when disabled (or MSAA-gated — SetFogParams /
+    // SetBloomParams force-clear their flags when m_samples > 1x).
+    TonemapPipeline::PushConstants m_tonemapPush{};
+
+    // RP.10c — small-kernel bloom. 3-mip HDR chain per swap image (half,
+    // quarter, eighth res). Shared render pass + pipelines + descriptor
+    // set layout live for the RenderLoop's lifetime; the per-mip views,
+    // framebuffers, and descriptor sets rebuild alongside HDR / pyramid /
+    // SSAO / SSIL / LDR on MSAA change or swapchain resize. The chain is
+    // LOAD_OP_LOAD-based so the upsample additive blend can preserve the
+    // higher mip's content — images are cleared to 0 at creation (so a
+    // first-frame or disabled-bloom sample from tonemap binding 4 reads a
+    // deterministic zero contribution) and then live in
+    // SHADER_READ_ONLY_OPTIMAL between passes.
+    static constexpr uint32_t BLOOM_MIPS = 3;
+    std::unique_ptr<Shader> m_bloomVertShader;
+    std::unique_ptr<Shader> m_bloomDownFragShader;
+    std::unique_ptr<Shader> m_bloomUpFragShader;
+    std::unique_ptr<BloomDownPipeline> m_bloomDownPipeline;
+    std::unique_ptr<BloomUpPipeline> m_bloomUpPipeline;
+    VkRenderPass m_bloomRenderPass = VK_NULL_HANDLE;
+    VkSampler m_bloomSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_bloomSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_bloomDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkImage> m_bloomImages;
+    std::vector<VmaAllocation> m_bloomAllocations;
+    std::vector<std::array<VkImageView, BLOOM_MIPS>> m_bloomMipViews;
+    std::vector<std::array<VkFramebuffer, BLOOM_MIPS>> m_bloomFramebuffers;
+    // Down sets: reads HDR → mip0, mip0 → mip1, mip1 → mip2 (3 per swap).
+    // Up sets: reads mip2 → mip1, mip1 → mip0 (2 per swap, additive-blended).
+    std::vector<std::array<VkDescriptorSet, BLOOM_MIPS>> m_bloomDownSets;
+    std::vector<std::array<VkDescriptorSet, BLOOM_MIPS - 1>> m_bloomUpSets;
+    std::array<VkExtent2D, BLOOM_MIPS> m_bloomMipExtents{};
+    float m_bloomThreshold = 1.0F;
+    float m_bloomIntensity = 0.04F;
+    bool m_bloomEnabled = false;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;
