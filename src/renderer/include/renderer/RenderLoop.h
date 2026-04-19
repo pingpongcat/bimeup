@@ -1,6 +1,5 @@
 #pragma once
 
-#include <renderer/OutlinePipeline.h>
 #include <renderer/SmaaBlendPipeline.h>
 #include <renderer/SmaaEdgePipeline.h>
 #include <renderer/SmaaWeightsPipeline.h>
@@ -132,17 +131,6 @@ public:
     /// been updated. Defaults are (identity, 0.1, 10000).
     void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
 
-    /// RP.6d — selection/hover outline pass parameters. The outline draw is
-    /// recorded inside the present pass between the tonemap fullscreen tri
-    /// and the in-present-pass callback (where ImGui lands), so the outline
-    /// composes over the tonemapped image but underneath UI overlays. When
-    /// `enabled` is false the draw is skipped and the swapchain image is
-    /// unaffected. Push constants drive the panel-tweakable knobs
-    /// (selected/hover colours, tap thickness in pixels, depth-edge cutoff);
-    /// the texelSize field should be (1/width, 1/height) in pixels — caller
-    /// updates per-frame so resize lands cleanly.
-    void SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled);
-
     /// RP.11c — SMAA 1x post-process enable. The blend draw is the only
     /// path from the LDR intermediate to the swapchain, so it runs every
     /// frame; when `enabled` is false the edge + weights passes are
@@ -196,10 +184,6 @@ private:
     void RunSsao(VkCommandBuffer cmd);
     void CleanupSsaoResources();
     void CleanupSsaoDescriptors();
-    void CreateOutlineDescriptors();
-    void CreateOutlinePipeline();
-    void UpdateOutlineDescriptors();
-    void CleanupOutlineDescriptors();
     void CreatePostRenderPass();
     void CreateLdrResources();
     void CreateSmaaRenderPass();
@@ -234,14 +218,12 @@ private:
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> m_inFlightFences{};
 
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    // "Post" pass runs tonemap + outline into a per-swap-image LDR intermediate
-    // target (RP.8c / RP.11c). The intermediate is then sampled by the SMAA
-    // edge pass (writing the edges target) and by the SMAA blend pass in
-    // `m_presentRenderPass` which writes the swapchain. `m_postRenderPass`
-    // is render-pass-compatible with `m_presentRenderPass` (same swapchain
-    // format, same sample count, same attachment layout) so tonemap +
-    // outline pipelines built against the present pass bind to the post
-    // pass without rebuild.
+    // "Post" pass runs the tonemap fullscreen tri into a per-swap-image LDR
+    // intermediate target (RP.8c / RP.11c). The intermediate is then sampled
+    // by the SMAA edge pass (writing the edges target) and by the SMAA blend
+    // pass in `m_presentRenderPass` which writes the swapchain.
+    // `m_postRenderPass` is render-pass-compatible with `m_presentRenderPass`
+    // (same swapchain format, same sample count, same attachment layout).
     VkRenderPass m_postRenderPass = VK_NULL_HANDLE;
     VkRenderPass m_presentRenderPass = VK_NULL_HANDLE;
     VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
@@ -349,24 +331,6 @@ private:
     std::unique_ptr<Shader> m_ssaoBlurShader;
     std::unique_ptr<SsaoXeGtaoPipeline> m_ssaoPipeline;
     std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
-
-    // Outline pass (RP.6d). Per swap image: one combined descriptor set
-    // sampling (binding 0 = stencil id R8_UINT usampler2D, binding 1 =
-    // depth pyramid mip 0 sampler2D). One sampler shared across both
-    // bindings (linear, CLAMP_TO_EDGE, maxLod = 0.25 — clamped to mip 0
-    // for the depth tap). Pipeline targets the present pass. Push-constant
-    // values + the enable toggle come from the panel via SetOutlineParams;
-    // the pass runs every frame when the flag is on (RP.14.1.a retired the
-    // MSAA gate along with the rest of the MSAA path).
-    std::unique_ptr<Shader> m_outlineVertShader;
-    std::unique_ptr<Shader> m_outlineFragShader;
-    std::unique_ptr<OutlinePipeline> m_outlinePipeline;
-    VkSampler m_outlineSampler = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_outlineSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_outlineDescriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_outlineDescriptorSets;
-    OutlinePipeline::PushConstants m_outlinePush{};
-    bool m_outlineEnabled = false;
 
     // SMAA 1x post-process (RP.11c). 3-pass chain replacing RP.8c FXAA:
     //   1. edge pass — samples the LDR intermediate, writes an RGBA8 edges

@@ -1,5 +1,4 @@
 #include <gtest/gtest.h>
-#include <renderer/OutlinePipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/Swapchain.h>
 #include <renderer/Device.h>
@@ -86,8 +85,8 @@ std::unique_ptr<Device> RenderLoopTest::s_device;
 std::unique_ptr<Swapchain> RenderLoopTest::s_swapchain;
 
 // RP.14.1.a — symmetric guard against MSAA resurrection. SMAA covers
-// architectural AA and MSAA gated XeGTAO / outline / depth-pyramid off, which
-// is the wrong tradeoff for a BIM viewer. If someone adds SetSampleCount /
+// architectural AA and MSAA gated XeGTAO / depth-pyramid off, which is the
+// wrong tradeoff for a BIM viewer. If someone adds SetSampleCount /
 // GetSampleCount back to RenderLoop, this concept becomes satisfied and the
 // static_assert breaks the build.
 template <typename T>
@@ -98,8 +97,21 @@ concept RenderLoopExposesMsaaAccessors =
     };
 static_assert(!RenderLoopExposesMsaaAccessors<RenderLoop>,
               "RP.14.1.a — RenderLoop::SetSampleCount/GetSampleCount retired; "
-              "do not bring MSAA back without revisiting the XeGTAO / outline / "
+              "do not bring MSAA back without revisiting the XeGTAO / "
               "depth-pyramid gates.");
+
+// RP.15.a — symmetric guard against selection-outline resurrection. The
+// screen-space outline pass made the model "blink" on hover and was retired in
+// favour of the simpler vertex-colour fill that already runs from
+// `Selection::SetOnChanged`. If someone re-adds `SetOutlineParams`, this concept
+// is satisfied and the static_assert breaks the build.
+template <typename T>
+concept RenderLoopExposesOutlineParams =
+    requires(T& loop) { loop.SetOutlineParams({}, true); };
+static_assert(!RenderLoopExposesOutlineParams<RenderLoop>,
+              "RP.15.a — RenderLoop::SetOutlineParams retired with the outline "
+              "pass; selection visualisation is the vertex-colour fill applied "
+              "in main.cpp via Selection::SetOnChanged.");
 
 TEST_F(RenderLoopTest, CreatesSuccessfully) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
@@ -303,46 +315,6 @@ TEST_F(RenderLoopTest, SsaoDispatchedDuringFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-namespace {
-
-bimeup::renderer::OutlinePipeline::PushConstants MakeDefaultOutlinePush() {
-    bimeup::renderer::OutlinePipeline::PushConstants pc{};
-    pc.selectedColor = glm::vec4(1.0F, 0.6F, 0.1F, 1.0F);
-    pc.hoverColor = glm::vec4(0.2F, 0.7F, 1.0F, 0.8F);
-    pc.texelSize = glm::vec2(1.0F / 800.0F, 1.0F / 600.0F);
-    pc.thickness = 2.0F;
-    pc.depthEdgeThreshold = 0.05F;
-    return pc;
-}
-
-}  // namespace
-
-// RP.6d — OutlinePipeline + descriptor sets are owned by RenderLoop and
-// recorded into the present pass after the tonemap fullscreen draw. Push
-// constants and the enable toggle come from the panel via SetOutlineParams.
-// The outline pass samples the stencil G-buffer (RP.6c) and the depth
-// pyramid mip 0 (RP.4d). RP.14.1.a retired the MSAA gate so the dispatch
-// runs whenever the panel flag is on.
-TEST_F(RenderLoopTest, OutlineDrawnDuringFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/true);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, OutlineDisabledStillCyclesFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetOutlineParams(MakeDefaultOutlinePush(), /*enabled=*/false);
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();

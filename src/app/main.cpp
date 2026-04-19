@@ -1471,19 +1471,6 @@ int main(int argc, char* argv[]) {
         // RP.5d — feed the SSAO UBO + depth-linearize push constants.
         renderLoop.SetProjection(ubo.projection, camera.GetNearPlane(), camera.GetFarPlane());
 
-        // RP.6d — push panel-driven selection-outline parameters. texelSize
-        // is filled in by RenderLoop per-frame from the current swapchain
-        // extent, so resizes track without a panel callback.
-        {
-            const auto& outlineSettings = renderQualityPanel->GetSettings().outline;
-            bimeup::renderer::OutlinePipeline::PushConstants outlinePush{};
-            outlinePush.selectedColor = outlineSettings.selectedColor;
-            outlinePush.hoverColor = outlineSettings.hoverColor;
-            outlinePush.thickness = outlineSettings.thickness;
-            outlinePush.depthEdgeThreshold = outlineSettings.depthEdgeThreshold;
-            renderLoop.SetOutlineParams(outlinePush, outlineSettings.enabled);
-        }
-
         // RP.11c — SMAA enable. The blend draw runs every frame (it's the
         // only path from the LDR intermediate to the swapchain); when
         // `enabled` is false the renderer skips the edge + weights passes
