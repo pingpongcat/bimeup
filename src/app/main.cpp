@@ -1520,6 +1520,14 @@ int main(int argc, char* argv[]) {
             renderLoop.SetOutlineParams(outlinePush, outlineSettings.enabled);
         }
 
+        // RP.8c — FXAA enable + quality preset. The draw runs every frame
+        // regardless of `enabled`; the flag just flips push constants so the
+        // shader's early-exit fires on every pixel when AA is off.
+        {
+            const auto& fxaaSettings = renderQualityPanel->GetSettings().fxaa;
+            renderLoop.SetFxaaParams(fxaaSettings.enabled, fxaaSettings.quality);
+        }
+
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + key light direction, and (re)build the shadow map if resolution
         // or enabled-state changed.

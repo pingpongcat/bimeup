@@ -1,5 +1,6 @@
 #pragma once
 
+#include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
 
 #include <vulkan/vulkan.h>
@@ -168,6 +169,14 @@ public:
     /// the texelSize field should be (1/width, 1/height) in pixels — caller
     /// updates per-frame so resize lands cleanly.
     void SetOutlineParams(const OutlinePipeline::PushConstants& push, bool enabled);
+
+    /// RP.8c — FXAA post-process parameters. When `enabled` is false the FXAA
+    /// pass still runs (it's the only path from the LDR intermediate to the
+    /// swapchain) but push constants are set so the shader's early-exit
+    /// predicate fires on every pixel — effectively a texture copy at the
+    /// cost of a single sample + write. `quality` is 0 (LOW) or 1 (HIGH) and
+    /// drives the sub-pixel blend path in `fxaa.frag`.
+    void SetFxaaParams(bool enabled, int quality);
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
         return VK_SAMPLE_COUNT_1_BIT;
     }
@@ -226,6 +235,12 @@ private:
     void CreateOutlinePipeline();
     void UpdateOutlineDescriptors();
     void CleanupOutlineDescriptors();
+    void CreatePostRenderPass();
+    void CreateLdrResources();
+    void CreateFxaaDescriptors();
+    void CreateFxaaPipeline();
+    void UpdateFxaaDescriptors();
+    void CleanupFxaaDescriptors();
     void CleanupFrameResources();
     void CleanupTonemapDescriptors();
     void Cleanup();
@@ -247,6 +262,13 @@ private:
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> m_inFlightFences{};
 
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
+    // "Post" pass runs tonemap + outline into a per-swap-image LDR intermediate
+    // target (RP.8c). The intermediate is then sampled by the FXAA pipeline in
+    // `m_presentRenderPass`, which writes the swapchain. `m_postRenderPass` is
+    // render-pass-compatible with `m_presentRenderPass` (same swapchain format,
+    // same sample count, same attachment layout) so tonemap + outline pipelines
+    // built against the present pass bind to the post pass without rebuild.
+    VkRenderPass m_postRenderPass = VK_NULL_HANDLE;
     VkRenderPass m_presentRenderPass = VK_NULL_HANDLE;
     VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
     VkImage m_depthImage = VK_NULL_HANDLE;
@@ -284,7 +306,16 @@ private:
     VmaAllocation m_stencilMsaaAllocation = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     std::vector<VkFramebuffer> m_framebuffers;
+    std::vector<VkFramebuffer> m_postFramebuffers;
     std::vector<VkFramebuffer> m_presentFramebuffers;
+    // Per-swap-image LDR intermediate target (RP.8c). Format matches the
+    // swapchain so the FXAA pass can sample it and write the final swapchain
+    // image through a compatible pipeline layout. Usage = COLOR_ATTACHMENT |
+    // SAMPLED; final layout after the post pass is SHADER_READ_ONLY_OPTIMAL
+    // so FXAA samples it without a manual barrier.
+    std::vector<VkImage> m_ldrImages;
+    std::vector<VkImageView> m_ldrImageViews;
+    std::vector<VmaAllocation> m_ldrAllocations;
 
     // Tonemap pass: shaders loaded once in the ctor, pipeline rebuilt on MSAA/size changes.
     // Descriptor set layout + pool built once; descriptor sets recreated on swapchain resize
@@ -414,6 +445,22 @@ private:
     std::vector<VkDescriptorSet> m_outlineDescriptorSets;
     OutlinePipeline::PushConstants m_outlinePush{};
     bool m_outlineEnabled = false;
+
+    // FXAA post-process (RP.8c). Samples the per-swap LDR intermediate written
+    // by the post pass, writes the anti-aliased LDR image to the swapchain
+    // inside `m_presentRenderPass`. Pipeline is bound unconditionally each
+    // frame — the `m_fxaaEnabled` flag just flips push constants so the
+    // shader's early-exit hits on every pixel, effectively making the draw a
+    // cheap texture copy. `m_fxaaQuality` is 0 (LOW) or 1 (HIGH).
+    std::unique_ptr<Shader> m_fxaaVertShader;
+    std::unique_ptr<Shader> m_fxaaFragShader;
+    std::unique_ptr<FxaaPipeline> m_fxaaPipeline;
+    VkSampler m_fxaaSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_fxaaSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_fxaaDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_fxaaDescriptorSets;
+    bool m_fxaaEnabled = true;
+    int m_fxaaQuality = 1;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;

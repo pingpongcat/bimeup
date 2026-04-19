@@ -30,6 +30,16 @@ struct SsilSettings {
     float normalRejection{2.0F};
 };
 
+// RP.8c FXAA post-process knobs. The renderer runs the FXAA draw
+// unconditionally (it's the only path from the LDR intermediate to the
+// swapchain); when `enabled` is false the draw becomes a cheap texture
+// copy. `quality` is 0 (LOW) or 1 (HIGH) and drives the sub-pixel blend
+// branch in `fxaa.frag`.
+struct FxaaSettings {
+    bool enabled{true};
+    int quality{1};  // 0 = LOW, 1 = HIGH
+};
+
 struct RenderQualitySettings {
     renderer::LightingScene lighting{renderer::MakeDefaultLighting()};
 
@@ -37,6 +47,7 @@ struct RenderQualitySettings {
 
     OutlineSettings outline{};
     SsilSettings ssil{};
+    FxaaSettings fxaa{};
 };
 
 class RenderQualityPanel : public Panel {

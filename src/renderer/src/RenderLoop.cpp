@@ -3,6 +3,7 @@
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
+#include <renderer/FxaaPipeline.h>
 #include <renderer/OutlinePipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/SsaoBlurPipeline.h>
@@ -37,8 +38,10 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateSyncObjects();
     CreateRenderPass();
     CreatePresentRenderPass();
+    CreatePostRenderPass();
     CreateHdrResources();
     CreateDepthResources();
+    CreateLdrResources();
     CreateFramebuffers();
     CreateTonemapDescriptors();
     CreateTonemapPipeline();
@@ -61,6 +64,9 @@ RenderLoop::RenderLoop(const Device& device, Swapchain& swapchain,
     CreateOutlineDescriptors();
     CreateOutlinePipeline();
     UpdateOutlineDescriptors();
+    CreateFxaaDescriptors();
+    CreateFxaaPipeline();
+    UpdateFxaaDescriptors();
 
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop created (max {} frames in flight, MSAA {}x, HDR resolve)",
@@ -152,16 +158,18 @@ bool RenderLoop::EndFrame() {
     // cleared 0 when gated so the tonemap's add is a no-op.
     RunSsil(cmd);
 
-    // Begin the tonemap/present pass targeting the swapchain image.
-    VkRenderPassBeginInfo presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    presentInfo.renderPass = m_presentRenderPass;
-    presentInfo.framebuffer = m_presentFramebuffers[m_currentImageIndex];
-    presentInfo.renderArea.offset = {0, 0};
-    presentInfo.renderArea.extent = extent;
-    presentInfo.clearValueCount = 0;  // tonemap fullscreen-tri covers every pixel
+    // Post pass — tonemap + outline, writes to the per-swap LDR intermediate.
+    // Its final layout is SHADER_READ_ONLY_OPTIMAL so the FXAA pass samples
+    // it in the following present pass without a manual barrier.
+    VkRenderPassBeginInfo postInfo{};
+    postInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    postInfo.renderPass = m_postRenderPass;
+    postInfo.framebuffer = m_postFramebuffers[m_currentImageIndex];
+    postInfo.renderArea.offset = {0, 0};
+    postInfo.renderArea.extent = extent;
+    postInfo.clearValueCount = 0;  // tonemap fullscreen-tri covers every pixel
 
-    vkCmdBeginRenderPass(cmd, &presentInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(cmd, &postInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
     viewport.x = 0.0F;
@@ -197,6 +205,53 @@ bool RenderLoop::EndFrame() {
                            sizeof(OutlinePipeline::PushConstants), &framePush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
+
+    vkCmdEndRenderPass(cmd);
+
+    // Present pass — FXAA reads the LDR intermediate and writes the swapchain,
+    // then the registered in-present callback draws UI (ImGui) on top of the
+    // anti-aliased image. Disabling FXAA from the panel pushes constants
+    // that trip the shader's early-exit on every pixel, effectively turning
+    // the draw into a single sample + write (cheap texture copy).
+    VkRenderPassBeginInfo presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    presentInfo.renderPass = m_presentRenderPass;
+    presentInfo.framebuffer = m_presentFramebuffers[m_currentImageIndex];
+    presentInfo.renderArea.offset = {0, 0};
+    presentInfo.renderArea.extent = extent;
+    presentInfo.clearValueCount = 0;  // FXAA fullscreen-tri covers every pixel
+
+    vkCmdBeginRenderPass(cmd, &presentInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    FxaaPipeline::PushConstants fxaaPush{};
+    fxaaPush.rcpFrame = glm::vec2(1.0F / static_cast<float>(extent.width),
+                                  1.0F / static_cast<float>(extent.height));
+    if (m_fxaaEnabled) {
+        // FXAA 3.11 "HIGH" defaults; HIGH also turns on the sub-pixel blend.
+        fxaaPush.subpixel = m_fxaaQuality >= 1 ? 0.75F : 0.5F;
+        fxaaPush.edgeThreshold = m_fxaaQuality >= 1 ? 0.166F : 0.25F;
+        fxaaPush.edgeThresholdMin = m_fxaaQuality >= 1 ? 0.0625F : 0.0833F;
+        fxaaPush.quality = m_fxaaQuality;
+    } else {
+        // Force the shader's early-exit on every pixel. `edgeThresholdMin = 1.0`
+        // exceeds the maximum possible luma range (0..1) so the gate is never
+        // crossed — the draw becomes a pure texture copy from LDR to swapchain.
+        fxaaPush.subpixel = 0.0F;
+        fxaaPush.edgeThreshold = 1.0F;
+        fxaaPush.edgeThresholdMin = 1.0F;
+        fxaaPush.quality = 0;
+    }
+    m_fxaaPipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_fxaaPipeline->GetLayout(), 0, 1,
+                            &m_fxaaDescriptorSets[m_currentImageIndex], 0, nullptr);
+    vkCmdPushConstants(cmd, m_fxaaPipeline->GetLayout(),
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(FxaaPipeline::PushConstants), &fxaaPush);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     if (m_inPresentPass) {
         m_inPresentPass(cmd);
@@ -353,6 +408,11 @@ void RenderLoop::SetOutlineParams(const OutlinePipeline::PushConstants& push, bo
     m_outlineEnabled = enabled;
 }
 
+void RenderLoop::SetFxaaParams(bool enabled, int quality) {
+    m_fxaaEnabled = enabled;
+    m_fxaaQuality = quality;
+}
+
 VkSampleCountFlagBits RenderLoop::GetSampleCount() const {
     return m_samples;
 }
@@ -372,6 +432,7 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     CreateRenderPass();
     CreateHdrResources();
     CreateDepthResources();
+    CreateLdrResources();
     CreateFramebuffers();
     CreateDepthPyramidResources();
     CreateSsaoResources();
@@ -384,6 +445,7 @@ void RenderLoop::SetSampleCount(VkSampleCountFlagBits samples) {
     ClearSsilTargetsToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();  // stencil + depth pyramid views were rebuilt
+    UpdateFxaaDescriptors();     // LDR intermediate views were rebuilt
     if (bimeup::tools::Log::GetLogger()) {
         LOG_INFO("RenderLoop MSAA set to {}x", static_cast<int>(m_samples));
     }
@@ -394,6 +456,7 @@ void RenderLoop::RecreateForSwapchain() {
     CleanupFrameResources();
     CreateHdrResources();
     CreateDepthResources();
+    CreateLdrResources();
     CreateFramebuffers();
     CreateDepthPyramidResources();
     CreateSsaoResources();
@@ -405,6 +468,7 @@ void RenderLoop::RecreateForSwapchain() {
     ClearSsilTargetsToZero();
     UpdateTonemapDescriptors();
     UpdateOutlineDescriptors();
+    UpdateFxaaDescriptors();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -879,6 +943,7 @@ void RenderLoop::CreateFramebuffers() {
     const bool multisampled = m_samples != VK_SAMPLE_COUNT_1_BIT;
 
     m_framebuffers.resize(swapImageViews.size());
+    m_postFramebuffers.resize(swapImageViews.size());
     m_presentFramebuffers.resize(swapImageViews.size());
 
     for (size_t i = 0; i < swapImageViews.size(); ++i) {
@@ -919,7 +984,23 @@ void RenderLoop::CreateFramebuffers() {
             throw std::runtime_error("Failed to create framebuffer");
         }
 
-        // Present/tonemap framebuffer — single swapchain colour attachment.
+        // Post framebuffer — single LDR intermediate colour attachment
+        // (sampled by the FXAA pass in the swapchain present pass).
+        VkFramebufferCreateInfo postFb{};
+        postFb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        postFb.renderPass = m_postRenderPass;
+        postFb.attachmentCount = 1;
+        postFb.pAttachments = &m_ldrImageViews[i];
+        postFb.width = extent.width;
+        postFb.height = extent.height;
+        postFb.layers = 1;
+
+        if (vkCreateFramebuffer(m_device.GetDevice(), &postFb, nullptr,
+                                &m_postFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create post framebuffer");
+        }
+
+        // Present framebuffer — single swapchain colour attachment (FXAA + UI).
         VkFramebufferCreateInfo presentFb{};
         presentFb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         presentFb.renderPass = m_presentRenderPass;
@@ -1089,12 +1170,31 @@ void RenderLoop::CleanupFrameResources() {
     }
     m_framebuffers.clear();
 
+    for (auto fb : m_postFramebuffers) {
+        if (fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, fb, nullptr);
+        }
+    }
+    m_postFramebuffers.clear();
+
     for (auto fb : m_presentFramebuffers) {
         if (fb != VK_NULL_HANDLE) {
             vkDestroyFramebuffer(device, fb, nullptr);
         }
     }
     m_presentFramebuffers.clear();
+
+    for (size_t i = 0; i < m_ldrImages.size(); ++i) {
+        if (m_ldrImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_ldrImageViews[i], nullptr);
+        }
+        if (m_ldrImages[i] != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_device.GetAllocator(), m_ldrImages[i], m_ldrAllocations[i]);
+        }
+    }
+    m_ldrImages.clear();
+    m_ldrImageViews.clear();
+    m_ldrAllocations.clear();
 
     if (m_depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(device, m_depthImageView, nullptr);
@@ -1330,6 +1430,219 @@ void RenderLoop::CleanupOutlineDescriptors() {
     }
 }
 
+void RenderLoop::CreatePostRenderPass() {
+    // Render-pass-compatible with `m_presentRenderPass`: same format (swap),
+    // same sample count (1), single colour attachment, no depth. The only
+    // operational difference is the final layout — here the image transitions
+    // to SHADER_READ_ONLY_OPTIMAL so the FXAA pass can sample it in the
+    // following render pass without a manual barrier. Tonemap + outline
+    // pipelines (built against `m_presentRenderPass`) bind here unchanged
+    // per Vulkan render-pass compatibility rules.
+    VkAttachmentDescription color{};
+    color.format = m_swapchain.GetFormat();
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // tonemap covers every pixel
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    // Same dep shape as the present pass: HDR/SSAO/SSIL outputs from prior
+    // passes must be visible to the tonemap fragment shader before the
+    // colour-write stage begins.
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &color;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device.GetDevice(), &rpInfo, nullptr, &m_postRenderPass) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create post render pass");
+    }
+}
+
+void RenderLoop::CreateLdrResources() {
+    VkExtent2D extent = m_swapchain.GetExtent();
+    uint32_t imageCount = m_swapchain.GetImageCount();
+
+    m_ldrImages.assign(imageCount, VK_NULL_HANDLE);
+    m_ldrImageViews.assign(imageCount, VK_NULL_HANDLE);
+    m_ldrAllocations.assign(imageCount, VK_NULL_HANDLE);
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = m_swapchain.GetFormat();
+        imageInfo.extent = {extent.width, extent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        if (vmaCreateImage(m_device.GetAllocator(), &imageInfo, &allocInfo, &m_ldrImages[i],
+                           &m_ldrAllocations[i], nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create LDR intermediate image");
+        }
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_ldrImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_swapchain.GetFormat();
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device.GetDevice(), &viewInfo, nullptr, &m_ldrImageViews[i]) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("Failed to create LDR intermediate image view");
+        }
+    }
+}
+
+void RenderLoop::CreateFxaaDescriptors() {
+    // Linear sampler — FXAA samples the LDR intermediate at sub-pixel offsets,
+    // so linear filtering keeps the neighbour taps from aliasing the same
+    // texel back. CLAMP_TO_EDGE prevents the edge-search taps from sampling
+    // wrap-around data at the screen borders.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.minLod = 0.0F;
+    samplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &samplerInfo, nullptr, &m_fxaaSampler) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Failed to create FXAA sampler");
+    }
+
+    // Single CIS binding: LDR input colour. Matches `fxaa.frag` set 0/binding 0.
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device.GetDevice(), &layoutInfo, nullptr,
+                                    &m_fxaaSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create FXAA descriptor set layout");
+    }
+
+    uint32_t imageCount = m_swapchain.GetImageCount();
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = imageCount;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = imageCount;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device.GetDevice(), &poolInfo, nullptr,
+                               &m_fxaaDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create FXAA descriptor pool");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_fxaaSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_fxaaDescriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+    m_fxaaDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_device.GetDevice(), &allocInfo,
+                                 m_fxaaDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate FXAA descriptor sets");
+    }
+}
+
+void RenderLoop::CreateFxaaPipeline() {
+    m_fxaaVertShader = std::make_unique<Shader>(m_device, ShaderStage::Vertex,
+                                                m_shaderDir + "/fxaa.vert.spv");
+    m_fxaaFragShader = std::make_unique<Shader>(m_device, ShaderStage::Fragment,
+                                                m_shaderDir + "/fxaa.frag.spv");
+    m_fxaaPipeline = std::make_unique<FxaaPipeline>(
+        m_device, *m_fxaaVertShader, *m_fxaaFragShader, m_presentRenderPass,
+        m_fxaaSetLayout, VK_SAMPLE_COUNT_1_BIT);
+}
+
+void RenderLoop::UpdateFxaaDescriptors() {
+    for (uint32_t i = 0; i < m_fxaaDescriptorSets.size(); ++i) {
+        VkDescriptorImageInfo ldrInfo{};
+        ldrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ldrInfo.imageView = i < m_ldrImageViews.size() ? m_ldrImageViews[i] : VK_NULL_HANDLE;
+        ldrInfo.sampler = m_fxaaSampler;
+
+        if (ldrInfo.imageView == VK_NULL_HANDLE) {
+            continue;
+        }
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_fxaaDescriptorSets[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &ldrInfo;
+        vkUpdateDescriptorSets(m_device.GetDevice(), 1, &write, 0, nullptr);
+    }
+}
+
+void RenderLoop::CleanupFxaaDescriptors() {
+    VkDevice device = m_device.GetDevice();
+    if (m_fxaaDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_fxaaDescriptorPool, nullptr);
+        m_fxaaDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_fxaaDescriptorSets.clear();
+    if (m_fxaaSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_fxaaSetLayout, nullptr);
+        m_fxaaSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_fxaaSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_fxaaSampler, nullptr);
+        m_fxaaSampler = VK_NULL_HANDLE;
+    }
+}
+
 void RenderLoop::Cleanup() {
     VkDevice device = m_device.GetDevice();
 
@@ -1351,6 +1664,9 @@ void RenderLoop::Cleanup() {
     m_outlinePipeline.reset();
     m_outlineVertShader.reset();
     m_outlineFragShader.reset();
+    m_fxaaPipeline.reset();
+    m_fxaaVertShader.reset();
+    m_fxaaFragShader.reset();
 
     CleanupFrameResources();
     CleanupTonemapDescriptors();
@@ -1358,9 +1674,13 @@ void RenderLoop::Cleanup() {
     CleanupSsaoDescriptors();
     CleanupSsilDescriptors();
     CleanupOutlineDescriptors();
+    CleanupFxaaDescriptors();
 
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
+    }
+    if (m_postRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_postRenderPass, nullptr);
     }
     if (m_presentRenderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_presentRenderPass, nullptr);
