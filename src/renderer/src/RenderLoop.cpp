@@ -3427,9 +3427,29 @@ void RenderLoop::CreateSsilDescriptors() {
         throw std::runtime_error("Failed to create SSIL sampler");
     }
 
+    // RP.12c.2 — dedicated NEAREST sampler for the R8_UINT stencil binding.
+    // Integer formats can't use FILTER_LINEAR per spec, and the per-tap gate
+    // reads the raw texel value — no filtering needed. CLAMP_TO_EDGE keeps
+    // out-of-frustum taps from sampling sentinel data.
+    VkSamplerCreateInfo stencilSamplerInfo{};
+    stencilSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    stencilSamplerInfo.magFilter = VK_FILTER_NEAREST;
+    stencilSamplerInfo.minFilter = VK_FILTER_NEAREST;
+    stencilSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    stencilSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    stencilSamplerInfo.minLod = 0.0F;
+    stencilSamplerInfo.maxLod = 0.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &stencilSamplerInfo, nullptr,
+                        &m_ssilStencilSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSIL stencil sampler");
+    }
+
     // Main set layout: pyramid (CIS), normal (CIS), prev-HDR (CIS),
-    // SsilUbo (UBO), SSIL A (STORAGE_IMAGE). Matches SsilPipeline docs.
-    std::array<VkDescriptorSetLayoutBinding, 5> mainBindings{};
+    // SsilUbo (UBO), SSIL A (STORAGE_IMAGE), stencil G-buffer (CIS, RP.12c.2).
+    // Matches SsilPipeline docs.
+    std::array<VkDescriptorSetLayoutBinding, 6> mainBindings{};
     for (uint32_t b = 0; b < 3; ++b) {
         mainBindings[b].binding = b;
         mainBindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -3444,6 +3464,10 @@ void RenderLoop::CreateSsilDescriptors() {
     mainBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     mainBindings[4].descriptorCount = 1;
     mainBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    mainBindings[5].binding = 5;
+    mainBindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    mainBindings[5].descriptorCount = 1;
+    mainBindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo mainLayoutInfo{};
     mainLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -3482,10 +3506,11 @@ void RenderLoop::CreateSsilDescriptors() {
     const uint32_t blurSets = imageCount * 2;
     const uint32_t totalSets = mainSets + blurSets;
 
-    // Main: 3 CIS + 1 UBO + 1 STORAGE. Blur: 3 CIS + 1 STORAGE.
+    // Main: 4 CIS (pyramid, normal, prev-HDR, stencil) + 1 UBO + 1 STORAGE.
+    // Blur: 3 CIS + 1 STORAGE.
     std::array<VkDescriptorPoolSize, 3> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sizes[0].descriptorCount = (mainSets * 3) + (blurSets * 3);
+    sizes[0].descriptorCount = (mainSets * 4) + (blurSets * 3);
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[1].descriptorCount = mainSets;
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -3678,7 +3703,19 @@ void RenderLoop::UpdateSsilDescriptors() {
         ssilAOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         ssilAOutInfo.imageView = m_ssilViewsA[i];
 
-        std::array<VkWriteDescriptorSet, 5> mainWrites{};
+        // RP.12c.2 — stencil G-buffer (R8_UINT, usampler2D) for the per-tap
+        // transparency gate. The main render pass transitions the single-
+        // sample stencil image to SHADER_READ_ONLY_OPTIMAL at end, and SSIL
+        // is gated off under MSAA (where only the resolve target would carry
+        // that layout), so this layout is valid whenever SSIL dispatches.
+        VkDescriptorImageInfo stencilInfo{};
+        stencilInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        stencilInfo.imageView = i < m_stencilImageViews.size()
+                                    ? m_stencilImageViews[i]
+                                    : VK_NULL_HANDLE;
+        stencilInfo.sampler = m_ssilStencilSampler;
+
+        std::array<VkWriteDescriptorSet, 6> mainWrites{};
         auto makeImageWrite = [&](uint32_t idx, uint32_t binding,
                                   VkDescriptorType type,
                                   const VkDescriptorImageInfo* img) {
@@ -3699,6 +3736,14 @@ void RenderLoop::UpdateSsilDescriptors() {
         mainWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         mainWrites[3].pBufferInfo = &uboInfo;
         makeImageWrite(4, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ssilAOutInfo);
+        makeImageWrite(5, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &stencilInfo);
+        if (stencilInfo.imageView == VK_NULL_HANDLE) {
+            // Stencil image not yet built for this swap slot — skip this
+            // iteration's descriptor write set rather than feed Vulkan a
+            // null view. UpdateSsilDescriptors is called again alongside
+            // CreateSsilResources after the stencil chain rebuilds.
+            continue;
+        }
         vkUpdateDescriptorSets(m_device.GetDevice(),
                                static_cast<uint32_t>(mainWrites.size()), mainWrites.data(),
                                0, nullptr);
@@ -4164,6 +4209,10 @@ void RenderLoop::CleanupSsilDescriptors() {
     if (m_ssilSampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_ssilSampler, nullptr);
         m_ssilSampler = VK_NULL_HANDLE;
+    }
+    if (m_ssilStencilSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_ssilStencilSampler, nullptr);
+        m_ssilStencilSampler = VK_NULL_HANDLE;
     }
 }
 

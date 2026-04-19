@@ -15,6 +15,10 @@
 //   binding 2 : previous-frame HDR       (rgba16f sampler2D)
 //   binding 3 : SsilUbo { proj, invProj, reprojection, kernel[64] }
 //   binding 4 : half-res RGBA16F SSIL output (writeonly storage image)
+//   binding 5 : outline stencil G-buffer (R8_UINT usampler2D) — RP.12c.2
+//               transparency gate. Bit 4 = "transparent surface"; a tap whose
+//               currUv lands on glass contributes 0 so translucent walls don't
+//               bounce colour into the room behind them.
 //
 // Push constants carry the runtime-tweakable knobs (radius, intensity,
 // normalRejection, frameSeed). The tonemap pass composites the output with
@@ -36,6 +40,7 @@ layout(std140, set = 0, binding = 3) uniform SsilUbo {
 } ubo;
 
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D ssilOut;
+layout(set = 0, binding = 5) uniform usampler2D stencilGBuffer;
 
 layout(push_constant) uniform Push {
     float radius;
@@ -131,6 +136,15 @@ void main() {
         // Out-of-frustum taps contribute nothing (avoids sampler-clamp smear).
         if (currUv.x < 0.0 || currUv.x > 1.0 ||
             currUv.y < 0.0 || currUv.y > 1.0) {
+            continue;
+        }
+
+        // RP.12c.2 transparency gate — skip taps whose current-frame pixel is
+        // a translucent surface (bit 4 of the R8_UINT stencil). Glass still
+        // writes depth + a normal, so without this the tap would "bounce"
+        // whatever colour is on the glass itself instead of the room beyond.
+        uint stencilTap = texture(stencilGBuffer, currUv).r;
+        if ((stencilTap & 4u) != 0u) {
             continue;
         }
 

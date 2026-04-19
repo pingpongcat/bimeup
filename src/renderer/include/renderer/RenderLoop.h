@@ -442,6 +442,10 @@ private:
     std::vector<VkImageView> m_prevHdrImageViews;
     VkExtent2D m_ssilExtent = {0, 0};
     VkSampler m_ssilSampler = VK_NULL_HANDLE;
+    // RP.12c.2 — NEAREST sampler for the stencil-G-buffer binding (binding 5
+    // on the SSIL main set). Integer formats (R8_UINT) don't support linear
+    // filtering, and the SSIL per-tap gate just wants the raw texel value.
+    VkSampler m_ssilStencilSampler = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Buffer>> m_ssilUbos;
     VkDescriptorSetLayout m_ssilMainSetLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_ssilBlurSetLayout = VK_NULL_HANDLE;

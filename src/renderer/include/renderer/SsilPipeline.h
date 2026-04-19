@@ -37,6 +37,11 @@ class Shader;
 ///                 vec4  kernel[64];      // .xyz = +z-hemisphere sample
 ///   binding 4: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE — half-res RGBA16F SSIL
 ///              output (`rgba16f` write-only).
+///   binding 5: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER — outline stencil
+///              G-buffer (R8_UINT, sampled as `usampler2D`, RP.12c.2
+///              transparency gate). Bit 4 on a sampled tap means "translucent
+///              surface" and skips that tap's contribution. NEAREST sampler:
+///              integer formats don't support linear filtering.
 ///
 /// Kernel count is a compile-time constant (64) mirrored on both sides to
 /// keep the UBO layout fixed; `renderer::GenerateHemisphereKernel(64, seed)`

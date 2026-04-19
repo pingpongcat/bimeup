@@ -6,7 +6,10 @@
 #include <renderer/SsilPipeline.h>
 #include <renderer/VulkanContext.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +34,8 @@ protected:
         //   binding 2: previous-frame HDR            (combined-image-sampler)
         //   binding 3: SsilUbo                       (uniform buffer)
         //   binding 4: RGBA16F half-res SSIL target  (storage image)
+        //   binding 5: stencil G-buffer (R8_UINT)    (combined-image-sampler,
+        //              RP.12c.2 — taps with bit 4 set contribute 0)
         m_layout = std::make_unique<DescriptorSetLayout>(
             *m_device,
             std::vector<LayoutBinding>{
@@ -39,6 +44,7 @@ protected:
                 {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT},
                 {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT},
                 {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT},
+                {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT},
             });
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
@@ -98,4 +104,43 @@ TEST(SsilPipelinePushConstants, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(SsilPipeline::PushConstants, normalRejection), 8U);
     EXPECT_EQ(offsetof(SsilPipeline::PushConstants, frameSeed), 12U);
     EXPECT_EQ(offsetof(SsilPipeline::PushConstants, maxLuminance), 16U);
+}
+
+// RP.12c.2 — walks the compiled `ssil_main.comp.spv` OpDecorate stream and
+// asserts the stencil G-buffer is declared at set 0 / binding 5. Catches a
+// regression where the binding drops (or drifts to a different index) before
+// it trips Vulkan validation at dispatch time.
+TEST_F(SsilPipelineTest, ComputeShaderDeclaresStencilBindingAtFive) {
+    std::string shaderDir = BIMEUP_SHADER_DIR;
+    std::ifstream file(shaderDir + "/ssil_main.comp.spv", std::ios::binary);
+    ASSERT_TRUE(file.good());
+    std::vector<char> bytes((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    ASSERT_GE(bytes.size(), 5U * sizeof(uint32_t));
+    const uint32_t* w = reinterpret_cast<const uint32_t*>(bytes.data());
+    const size_t wordCount = bytes.size() / sizeof(uint32_t);
+
+    bool found[6] = {false, false, false, false, false, false};
+    size_t idx = 5;  // skip SPIR-V header
+    while (idx < wordCount) {
+        uint32_t word = w[idx];
+        uint32_t opcode = word & 0xFFFFU;
+        uint32_t len = (word >> 16U) & 0xFFFFU;
+        if (len == 0 || idx + len > wordCount) {
+            break;
+        }
+        // OpDecorate = 71. Arguments: target, decoration, literals...
+        if (opcode == 71 && len >= 4) {
+            uint32_t decoration = w[idx + 2];
+            // Decoration::Binding = 33.
+            if (decoration == 33) {
+                uint32_t bindingIdx = w[idx + 3];
+                if (bindingIdx < 6) {
+                    found[bindingIdx] = true;
+                }
+            }
+        }
+        idx += len;
+    }
+    EXPECT_TRUE(found[5]) << "ssil_main.comp SPIR-V missing binding 5 (stencil G-buffer)";
 }
