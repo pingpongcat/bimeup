@@ -56,6 +56,7 @@ public:
         float intensity;        // scale on the accumulated indirect colour
         float normalRejection;  // exponent for dot(nCurr, nSampled) lobe
         float frameSeed;        // per-frame perturbation for the IGN rotation
+        float maxLuminance;     // RP.12c: per-channel post-accumulation cap
     };
 
     SsilPipeline(const Device& device,

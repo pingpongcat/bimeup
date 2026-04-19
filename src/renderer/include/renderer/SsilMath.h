@@ -28,4 +28,14 @@ float SsilNormalRejectionWeight(const glm::vec3& currentNormal,
                                 const glm::vec3& sampledNormal,
                                 float strength);
 
+// Per-channel clamp applied after the 64-tap accumulation in `ssil_main.comp`.
+// `cap` comes from the panel "Max luminance" slider (RP.12c) — it prevents
+// uniformly-lit walls from driving the indirect colour above the threshold,
+// which otherwise reads as wide-area glow rather than colour-bleed. Channels
+// are clamped independently so a saturated red can't drag the whole frame
+// toward a desaturated cap (a single `clamp(luma)` would shift the hue).
+// Lower bound is 0 to defend against negative samples leaking from a stale
+// previous-HDR tap. CPU mirror of the GLSL `clamp(indirect, 0, cap)`.
+glm::vec3 SsilClampLuminance(const glm::vec3& indirect, float cap);
+
 }  // namespace bimeup::renderer

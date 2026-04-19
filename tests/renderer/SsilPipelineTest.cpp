@@ -81,10 +81,21 @@ TEST_F(SsilPipelineTest, DestructorCleansUp) {
     // Validation layers would catch a leaked pipeline/layout.
 }
 
-TEST(SsilPipelinePushConstants, SizeIsFourFloats) {
-    // radius + intensity + normalRejection + frameSeed — panel-tweakable knobs
-    // only. Matrices + kernel live in the UBO at binding 3. 16 bytes keeps the
-    // block well under the 128-byte Vulkan guarantee and matches the PLAN
-    // contract for RP.7b.
-    EXPECT_EQ(sizeof(SsilPipeline::PushConstants), 4U * sizeof(float));
+TEST(SsilPipelinePushConstants, SizeIsFiveFloats) {
+    // RP.7b: radius + intensity + normalRejection + frameSeed.
+    // RP.12c: + maxLuminance (post-accumulation per-channel clamp). Matrices +
+    // kernel live in the UBO at binding 3. 20 bytes keeps the block well
+    // under the 128-byte Vulkan guarantee.
+    EXPECT_EQ(sizeof(SsilPipeline::PushConstants), 5U * sizeof(float));
+}
+
+TEST(SsilPipelinePushConstants, FieldOffsetsMatchShaderLayout) {
+    // Pin the field order against `ssil_main.comp`'s push-constant block so a
+    // CPU-side reorder can't silently swap radius with intensity etc. The
+    // shader reads these by name in the same scalar-pack order.
+    EXPECT_EQ(offsetof(SsilPipeline::PushConstants, radius), 0U);
+    EXPECT_EQ(offsetof(SsilPipeline::PushConstants, intensity), 4U);
+    EXPECT_EQ(offsetof(SsilPipeline::PushConstants, normalRejection), 8U);
+    EXPECT_EQ(offsetof(SsilPipeline::PushConstants, frameSeed), 12U);
+    EXPECT_EQ(offsetof(SsilPipeline::PushConstants, maxLuminance), 16U);
 }

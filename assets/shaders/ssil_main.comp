@@ -42,6 +42,7 @@ layout(push_constant) uniform Push {
     float intensity;
     float normalRejection;
     float frameSeed;
+    float maxLuminance;  // RP.12c: per-channel cap on accumulated indirect.
 } push;
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -164,6 +165,11 @@ void main() {
     vec3 ssil = (weightSum > 0.0)
                     ? (indirect / weightSum) * push.intensity
                     : vec3(0.0);
+
+    // RP.12c: per-channel clamp matches `renderer::SsilClampLuminance` on the
+    // CPU. Caps wide-area glow on uniformly-lit walls while preserving hue
+    // (a single-channel `clamp(luma)` would desaturate toward the cap).
+    ssil = clamp(ssil, vec3(0.0), vec3(push.maxLuminance));
 
     imageStore(ssilOut, outCoord, vec4(ssil, 1.0));
 }

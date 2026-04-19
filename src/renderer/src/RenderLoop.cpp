@@ -3940,7 +3940,8 @@ void RenderLoop::RunSsil(VkCommandBuffer cmd) {
                             &m_ssilMainSets[i], 0, nullptr);
     SsilPipeline::PushConstants mainPush{
         m_ssilRadius, m_ssilIntensity, m_ssilNormalRejection,
-        static_cast<float>(m_ssilFrameCounter & 0xFFFFu)};
+        static_cast<float>(m_ssilFrameCounter & 0xFFFFu),
+        m_ssilMaxLuminance};
     vkCmdPushConstants(cmd, m_ssilPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(mainPush), &mainPush);
     vkCmdDispatch(cmd, (m_ssilExtent.width + 7) / 8, (m_ssilExtent.height + 7) / 8, 1);

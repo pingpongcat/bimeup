@@ -456,6 +456,9 @@ private:
     float m_ssilRadius = 0.5F;
     float m_ssilIntensity = 1.0F;
     float m_ssilNormalRejection = 2.0F;
+    // RP.12c: placeholder until c.3 wires the panel "Max luminance" slider.
+    // Pushed every frame so the shader's clamp is always armed.
+    float m_ssilMaxLuminance = 0.5F;
     bool m_ssilEnabled = false;
     uint32_t m_ssilFrameCounter = 0;
 

@@ -19,4 +19,12 @@ float SsilNormalRejectionWeight(const glm::vec3& currentNormal,
     return std::pow(cosTheta, strength);
 }
 
+glm::vec3 SsilClampLuminance(const glm::vec3& indirect, float cap) {
+    return {
+        std::clamp(indirect.r, 0.0F, cap),
+        std::clamp(indirect.g, 0.0F, cap),
+        std::clamp(indirect.b, 0.0F, cap),
+    };
+}
+
 }  // namespace bimeup::renderer

@@ -10,6 +10,7 @@
 namespace {
 
 using bimeup::renderer::ComputeReprojectionMatrix;
+using bimeup::renderer::SsilClampLuminance;
 using bimeup::renderer::SsilNormalRejectionWeight;
 
 constexpr float kEps = 1e-5F;
@@ -112,6 +113,56 @@ TEST(SsilMathTest, NormalRejectionRejectsBackFacing) {
     glm::vec3 opposite(0.0F, -1.0F, 0.0F);
     EXPECT_NEAR(SsilNormalRejectionWeight(n, opposite, 1.0F), 0.0F, kEps);
     EXPECT_NEAR(SsilNormalRejectionWeight(n, opposite, 2.0F), 0.0F, kEps);
+}
+
+// RP.12c — post-accumulation luminance clamp. SSIL's 64-tap accumulation can
+// drive the indirect colour above 1.0 on uniformly-lit walls, which then
+// reads as a wide-area glow rather than colour-bleed. The clamp caps each
+// channel independently against the panel "Max luminance" slider so a single
+// bright channel can't tint the whole frame.
+
+TEST(SsilMathTest, ClampLuminancePassesThroughBelowCap) {
+    // All channels under the cap → output equals input. No floor: SSIL can't
+    // produce negative values legitimately, but we still clamp to 0 below to
+    // mirror the shader's `clamp(x, 0, cap)` (defensive against NaN / sentinel
+    // negative values that could leak from a prev-HDR sample).
+    glm::vec3 in(0.1F, 0.2F, 0.3F);
+    glm::vec3 out = SsilClampLuminance(in, 0.5F);
+    EXPECT_NEAR(out.r, 0.1F, kEps);
+    EXPECT_NEAR(out.g, 0.2F, kEps);
+    EXPECT_NEAR(out.b, 0.3F, kEps);
+}
+
+TEST(SsilMathTest, ClampLuminanceClampsAboveCapPerChannel) {
+    // Each channel clamped independently — a saturated red shouldn't bleed
+    // into green/blue, since that would shift the indirect colour's hue.
+    glm::vec3 in(1.5F, 0.4F, 0.8F);
+    glm::vec3 out = SsilClampLuminance(in, 0.5F);
+    EXPECT_NEAR(out.r, 0.5F, kEps);
+    EXPECT_NEAR(out.g, 0.4F, kEps);
+    EXPECT_NEAR(out.b, 0.5F, kEps);
+}
+
+TEST(SsilMathTest, ClampLuminanceClampsNegativeToZero) {
+    // Defensive lower bound: a negative SSIL contribution would subtract
+    // colour from the HDR composite, which is never the intent. The shader
+    // mirror uses `clamp(x, 0, cap)` for the same reason.
+    glm::vec3 in(-0.2F, 0.3F, -1.0F);
+    glm::vec3 out = SsilClampLuminance(in, 0.5F);
+    EXPECT_NEAR(out.r, 0.0F, kEps);
+    EXPECT_NEAR(out.g, 0.3F, kEps);
+    EXPECT_NEAR(out.b, 0.0F, kEps);
+}
+
+TEST(SsilMathTest, ClampLuminanceZeroCapZeroesAllChannels) {
+    // A 0 cap effectively disables SSIL output — useful as a panel-driven
+    // kill switch separate from the boolean enable flag (the slider's lower
+    // bound is 0.1 in the panel, but the math should still hold at 0).
+    glm::vec3 in(0.7F, 0.4F, 0.9F);
+    glm::vec3 out = SsilClampLuminance(in, 0.0F);
+    EXPECT_NEAR(out.r, 0.0F, kEps);
+    EXPECT_NEAR(out.g, 0.0F, kEps);
+    EXPECT_NEAR(out.b, 0.0F, kEps);
 }
 
 TEST(SsilMathTest, NormalRejectionStrengthSharpensLobe) {
