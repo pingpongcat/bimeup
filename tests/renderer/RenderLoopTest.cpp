@@ -167,12 +167,20 @@ TEST_F(RenderLoopTest, NormalGBufferImageViewsProvidedPerSwapImage) {
     }
 }
 
-TEST_F(RenderLoopTest, NormalGBufferSurvivesSampleCountChange) {
+// Merged baseline MSAA recreate check: constructing RenderLoop and flipping
+// SetSampleCount(4x) must rebuild all per-swap GBuffer attachments (normal,
+// stencil, depth-pyramid, AO) and a frame must still cycle. Feature-specific
+// MSAA gates (SSIL/Outline/SMAA/Fog) live in their own SurvivesSampleCountChange
+// tests further down — those flip enable flags and exercise distinct paths.
+TEST_F(RenderLoopTest, GBuffersSurviveSampleCountChange) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
     const uint32_t imageCount = m_swapchain->GetImageCount();
     for (uint32_t i = 0; i < imageCount; ++i) {
         EXPECT_NE(m_renderLoop->GetNormalImageView(i), VK_NULL_HANDLE);
+        EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE);
+        EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE);
+        EXPECT_NE(m_renderLoop->GetAoImageView(i), VK_NULL_HANDLE);
     }
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
@@ -196,18 +204,6 @@ TEST_F(RenderLoopTest, StencilGBufferImageViewsProvidedPerSwapImage) {
         EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE)
             << "stencil G-buffer view missing for swap image " << i;
     }
-}
-
-TEST_F(RenderLoopTest, StencilGBufferSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetStencilImageView(i), VK_NULL_HANDLE);
-    }
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
 }
 
 // RP.12b — bit 4 = "transparent surface" rides alongside the base category
@@ -260,18 +256,6 @@ TEST_F(RenderLoopTest, DepthPyramidBuiltDuringFrame) {
     m_renderLoop->WaitIdle();
 }
 
-TEST_F(RenderLoopTest, DepthPyramidSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetDepthPyramidView(i), VK_NULL_HANDLE);
-    }
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
 // RP.5d — SSAO compute pass wired into RenderLoop: per-swap-image half-res
 // R8 AO target, main + 2 blur dispatches between the depth-pyramid build
 // and the tonemap pass, AO sampled by tonemap.frag and multiplied into the
@@ -298,20 +282,6 @@ TEST_F(RenderLoopTest, SsaoDispatchedDuringFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-TEST_F(RenderLoopTest, SsaoSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetAoImageView(i), VK_NULL_HANDLE);
-    }
-    // SSAO is gated off under MSAA (mirrors the depth pyramid gate). Frame
-    // cycle must still succeed — tonemap samples the pre-cleared AO image.
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
