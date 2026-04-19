@@ -1,0 +1,253 @@
+#version 450
+
+// XeGTAO horizon-based SSAO (Intel XeGTAO 2022 / Jimenez GTAO 2016) — replaces
+// the RP.5b Chapman hemisphere-kernel kernel for RP.12e. Shares the RP.4 linear
+// depth pyramid + RP.3 view-space normal G-buffer + RP.12d transparency gate
+// with the classic pass; differs in the algorithm: instead of 64 random
+// hemisphere taps against a depth-compare, we sweep `XE_SLICE_COUNT` screen-
+// space slices through the centre pixel, step along each to find the two
+// horizon angles, then evaluate the analytic cosine-lobe visibility integral
+// (`XeGtaoSliceVisibility` in `renderer::XeGtaoMath`). Fewer taps, quieter
+// output after the separable blur.
+//
+//   set 0 / binding 0 : linear depth pyramid  (sampler2D)
+//   set 0 / binding 1 : view-space normal G-buffer (oct-packed, sampler2D)
+//   set 0 / binding 2 : XeGtaoUbo — proj + invProj only (no hemisphere kernel)
+//   set 0 / binding 3 : half-res R8 AO output (writeonly storage image)
+//   set 0 / binding 4 : outline stencil G-buffer (R8_UINT usampler2D) —
+//                       RP.12d transparency gate; bit 4 = transparent surface.
+//
+// Push constants: radius, falloff, intensity, shadowPower (see
+// `SsaoXeGtaoPipeline::PushConstants`). Adaptive-base temporal refinement
+// from the paper skipped on first pass — no motion-vector infra yet.
+
+#define XE_SLICE_COUNT 4
+#define XE_STEPS_PER_SLICE 4
+#define XE_PI 3.14159265358979323846
+#define XE_HALF_PI 1.57079632679489661923
+
+layout(set = 0, binding = 0) uniform sampler2D linearDepthPyramid;
+layout(set = 0, binding = 1) uniform sampler2D normalGBuffer;
+
+layout(std140, set = 0, binding = 2) uniform XeGtaoUbo {
+    mat4 proj;
+    mat4 invProj;
+} ubo;
+
+layout(set = 0, binding = 3, r8) uniform writeonly image2D aoOut;
+layout(set = 0, binding = 4) uniform usampler2D stencilGBuffer;
+
+layout(push_constant) uniform Push {
+    float radius;
+    float falloff;
+    float intensity;
+    float shadowPower;
+} push;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Octahedron unpack — byte-identical to `renderer::OctUnpackNormal` and the
+// copies in `ssao_main.comp` / `ssil_main.comp`. Duplicated so the shader is
+// self-contained.
+vec3 OctUnpackNormal(vec2 e) {
+    vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
+
+// Reconstruct view-space position from UV + linear depth. Rays the UV through
+// `invProj` at NDC z=1 then rescales so view.z == -linearDepth.
+vec3 ReconstructViewPos(vec2 uv, float linearDepth) {
+    vec4 ndc = vec4((uv * 2.0) - 1.0, 1.0, 1.0);
+    vec4 viewH = ubo.invProj * ndc;
+    vec3 view = viewH.xyz / viewH.w;
+    float scale = -linearDepth / view.z;
+    return view * scale;
+}
+
+// Interleaved gradient noise — Jimenez 2014. Cheap per-pixel decorrelator for
+// the slice `φ`. The separable blur downstream wipes out the residual banding.
+float Ign(vec2 p) {
+    return fract(52.9829189 * fract((0.06711056 * p.x) + (0.00583715 * p.y)));
+}
+
+// GPU mirror of `renderer::XeGtaoSliceDirection` — π-spaced screen-space
+// slice sweep. Slices span [0, π) since `(cos φ, sin φ)` and `(-cos φ, -sin φ)`
+// describe the same line and the loop walks both sides.
+vec2 XeGtaoSliceDirection(uint index, float jitter) {
+    float phi = XE_PI * (float(index) + jitter) / float(XE_SLICE_COUNT);
+    return vec2(cos(phi), sin(phi));
+}
+
+// GPU mirror of `renderer::XeGtaoSliceVisibility` — clamps horizons to the
+// normal-facing hemisphere then returns the analytic cosine-lobe integral.
+// See the header comment in `renderer/XeGtaoMath.h` for the derivation;
+// byte-for-byte mirror so the CPU tests in RP.12e.1 pin shader behaviour.
+float XeGtaoSliceVisibility(float h1, float h2, float n, float projLen) {
+    h1 = max(h1, n - XE_HALF_PI);
+    h2 = min(h2, n + XE_HALF_PI);
+    float cosN = cos(n);
+    float sinN = sin(n);
+    float c1 = cos((2.0 * h1) - n);
+    float c2 = cos((2.0 * h2) - n);
+    float visArea = 0.25 * (-c1 + cosN + (2.0 * h1 * sinN)
+                            - c2 + cosN + (2.0 * h2 * sinN));
+    return projLen * visArea;
+}
+
+void main() {
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(aoOut);
+    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(outCoord) + 0.5) / vec2(outSize);
+
+    float centerDepth = textureLod(linearDepthPyramid, uv, 0.0).r;
+    // Sky / background carries `far` where nothing drew — emit AO=1 so the
+    // multiply-composite leaves the sky untouched.
+    if (centerDepth >= 9999.0) {
+        imageStore(aoOut, outCoord, vec4(1.0, 0.0, 0.0, 0.0));
+        return;
+    }
+
+    // RP.12d transparency gate — glass still writes depth + normal; without
+    // the gate, XeGTAO would treat glazing as a solid occluder and darken
+    // walls behind window frames. AO=1 leaves the multiply-composite a no-op.
+    uint stencilCentre = texture(stencilGBuffer, uv).r;
+    if ((stencilCentre & 4u) != 0u) {
+        imageStore(aoOut, outCoord, vec4(1.0, 0.0, 0.0, 0.0));
+        return;
+    }
+
+    vec3 viewPos = ReconstructViewPos(uv, centerDepth);
+    vec2 normalEnc = texture(normalGBuffer, uv).rg;
+    vec3 normal = OctUnpackNormal(normalEnc);
+
+    // Camera sits at the view-space origin; viewDir points from the pixel
+    // back toward the camera.
+    vec3 viewDir = normalize(-viewPos);
+
+    float jitter = Ign(vec2(outCoord));
+
+    // Map `radius` metres at `centerDepth` into screen-UV units. `proj[0][0]`
+    // is `1/tan(fovX/2)` for a symmetric perspective, so `radius * proj[0][0]
+    // / (2 * depth)` gives the approximate half-NDC-x span of `radius` metres
+    // at this depth, which is already in UV units (NDC [-1,1] → UV [0,1]).
+    float uvRadius = (push.radius * ubo.proj[0][0] * 0.5) / max(centerDepth, 1e-4);
+
+    float visibilitySum = 0.0;
+
+    for (uint s = 0u; s < uint(XE_SLICE_COUNT); ++s) {
+        vec2 sliceDir = XeGtaoSliceDirection(s, jitter);
+
+        // Establish a view-space axis that maps to `sliceDir` in screen
+        // space. A virtual tap at `uv + sliceDir * eps` at the same depth
+        // gives a view-space direction; Gram-Schmidt against viewDir keeps
+        // it perpendicular so the (axis, viewDir) basis is orthonormal.
+        vec3 virtualPos = ReconstructViewPos(uv + (sliceDir * 0.01), centerDepth);
+        vec3 axisRaw = virtualPos - viewPos;
+        vec3 axis = normalize(axisRaw - (viewDir * dot(axisRaw, viewDir)));
+
+        // Project the normal onto the slice plane (spanned by axis + viewDir)
+        // and express it as an angle from viewDir + its projected length.
+        float nDotAxis = dot(normal, axis);
+        float nDotView = dot(normal, viewDir);
+        float projLen = sqrt((nDotAxis * nDotAxis) + (nDotView * nDotView));
+        float n = atan(nDotAxis, nDotView);
+
+        // Initial horizons = tangent-plane edges (±π/2). Cosine 0 → angle π/2
+        // from viewDir. Horizons close in as closer occluders raise the cos.
+        float cosH1 = 0.0;  // -axis side
+        float cosH2 = 0.0;  // +axis side
+
+        for (uint k = 1u; k <= uint(XE_STEPS_PER_SLICE); ++k) {
+            // Step progressively outward from the centre pixel. `stepT`
+            // covers (0, 1], i.e. up to full `uvRadius` on the last step.
+            float stepT = float(k) / float(XE_STEPS_PER_SLICE);
+            vec2 stepOffset = sliceDir * uvRadius * stepT;
+
+            // +axis side (raises h2 / cosH2)
+            {
+                vec2 tapUv = uv + stepOffset;
+                if (tapUv.x >= 0.0 && tapUv.x <= 1.0
+                        && tapUv.y >= 0.0 && tapUv.y <= 1.0) {
+                    uint stencilTap = texture(stencilGBuffer, tapUv).r;
+                    if ((stencilTap & 4u) == 0u) {
+                        float dTap = textureLod(linearDepthPyramid, tapUv, 0.0).r;
+                        if (dTap < 9999.0) {
+                            vec3 tapView = ReconstructViewPos(tapUv, dTap);
+                            vec3 delta = tapView - viewPos;
+                            float dist = length(delta);
+                            if (dist > 1e-5) {
+                                float tAxis = dot(delta, axis);
+                                float tView = dot(delta, viewDir);
+                                float tLen = max(sqrt((tAxis * tAxis) + (tView * tView)), 1e-5);
+                                float cosHorizon = tView / tLen;
+                                // Distance falloff — taps past `radius` get no
+                                // weight; taps inside `falloff * radius` get
+                                // full horizon; in between, linear blend
+                                // toward the fully-open tangent-plane (cos=0).
+                                float fStart = push.falloff * push.radius;
+                                float weight = 1.0 - smoothstep(fStart, push.radius, dist);
+                                cosHorizon = mix(0.0, cosHorizon, weight);
+                                cosH2 = max(cosH2, cosHorizon);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // -axis side (raises h1 / cosH1)
+            {
+                vec2 tapUv = uv - stepOffset;
+                if (tapUv.x >= 0.0 && tapUv.x <= 1.0
+                        && tapUv.y >= 0.0 && tapUv.y <= 1.0) {
+                    uint stencilTap = texture(stencilGBuffer, tapUv).r;
+                    if ((stencilTap & 4u) == 0u) {
+                        float dTap = textureLod(linearDepthPyramid, tapUv, 0.0).r;
+                        if (dTap < 9999.0) {
+                            vec3 tapView = ReconstructViewPos(tapUv, dTap);
+                            vec3 delta = tapView - viewPos;
+                            float dist = length(delta);
+                            if (dist > 1e-5) {
+                                // The -axis side's tap delta has a negative
+                                // `tAxis` component by construction; cosine of
+                                // the horizon angle from viewDir is still
+                                // `tView / tLen` (sign-invariant on this axis).
+                                float tAxis = dot(delta, axis);
+                                float tView = dot(delta, viewDir);
+                                float tLen = max(sqrt((tAxis * tAxis) + (tView * tView)), 1e-5);
+                                float cosHorizon = tView / tLen;
+                                float fStart = push.falloff * push.radius;
+                                float weight = 1.0 - smoothstep(fStart, push.radius, dist);
+                                cosHorizon = mix(0.0, cosHorizon, weight);
+                                cosH1 = max(cosH1, cosHorizon);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // h2 sits on the +axis side (signed positive angle from viewDir);
+        // h1 sits on the -axis side (signed negative). `acos(cosH*)` ∈ [0, π]
+        // gives the unsigned angle; sign it by side.
+        float h1 = -acos(clamp(cosH1, -1.0, 1.0));
+        float h2 = acos(clamp(cosH2, -1.0, 1.0));
+
+        visibilitySum += XeGtaoSliceVisibility(h1, h2, n, projLen);
+    }
+
+    float vis = visibilitySum / float(XE_SLICE_COUNT);
+    float ao = clamp(vis, 0.0, 1.0);
+    ao = pow(ao, push.shadowPower);
+    // Intensity > 1 pushes `1-ao` upward (darker); intensity < 1 lifts AO.
+    // Clamp keeps R8 quantisation well-defined.
+    ao = clamp(1.0 - ((1.0 - ao) * push.intensity), 0.0, 1.0);
+
+    imageStore(aoOut, outCoord, vec4(ao, 0.0, 0.0, 0.0));
+}
