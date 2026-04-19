@@ -46,9 +46,8 @@ layout(push_constant) uniform Push {
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// Octahedron unpack — byte-identical to `renderer::OctUnpackNormal` and the
-// copies in `ssao_main.comp` / `ssil_main.comp`. Duplicated so the shader is
-// self-contained.
+// Octahedron unpack — byte-identical to `renderer::OctUnpackNormal`.
+// Duplicated so the shader is self-contained.
 vec3 OctUnpackNormal(vec2 e) {
     vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
     float t = clamp(-n.z, 0.0, 1.0);

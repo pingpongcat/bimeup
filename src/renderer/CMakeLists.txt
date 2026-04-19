@@ -28,15 +28,11 @@ add_library(bimeup_renderer STATIC
     src/LinearDepth.cpp
     src/DepthLinearizePipeline.cpp
     src/DepthMipPipeline.cpp
-    src/SsaoKernel.cpp
     src/SsaoBlurPipeline.cpp
     src/XeGtaoMath.cpp
     src/SsaoXeGtaoPipeline.cpp
     src/OutlineEdge.cpp
     src/OutlinePipeline.cpp
-    src/SsilMath.cpp
-    src/SsilPipeline.cpp
-    src/SsilBlurPipeline.cpp
     src/SmaaMath.cpp
     src/SmaaLut.cpp
     src/SmaaEdgePipeline.cpp

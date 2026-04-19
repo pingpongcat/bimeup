@@ -29,15 +29,11 @@ add_executable(renderer_tests
     LinearDepthTest.cpp
     DepthLinearizePipelineTest.cpp
     DepthMipPipelineTest.cpp
-    SsaoKernelTest.cpp
     SsaoBlurPipelineTest.cpp
     XeGtaoMathTest.cpp
     SsaoXeGtaoPipelineTest.cpp
     OutlineEdgeTest.cpp
     OutlinePipelineTest.cpp
-    SsilMathTest.cpp
-    SsilPipelineTest.cpp
-    SsilBlurPipelineTest.cpp
     SmaaMathTest.cpp
     SmaaLutTest.cpp
     SmaaEdgePipelineTest.cpp
@@ -57,7 +53,7 @@ set(_renderer_test_env
 # tests show up in `ctest -R`. Suite list mirrors `BIMEUP_RENDERER_CPU_FIXTURES`
 # below in negated form so any new GPU suite is automatically picked up there.
 set(_renderer_cpu_filter
-    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:FogMathTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:MsaaClampTest.*:OctNormalTest.*:OutlineEdgeTest.*:OutlinePipelinePushConstants.*:PcfShadowTest.*:RenderModeTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SsaoKernelTest.*:SsaoXeGtaoPipelinePushConstants.*:SsilBlurPipelinePushConstants.*:SsilMathTest.*:SsilPipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
+    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:FogMathTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:MsaaClampTest.*:OctNormalTest.*:OutlineEdgeTest.*:OutlinePipelinePushConstants.*:PcfShadowTest.*:RenderModeTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SsaoXeGtaoPipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
 
 include(GoogleTest)
 
@@ -96,8 +92,6 @@ set(_renderer_gpu_fixtures
     SsaoBlurPipelineTest
     SsaoXeGtaoPipelineTest
     OutlinePipelineTest
-    SsilPipelineTest
-    SsilBlurPipelineTest
     SmaaEdgePipelineTest
     SmaaWeightsPipelineTest
     SmaaBlendPipelineTest

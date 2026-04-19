@@ -6,26 +6,24 @@
 // [0,1] since the sRGB swapchain does the final encode.
 //
 // Composite order before ACES:
-//   RP.7d: add the half-res SSIL indirect colour (binding 2) into the HDR.
-//          SSIL A is cleared to 0 at creation time and stays at 0 when the
-//          pass is gated off, so the add is a no-op then.
-//   RP.5d: multiply the half-res SSAO term (binding 1) into the composited
-//          HDR. AO A is cleared to 1.0, so the multiply is a no-op when
-//          SSAO is gated off.
+//   RP.5d: multiply the half-res SSAO term (binding 1) into the HDR colour.
+//          AO A is cleared to 1.0, so the multiply is a no-op when SSAO is
+//          gated off.
 //   RP.9:  linear distance fog `mix(lit, fogColor, factor)` where
 //          `factor = computeFog(viewZ, start, end)` — applied pre-ACES so
 //          the panel-picked fog colour goes through the same tonemap curve
 //          as the sky / scene. Gated by `pc.fogColorEnabled.w > 0.5`;
-//          under MSAA the depth pyramid binding 3 is undefined (pyramid
+//          under MSAA the depth pyramid binding 2 is undefined (pyramid
 //          build is gated off) so RenderLoop forces w = 0 in that mode.
 //
 // RP.12a retired the bloom composite that previously consumed binding 4
 // and the bloomIntensity / bloomEnabled push-constant fields.
+// RP.13a retired the SSIL composite — binding 2 (SSIL) and the `+ ssil`
+// term are gone; depth pyramid moves up to binding 2.
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
 layout(set = 0, binding = 1) uniform sampler2D aoTexture;
-layout(set = 0, binding = 2) uniform sampler2D ssilTexture;
-layout(set = 0, binding = 3) uniform sampler2D linearDepthTexture;
+layout(set = 0, binding = 2) uniform sampler2D linearDepthTexture;
 
 layout(push_constant) uniform PushConstants {
     vec4 fogColorEnabled;  // rgb = colour, w = enabled (0.0 / 1.0)
@@ -60,9 +58,8 @@ float computeFog(float viewZ, float start, float end) {
 
 void main() {
     vec3 hdr = texture(hdrTexture, inUv).rgb;
-    vec3 ssil = texture(ssilTexture, inUv).rgb;
     float ao = texture(aoTexture, inUv).r;
-    vec3 lit = (hdr + ssil) * ao;
+    vec3 lit = hdr * ao;
 
     if (pc.fogColorEnabled.w > 0.5) {
         float viewZ = texture(linearDepthTexture, inUv).r;

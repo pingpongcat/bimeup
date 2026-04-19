@@ -311,54 +311,6 @@ TEST_F(RenderLoopTest, SsaoDispatchedDuringFrame) {
     m_renderLoop->WaitIdle();
 }
 
-// RP.7d — SSIL compute chain wired into RenderLoop: per-swap-image half-res
-// RGBA16F SSIL target + 1-frame-ring prev-HDR image, main + 2 blur dispatches
-// between SSAO and the tonemap pass, SSIL sampled by tonemap.frag and added
-// to the HDR colour. MSAA path gates off (inherits the depth pyramid gate);
-// SSIL A is cleared to 0 at creation so the tonemap add stays a no-op when
-// SSIL is skipped.
-TEST_F(RenderLoopTest, SsilFormatIsR16g16b16a16Sfloat) {
-    EXPECT_EQ(RenderLoop::SSIL_FORMAT, VK_FORMAT_R16G16B16A16_SFLOAT);
-}
-
-TEST_F(RenderLoopTest, SsilDispatchedDuringFrame) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    const glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    const glm::mat4 view = glm::lookAt(glm::vec3(0.0F, 0.0F, 5.0F),
-                                       glm::vec3(0.0F),
-                                       glm::vec3(0.0F, 1.0F, 0.0F));
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetView(view);
-    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*maxLuminance=*/0.5F,
-                                /*enabled=*/true);
-    // Exercises the full per-frame compute chain (pyramid + SSAO + SSIL main +
-    // 2 blur passes + HDR→prev-HDR copy) under Vulkan validation.
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetSsilImageView(i), VK_NULL_HANDLE)
-            << "SSIL view missing for swap image " << i;
-    }
-}
-
-TEST_F(RenderLoopTest, SsilSurvivesSampleCountChange) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetSampleCount(VK_SAMPLE_COUNT_4_BIT);
-    const uint32_t imageCount = m_swapchain->GetImageCount();
-    for (uint32_t i = 0; i < imageCount; ++i) {
-        EXPECT_NE(m_renderLoop->GetSsilImageView(i), VK_NULL_HANDLE);
-    }
-    // SSIL is gated off under MSAA — the pass early-returns so the cleared-0
-    // target flows straight through to the tonemap add as a no-op.
-    m_renderLoop->SetSsilParams(0.5F, 1.0F, 2.0F, /*maxLuminance=*/0.5F,
-                                /*enabled=*/true);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
 namespace {
 
 bimeup::renderer::OutlinePipeline::PushConstants MakeDefaultOutlinePush() {

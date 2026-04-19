@@ -106,17 +106,6 @@ void RenderQualityPanel::OnDraw() {
         ImGui::EndDisabled();
     }
 
-    if (ImGui::CollapsingHeader("SSIL")) {
-        auto& ssil = m_settings.ssil;
-        ImGui::Checkbox("Enabled", &ssil.enabled);
-        ImGui::BeginDisabled(!ssil.enabled);
-        ImGui::SliderFloat("Radius (m)", &ssil.radius, 0.05F, 2.0F, "%.2f");
-        ImGui::SliderFloat("Intensity", &ssil.intensity, 0.0F, 4.0F, "%.2f");
-        ImGui::SliderFloat("Normal rejection", &ssil.normalRejection, 0.0F, 16.0F, "%.1f");
-        ImGui::SliderFloat("Max luminance", &ssil.maxLuminance, 0.1F, 2.0F, "%.2f");
-        ImGui::EndDisabled();
-    }
-
     if (ImGui::CollapsingHeader("SMAA")) {
         auto& smaa = m_settings.smaa;
         ImGui::Checkbox("Enabled", &smaa.enabled);

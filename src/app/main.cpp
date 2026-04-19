@@ -1501,15 +1501,6 @@ int main(int argc, char* argv[]) {
 
         // RP.5d — feed the SSAO UBO + depth-linearize push constants.
         renderLoop.SetProjection(ubo.projection, camera.GetNearPlane(), camera.GetFarPlane());
-        // RP.7d — SSIL needs the current view matrix to build the reprojection
-        // against the cached prev-frame viewProj.
-        renderLoop.SetView(ubo.view);
-        {
-            const auto& ssilSettings = renderQualityPanel->GetSettings().ssil;
-            renderLoop.SetSsilParams(ssilSettings.radius, ssilSettings.intensity,
-                                     ssilSettings.normalRejection,
-                                     ssilSettings.maxLuminance, ssilSettings.enabled);
-        }
 
         // RP.6d — push panel-driven selection-outline parameters. texelSize
         // is filled in by RenderLoop per-frame from the current swapchain

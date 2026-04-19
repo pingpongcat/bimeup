@@ -71,15 +71,13 @@ protected:
         s_device = std::make_unique<Device>(s_context->GetInstance());
         s_renderPass = CreateColorOnlyRenderPass(s_device->GetDevice());
         // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
-        // (RP.5d), binding 2 = half-res SSIL (RP.7d), binding 3 = depth
-        // pyramid mip 0 for the RP.9b fog factor.
+        // (RP.5d), binding 2 = depth pyramid mip 0 for the RP.9b fog factor.
         s_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
@@ -154,12 +152,23 @@ TEST_F(TonemapPipelineTest, ConstructsWithMsaa4x) {
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
 }
 
-// RP.7d — tonemap.frag's third sampled binding is the half-res SSIL target.
-// Walks the SPIR-V OpDecorate stream and asserts a sampled image exists at
-// (set 0, binding 2); a regression that drops the binding would let the
-// renderer link a 2-binding layout against a 3-binding shader and only trip
-// at validation time.
-TEST_F(TonemapPipelineTest, FragmentShaderDeclaresSsilBindingAtLocationTwo) {
+TEST_F(TonemapPipelineTest, DestructorCleansUp) {
+    {
+        TonemapPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
+                                 m_samplerLayout->GetLayout(),
+                                 VK_SAMPLE_COUNT_1_BIT);
+        EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
+    }
+    // Validation layers would catch leaked pipeline/layout
+}
+
+// RP.9b — tonemap.frag's binding-2 sampler is the depth pyramid mip 0
+// source for the fog factor. RP.13a renumbered this from binding 3 down
+// to binding 2 after retiring SSIL. Walks the SPIR-V OpDecorate stream
+// and asserts a sampled image exists at (set 0, binding 2); a regression
+// that dropped the binding would let the renderer link a 2-binding
+// layout against a 3-binding shader and only trip at validation time.
+TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationTwo) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
     ASSERT_TRUE(file.good());
@@ -189,25 +198,16 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresSsilBindingAtLocationTwo) {
         idx += len;
     }
     EXPECT_TRUE(foundBinding2)
-        << "tonemap.frag SPIR-V missing expected binding 2 (SSIL)";
+        << "tonemap.frag SPIR-V missing expected binding 2 (depth pyramid)";
 }
 
-TEST_F(TonemapPipelineTest, DestructorCleansUp) {
-    {
-        TonemapPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                 m_samplerLayout->GetLayout(),
-                                 VK_SAMPLE_COUNT_1_BIT);
-        EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
-    }
-    // Validation layers would catch leaked pipeline/layout
-}
-
-// RP.9b — tonemap.frag's binding-3 sampler is the depth pyramid mip 0
-// source for the fog factor. Walks the SPIR-V OpDecorate stream and asserts
-// a sampled image exists at (set 0, binding 3); a regression that dropped
-// the binding would let the renderer link a 3-binding layout against a
-// 4-binding shader and only trip at validation time.
-TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
+// RP.13a — tonemap.frag must NOT declare a binding-3 sampler after SSIL
+// retirement moved depth pyramid down from binding 3 to binding 2. Walks
+// the SPIR-V OpDecorate stream and asserts no sampled image exists at
+// (set 0, binding 3); a regression that re-added a third sampler binding
+// would let a 4-binding shader link against the 3-binding CPU layout and
+// only trip at validation time.
+TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingThree) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
     ASSERT_TRUE(file.good());
@@ -218,7 +218,7 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
     const size_t wordCount = bytes.size() / sizeof(uint32_t);
 
     bool foundBinding3 = false;
-    size_t idx = 5;  // skip SPIR-V header
+    size_t idx = 5;
     while (idx < wordCount) {
         uint32_t word = w[idx];
         uint32_t opcode = word & 0xFFFFU;
@@ -226,18 +226,16 @@ TEST_F(TonemapPipelineTest, FragmentShaderDeclaresDepthBindingAtLocationThree) {
         if (len == 0 || idx + len > wordCount) {
             break;
         }
-        // OpDecorate = 71. Arguments: target, decoration, literals...
         if (opcode == 71 && len >= 4) {
             uint32_t decoration = w[idx + 2];
-            // Decoration::Binding = 33.
             if (decoration == 33 && w[idx + 3] == 3U) {
                 foundBinding3 = true;
             }
         }
         idx += len;
     }
-    EXPECT_TRUE(foundBinding3)
-        << "tonemap.frag SPIR-V missing expected binding 3 (depth pyramid)";
+    EXPECT_FALSE(foundBinding3)
+        << "tonemap.frag SPIR-V still declares binding 3 (SSIL retired in RP.13a)";
 }
 
 // RP.12a push-constant contract between tonemap.frag and the CPU struct

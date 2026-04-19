@@ -28,21 +28,19 @@ class DepthLinearizePipeline;
 class DepthMipPipeline;
 class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
-class SsilPipeline;
-class SsilBlurPipeline;
 
 class RenderLoop {
 public:
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
     // HDR offscreen format used between the scene render pass and the tonemap
     // resolve pass. Matches the Stage RP plan — enough dynamic range to keep
-    // bright lighting / future SSIL bounces from clipping before the curve.
+    // bright lighting from clipping before the curve.
     static constexpr VkFormat HDR_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
     // Normal G-buffer format — octahedron-packed view-space normal, two
     // signed 16-bit channels. Attachment 1 of the main render pass. Clear
     // value (0,0) decodes to +Z so overlay pipelines that leave this
     // attachment untouched (disableSecondaryColorWrites) don't corrupt
-    // SSAO/SSIL sampling downstream.
+    // SSAO sampling downstream.
     static constexpr VkFormat NORMAL_FORMAT = VK_FORMAT_R16G16_SNORM;
     // Outline stencil G-buffer format (RP.6c). Single-channel unsigned 8-bit
     // integer — 0 = background, 1 = selected, 2 = hovered. Attachment 2 of
@@ -52,7 +50,7 @@ public:
     static constexpr VkFormat STENCIL_FORMAT = VK_FORMAT_R8_UINT;
     // Depth pyramid format — view-space linear depth, single-channel float.
     // Used by the RP.4c/d depth_linearize + depth_mip compute chain and
-    // sampled by downstream SSAO/SSIL in RP.5/RP.7.
+    // sampled by SSAO (RP.5/RP.12e).
     static constexpr VkFormat DEPTH_PYRAMID_FORMAT = VK_FORMAT_R32_SFLOAT;
     // Mip levels in the depth pyramid (mip 0 = full res + 3 downsampled
     // levels). Matches the PLAN — enough range for SSAO's adaptive-radius
@@ -63,10 +61,6 @@ public:
     // separable blur smooths away the hemisphere-sample noise. Sampled by
     // the tonemap fragment shader and multiplied into the HDR colour.
     static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
-    // SSIL half-res indirect colour format (RP.7d). RGBA16F — the pass carries
-    // bounced colour (not just a scalar like SSAO), and the values need enough
-    // headroom for a composite-add into the HDR target before ACES.
-    static constexpr VkFormat SSIL_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir,
@@ -111,7 +105,7 @@ public:
     [[nodiscard]] VkRenderPass GetPresentRenderPass() const;
     /// View into the single-sample normal G-buffer for the given swap image
     /// index (same index domain as `GetCurrentImageIndex()`). Will be read by
-    /// SSAO / SSIL / outline passes in later RP tasks. Returns VK_NULL_HANDLE
+    /// SSAO / outline passes in later RP tasks. Returns VK_NULL_HANDLE
     /// only if the index is out of range.
     [[nodiscard]] VkImageView GetNormalImageView(uint32_t imageIndex) const;
     /// View into the single-sample outline-stencil G-buffer (R8_UINT) for the
@@ -122,7 +116,7 @@ public:
     /// Full-mip-chain sampled view of the depth pyramid for the given swap
     /// image index (R32_SFLOAT, mips 0..DEPTH_PYRAMID_MIPS-1 of view-space
     /// linear depth). Bind with a mipmap-aware sampler and select mips via
-    /// `textureLod`; downstream SSAO/SSIL will consume this in later RP
+    /// `textureLod`; downstream SSAO will consume this in later RP
     /// tasks. Returns VK_NULL_HANDLE if the index is out of range.
     [[nodiscard]] VkImageView GetDepthPyramidView(uint32_t imageIndex) const;
     /// Final post-blur AO target (R8_UNORM, half-res) for the given swap
@@ -130,11 +124,6 @@ public:
     /// tonemap fragment shader. Returns VK_NULL_HANDLE if the index is out
     /// of range.
     [[nodiscard]] VkImageView GetAoImageView(uint32_t imageIndex) const;
-    /// Final post-blur SSIL target (RGBA16F, half-res) for the given swap
-    /// image. Written by the RP.7d SSIL compute chain and sampled by the
-    /// tonemap fragment shader as an additive indirect-colour contribution.
-    /// Returns VK_NULL_HANDLE if the index is out of range.
-    [[nodiscard]] VkImageView GetSsilImageView(uint32_t imageIndex) const;
 
     /// Camera projection matrix + near/far plane values. Projection feeds
     /// the SSAO UBO (mat4 proj + mat4 invProj) so view-space sample
@@ -143,26 +132,6 @@ public:
     /// `renderer::LinearizeDepth`. Call each frame after the camera has
     /// been updated. Defaults are (identity, 0.1, 10000).
     void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
-
-    /// Camera view matrix for the current frame. Fed into the SSIL reprojection
-    /// (RP.7d): the ssil_main.comp UBO carries
-    /// `prevViewProj * currInvViewProj`, so `SetView` must be called before
-    /// `EndFrame` any frame SSIL is enabled. Defaults to identity.
-    void SetView(const glm::mat4& view);
-
-    /// RP.7d — SSIL (screen-space indirect lighting) parameters.
-    /// `radius`  : view-space sample radius (metres)
-    /// `intensity` : scale on the accumulated indirect colour
-    /// `normalRejection` : exponent on the `dot(nCurr, nSampled)` lobe (higher
-    ///                     narrows the acceptance cone; 0 disables rejection)
-    /// `maxLuminance` : RP.12c per-channel cap on the post-accumulation
-    ///                  indirect colour (caps wide-area glow on uniformly-lit
-    ///                  walls while preserving hue — see `ssil_main.comp`).
-    /// `enabled` : when false (or when MSAA is on — SSIL inherits the depth-
-    ///             pyramid gate) the compute dispatches are skipped and the
-    ///             target stays at its cleared 0 so the tonemap add is a no-op.
-    void SetSsilParams(float radius, float intensity, float normalRejection,
-                       float maxLuminance, bool enabled);
 
     /// RP.6d — selection/hover outline pass parameters. The outline draw is
     /// recorded inside the present pass between the tonemap fullscreen tri
@@ -189,10 +158,10 @@ public:
     /// the tonemap pipeline's push constants. When `enabled` is false the
     /// push constant's enable flag is zeroed so the shader skips the depth
     /// tap + mix. Under MSAA the depth pyramid isn't built (pyramid
-    /// compute is `sampler2D`-only), so the tonemap sampler at binding 3
+    /// compute is `sampler2D`-only), so the tonemap sampler at binding 2
     /// would read undefined contents — this method forces the enable flag
     /// off in that mode regardless of `enabled`, matching the
-    /// SSAO/SSIL/outline gating pattern.
+    /// SSAO/outline gating pattern.
     void SetFogParams(const glm::vec3& color, float start, float end, bool enabled);
 
     /// Pre-ACES exposure multiplier applied to the composited HDR colour
@@ -200,7 +169,6 @@ public:
     /// — identity. The panel seeds a scene-appropriate value so the three-
     /// point lighting (ambient + key + fill + rim can sum to ~2.x on a
     /// bright surface) doesn't saturate the ACES curve into near-white.
-    /// Does not interact with MSAA — applied unconditionally each frame.
     void SetExposure(float exposure);
 
     [[nodiscard]] VkSampleCountFlagBits GetPresentSampleCount() const {
@@ -247,16 +215,6 @@ private:
     void RunSsao(VkCommandBuffer cmd);
     void CleanupSsaoResources();
     void CleanupSsaoDescriptors();
-    void CreateSsilDescriptors();
-    void CreateSsilPipelines();
-    void CreateSsilResources();
-    void UpdateSsilDescriptors();
-    void ClearSsilTargetsToZero();
-    void UploadSsilUbo(uint32_t imageIndex);
-    void RunSsil(VkCommandBuffer cmd);
-    void CopyHdrToPrevHdr(VkCommandBuffer cmd);
-    void CleanupSsilResources();
-    void CleanupSsilDescriptors();
     void CreateOutlineDescriptors();
     void CreateOutlinePipeline();
     void UpdateOutlineDescriptors();
@@ -321,7 +279,7 @@ private:
     std::vector<VmaAllocation> m_hdrAllocations;
     // Per-swapchain-image normal G-buffer target (R16G16_SNORM, oct-packed
     // view-space normal). Written by `basic.frag` at layout(location=1); will
-    // be sampled by SSAO/SSIL/outline passes later in Stage RP.
+    // be sampled by SSAO/outline passes later in Stage RP.
     std::vector<VkImage> m_normalImages;
     std::vector<VkImageView> m_normalImageViews;
     std::vector<VmaAllocation> m_normalAllocations;
@@ -365,7 +323,7 @@ private:
     std::vector<VkDescriptorSet> m_tonemapDescriptorSets;
 
     // Depth pyramid (RP.4c/d). Per swap image: one 4-mip R32_SFLOAT image,
-    // one full-chain sampled view (for downstream SSAO/SSIL), and four
+    // one full-chain sampled view (for downstream SSAO), and four
     // single-mip views (used as both sampled source and storage target by
     // the compute dispatches). Descriptor sets are laid out per-image as
     // [0] = linearize (depth → mip 0), [N≥1] = mip downsample (mip N-1 →
@@ -425,56 +383,6 @@ private:
     std::unique_ptr<Shader> m_ssaoBlurShader;
     std::unique_ptr<SsaoXeGtaoPipeline> m_ssaoPipeline;
     std::unique_ptr<SsaoBlurPipeline> m_ssaoBlurPipeline;
-
-    // SSIL (RP.7d). Mirrors the SSAO resource layout with two key additions:
-    // (1) a previous-frame HDR ring sampled by `ssil_main.comp` through the
-    //     binding-2 UBO — one image per swap slot; HDR is copied into it at the
-    //     end of each frame so the next time that swap slot renders, the
-    //     previous contents are available. On resize / MSAA-change we rebuild
-    //     + clear to 0 so the first frame's SSIL contribution is "no bounce".
-    // (2) a cached `prevViewProj` per swap image; combined with the current
-    //     frame's inverse viewProj it produces the `reprojection` matrix that
-    //     `ssil_main.comp` uses to find a tap's UV in the previous frame.
-    // Target A/B ping-pong layout matches SSAO exactly: main writes A, H-blur
-    // reads A writes B, V-blur reads B writes A; A is sampled by the tonemap
-    // pass at the end of the frame.
-    glm::mat4 m_view{1.0F};
-    std::vector<glm::mat4> m_prevViewProj;
-    std::vector<VkImage> m_ssilImagesA;
-    std::vector<VkImage> m_ssilImagesB;
-    std::vector<VmaAllocation> m_ssilAllocationsA;
-    std::vector<VmaAllocation> m_ssilAllocationsB;
-    std::vector<VkImageView> m_ssilViewsA;
-    std::vector<VkImageView> m_ssilViewsB;
-    std::vector<VkImage> m_prevHdrImages;
-    std::vector<VmaAllocation> m_prevHdrAllocations;
-    std::vector<VkImageView> m_prevHdrImageViews;
-    VkExtent2D m_ssilExtent = {0, 0};
-    VkSampler m_ssilSampler = VK_NULL_HANDLE;
-    // RP.12c.2 — NEAREST sampler for the stencil-G-buffer binding (binding 5
-    // on the SSIL main set). Integer formats (R8_UINT) don't support linear
-    // filtering, and the SSIL per-tap gate just wants the raw texel value.
-    VkSampler m_ssilStencilSampler = VK_NULL_HANDLE;
-    std::vector<std::unique_ptr<Buffer>> m_ssilUbos;
-    VkDescriptorSetLayout m_ssilMainSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_ssilBlurSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_ssilDescriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_ssilMainSets;
-    std::vector<VkDescriptorSet> m_ssilBlurSetsH;
-    std::vector<VkDescriptorSet> m_ssilBlurSetsV;
-    std::unique_ptr<Shader> m_ssilMainShader;
-    std::unique_ptr<Shader> m_ssilBlurShader;
-    std::unique_ptr<SsilPipeline> m_ssilPipeline;
-    std::unique_ptr<SsilBlurPipeline> m_ssilBlurPipeline;
-    float m_ssilRadius = 0.5F;
-    float m_ssilIntensity = 1.0F;
-    float m_ssilNormalRejection = 2.0F;
-    // RP.12c per-channel luminance cap pushed into `ssil_main.comp`'s post-
-    // accumulation clamp. Driven by the panel "Max luminance" slider via
-    // `SetSsilParams`; default matches `SsilSettings::maxLuminance`.
-    float m_ssilMaxLuminance = 0.5F;
-    bool m_ssilEnabled = false;
-    uint32_t m_ssilFrameCounter = 0;
 
     // Outline pass (RP.6d). Per swap image: one combined descriptor set
     // sampling (binding 0 = stencil id R8_UINT usampler2D, binding 1 =

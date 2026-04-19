@@ -19,21 +19,6 @@ struct OutlineSettings {
     float depthEdgeThreshold{0.05F};  // metres — Sobel cutoff for the within-selection fallback
 };
 
-// RP.7d SSIL (screen-space indirect lighting) knobs. The renderer gates the
-// pass off under MSAA (inherits the depth-pyramid gate) regardless of the
-// `enabled` flag; the flag primarily drives the dispatch for the non-MSAA
-// path. RP.12c tuning: default intensity lowered to 0.15 (wide-area bounces
-// were dominating the tonemapped frame at 1.0), and `maxLuminance` caps the
-// per-channel post-accumulation contribution so uniformly-lit walls can't
-// glow past the cap even when 64 taps all agree.
-struct SsilSettings {
-    bool enabled{false};
-    float radius{0.5F};
-    float intensity{0.15F};
-    float normalRejection{2.0F};
-    float maxLuminance{0.5F};
-};
-
 // RP.11c SMAA 1x post-process knobs. The renderer runs the blend draw
 // unconditionally (it's the only path from the LDR intermediate to the
 // swapchain); when `enabled` is false the edge + weights passes are
@@ -58,7 +43,6 @@ struct RenderQualitySettings {
     float exposure{0.6F};
 
     OutlineSettings outline{};
-    SsilSettings ssil{};
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     renderer::FogSettings fog{};      // RP.9b
 };
