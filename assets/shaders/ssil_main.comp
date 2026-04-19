@@ -1,0 +1,169 @@
+#version 450
+
+// Screen-space indirect lighting (RP.7b). Port of the Intel/Godot
+// `ssil.glsl`: samples a hemisphere kernel in view space around the shaded
+// pixel, reprojects each tap into the **previous** frame's HDR target via a
+// pre-baked reprojection matrix (from `renderer::ComputeReprojectionMatrix`),
+// and accumulates the colour there as a one-bounce indirect contribution.
+// Companion to `ssao_main.comp`: same hemisphere shape and view-space
+// reconstruction (the GLSL helpers here are byte-identical), but colour-
+// carrying and temporally-reprojected.
+//
+// Inputs bound at set 0:
+//   binding 0 : linear depth pyramid     (r32f sampler2D, full chain)
+//   binding 1 : view-space normal G-buffer (rg16 snorm sampler2D, oct-packed)
+//   binding 2 : previous-frame HDR       (rgba16f sampler2D)
+//   binding 3 : SsilUbo { proj, invProj, reprojection, kernel[64] }
+//   binding 4 : half-res RGBA16F SSIL output (writeonly storage image)
+//
+// Push constants carry the runtime-tweakable knobs (radius, intensity,
+// normalRejection, frameSeed). The tonemap pass composites the output with
+// `hdr + ssil` before ACES; the RP.7c blur fills in the missing detail
+// between half-res taps. Dispatch in 8×8 tiles sized to the half-res output.
+
+#define SSIL_KERNEL_SIZE 64
+
+layout(set = 0, binding = 0) uniform sampler2D linearDepthPyramid;
+layout(set = 0, binding = 1) uniform sampler2D normalGBuffer;
+layout(set = 0, binding = 2) uniform sampler2D previousHdr;
+
+layout(std140, set = 0, binding = 3) uniform SsilUbo {
+    mat4 proj;            // view-pos → clip (current frame)
+    mat4 invProj;         // UV + linDepth → view-pos (current frame)
+    mat4 reprojection;    // prevViewProj * currInvViewProj — current clip →
+                          // previous clip
+    vec4 kernel[SSIL_KERNEL_SIZE];  // .xyz = +z-hemisphere sample; .w unused
+} ubo;
+
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D ssilOut;
+
+layout(push_constant) uniform Push {
+    float radius;
+    float intensity;
+    float normalRejection;
+    float frameSeed;
+} push;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Octahedron unpack — byte-identical to `renderer::OctUnpackNormal` and the
+// GLSL mirror in basic.frag / ssao_main.comp. Duplicated here rather than
+// #included so the shader is self-contained.
+vec3 OctUnpackNormal(vec2 e) {
+    vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
+
+// Reconstruct view-space position from UV + linear depth — mirror of
+// `renderer::ReconstructViewPosFromDepth` / ssao_main.comp.
+vec3 ReconstructViewPos(vec2 uv, float linearDepth) {
+    vec4 ndc = vec4((uv * 2.0) - 1.0, 1.0, 1.0);
+    vec4 viewH = ubo.invProj * ndc;
+    vec3 view = viewH.xyz / viewH.w;
+    float scale = -linearDepth / view.z;
+    return view * scale;
+}
+
+// Interleaved gradient noise — Jimenez 2014; perturbed by `frameSeed` so the
+// per-frame rotation changes and the blur (RP.7c) can average out the
+// resulting jitter.
+float Ign(vec2 p) {
+    vec2 q = p + vec2(push.frameSeed, push.frameSeed * 0.5);
+    return fract(52.9829189 * fract((0.06711056 * q.x) + (0.00583715 * q.y)));
+}
+
+// Normal-rejection weight — GLSL mirror of
+// `renderer::SsilNormalRejectionWeight`. Sampled pixels whose normal faces
+// away from the shaded pixel's normal contribute little or nothing (a surface
+// that can't physically see the shaded point shouldn't bounce light onto it).
+float NormalRejectionWeight(vec3 nCurr, vec3 nSampled, float strength) {
+    float d = max(dot(nCurr, nSampled), 0.0);
+    return pow(d, strength);
+}
+
+void main() {
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(ssilOut);
+    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(outCoord) + 0.5) / vec2(outSize);
+
+    float centerDepth = textureLod(linearDepthPyramid, uv, 0.0).r;
+    // Sky / background: depth pyramid carries `far` where nothing drew. Emit
+    // zero contribution — sky doesn't receive indirect bounces in this model.
+    if (centerDepth >= 9999.0) {
+        imageStore(ssilOut, outCoord, vec4(0.0));
+        return;
+    }
+
+    vec3 viewPos = ReconstructViewPos(uv, centerDepth);
+    vec2 normalEnc = texture(normalGBuffer, uv).rg;
+    vec3 normal = OctUnpackNormal(normalEnc);
+
+    // Per-pixel TBN with an IGN-rotated tangent. Gram-Schmidt keeps it
+    // perpendicular to `normal`. Same construction as ssao_main.comp.
+    float rot = Ign(vec2(outCoord)) * 6.2831853;
+    vec3 randomVec = vec3(cos(rot), sin(rot), 0.0);
+    vec3 tangent = normalize(randomVec - (normal * dot(randomVec, normal)));
+    vec3 bitangent = cross(normal, tangent);
+    mat3 tbn = mat3(tangent, bitangent, normal);
+
+    vec3 indirect = vec3(0.0);
+    float weightSum = 0.0;
+
+    for (int i = 0; i < SSIL_KERNEL_SIZE; ++i) {
+        vec3 samplePosView = viewPos + ((tbn * ubo.kernel[i].xyz) * push.radius);
+
+        // Forward-project the tap through the current-frame proj to find its
+        // current-frame UV (the pixel on screen the ray would hit), and also
+        // reproject via `reprojection` into the previous-frame clip space to
+        // read last frame's HDR at that point.
+        vec4 currClip = ubo.proj * vec4(samplePosView, 1.0);
+        vec3 currNdc = currClip.xyz / currClip.w;
+        vec2 currUv = (currNdc.xy * 0.5) + 0.5;
+
+        // Out-of-frustum taps contribute nothing (avoids sampler-clamp smear).
+        if (currUv.x < 0.0 || currUv.x > 1.0 ||
+            currUv.y < 0.0 || currUv.y > 1.0) {
+            continue;
+        }
+
+        // Normal rejection: read the tap's normal from the current-frame
+        // G-buffer and attenuate by how well it agrees with the shaded
+        // pixel's normal.
+        vec2 sampleNormalEnc = texture(normalGBuffer, currUv).rg;
+        vec3 sampleNormal = OctUnpackNormal(sampleNormalEnc);
+        float nWeight = NormalRejectionWeight(normal, sampleNormal,
+                                              push.normalRejection);
+        if (nWeight <= 0.0) {
+            continue;
+        }
+
+        // Reproject into previous-frame UV to sample last frame's HDR. The
+        // reprojection matrix is pre-multiplied so we don't need the prev
+        // proj/view separately: `reprojection * currClip` lands in previous
+        // clip space directly.
+        vec4 prevClip = ubo.reprojection * currClip;
+        vec3 prevNdc = prevClip.xyz / prevClip.w;
+        vec2 prevUv = (prevNdc.xy * 0.5) + 0.5;
+        if (prevUv.x < 0.0 || prevUv.x > 1.0 ||
+            prevUv.y < 0.0 || prevUv.y > 1.0) {
+            continue;
+        }
+
+        vec3 bounced = textureLod(previousHdr, prevUv, 0.0).rgb;
+        indirect += bounced * nWeight;
+        weightSum += nWeight;
+    }
+
+    vec3 ssil = (weightSum > 0.0)
+                    ? (indirect / weightSum) * push.intensity
+                    : vec3(0.0);
+
+    imageStore(ssilOut, outCoord, vec4(ssil, 1.0));
+}
