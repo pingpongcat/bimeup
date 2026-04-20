@@ -39,6 +39,7 @@
 #include <scene/SceneBuilder.h>
 #include <scene/SceneNode.h>
 #include <scene/SectionCapGeometry.h>
+#include <scene/SectionEdgeGeometry.h>
 #include <tools/Log.h>
 #include <ui/AxisSectionPanel.h>
 #include <ui/FirstPersonExitPanel.h>
@@ -533,6 +534,7 @@ int main(int argc, char* argv[]) {
     buildSectionFillPipeline();
 
     bimeup::scene::SectionCapGeometry sectionCapGeometry(device);
+    bimeup::scene::SectionEdgeGeometry sectionEdgeGeometry(device);
 
     // Disk marker pipeline + GPU buffer for the PoV hover preview.
     std::unique_ptr<bimeup::renderer::DiskMarkerPipeline> diskMarkerPipeline;
@@ -1618,6 +1620,31 @@ int main(int argc, char* argv[]) {
                     VkDeviceSize offset = 0;
                     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
                     vkCmdDraw(cmd, sectionCapGeometry.GetVertexCount(), 1, 0, 0);
+                }
+
+                // RP.17.8.b — outline every section-cap element so cross
+                // sections read like a floor plan (filled rooms, outlined
+                // walls). Drawn with the same pipeline as the feature-edge
+                // overlay but independent of the "Edges" toggle — section
+                // outlines are an architectural-drawing expectation, not a
+                // stylistic choice. Positions are already world-space, so
+                // push an identity model matrix.
+                sectionEdgeGeometry.Rebuild(sceneResult->scene, sceneResult->meshes,
+                                            clipPlaneManager);
+                if (!sectionEdgeGeometry.IsEmpty()) {
+                    edgeOverlayPipeline->Bind(cmd);
+                    descriptorSet.Bind(cmd, edgeOverlayPipeline->GetLayout());
+                    const glm::mat4 identity(1.0F);
+                    vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
+                                       VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                       sizeof(glm::mat4), &identity);
+                    vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
+                                       VK_SHADER_STAGE_FRAGMENT_BIT, 64,
+                                       sizeof(glm::vec4), &kEdgeColor);
+                    VkBuffer vb = sectionEdgeGeometry.GetVertexBuffer();
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+                    vkCmdDraw(cmd, sectionEdgeGeometry.GetVertexCount(), 1, 0, 0);
                 }
             }
         }

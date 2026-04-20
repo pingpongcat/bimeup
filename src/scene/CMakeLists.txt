@@ -7,6 +7,8 @@ add_library(bimeup_scene STATIC
     src/Snap.cpp
     src/Slicing.cpp
     src/SectionCapGeometry.cpp
+    src/SectionEdgeGeometry.cpp
+    src/SectionSlice.cpp
     src/AxisSectionController.cpp
     src/EdgeExtractor.cpp
 )

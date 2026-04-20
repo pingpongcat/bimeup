@@ -8,6 +8,7 @@ add_executable(test_scene
     test_snap.cpp
     test_slicing.cpp
     test_section_cap_geometry.cpp
+    test_section_edge_geometry.cpp
     test_axis_section_controller.cpp
     test_edge_extractor.cpp
 )
