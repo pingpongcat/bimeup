@@ -46,6 +46,7 @@ add_library(bimeup_renderer STATIC
     src/RtAoPass.cpp
     src/RtIndoorPass.cpp
     src/RtSunCompositePipeline.cpp
+    src/RtIndoorCompositePipeline.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
