@@ -26,7 +26,8 @@ public:
                         VkRenderPass renderPass,
                         VkDescriptorSetLayout cameraLayout,
                         uint32_t colorAttachmentCount = 1,
-                        bool disableSecondaryColorWrites = false);
+                        bool disableSecondaryColorWrites = false,
+                        bool smoothLines = false);
     ~EdgeOverlayPipeline();
 
     EdgeOverlayPipeline(const EdgeOverlayPipeline&) = delete;

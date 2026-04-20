@@ -2,21 +2,23 @@
 #include <renderer/Device.h>
 #include <tools/Log.h>
 
-#include <array>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace bimeup::renderer {
 
 Device::Device(VkInstance instance) {
     PickPhysicalDevice(instance, VK_NULL_HANDLE);
+    ProbeLineRasterization();
     CreateLogicalDevice(false);
     CreateAllocator(instance);
 }
 
 Device::Device(VkInstance instance, VkSurfaceKHR surface) {
     PickPhysicalDevice(instance, surface);
+    ProbeLineRasterization();
     CreateLogicalDevice(true);
     CreateAllocator(instance);
 }
@@ -163,7 +165,23 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     // and the spec requires this feature for non-uniform blend state.
     deviceFeatures.independentBlend = VK_TRUE;
 
-    std::array<const char*, 1> swapchainExt = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<const char*> enabledExtensions;
+    if (enableSwapchain) {
+        enabledExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    if (m_hasSmoothLines) {
+        enabledExtensions.push_back(VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME);
+    }
+
+    // Chain `smoothLines` into the feature struct so the EdgeOverlayPipeline
+    // can ask for `RECTANGULAR_SMOOTH_EXT` line rasterization. Only chained
+    // when the device supports it; `m_hasSmoothLines` was negotiated in
+    // `ProbeLineRasterization` against the physical device's capabilities.
+    VkPhysicalDeviceLineRasterizationFeaturesEXT lineFeatures{};
+    lineFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT;
+    lineFeatures.smoothLines = m_hasSmoothLines ? VK_TRUE : VK_FALSE;
+    lineFeatures.rectangularLines = m_hasSmoothLines ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -171,12 +189,11 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.enabledLayerCount = 0;
-
-    if (enableSwapchain) {
-        createInfo.enabledExtensionCount = static_cast<uint32_t>(swapchainExt.size());
-        createInfo.ppEnabledExtensionNames = swapchainExt.data();
-    } else {
-        createInfo.enabledExtensionCount = 0;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.ppEnabledExtensionNames =
+        enabledExtensions.empty() ? nullptr : enabledExtensions.data();
+    if (m_hasSmoothLines) {
+        createInfo.pNext = &lineFeatures;
     }
 
     VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
@@ -217,6 +234,47 @@ int Device::RateDevice(VkPhysicalDevice device) {
     score += static_cast<int>(localHeapBytes >> 30);  // +1 per GiB of VRAM
 
     return score;
+}
+
+void Device::ProbeLineRasterization() {
+    // Query device extensions for `VK_EXT_line_rasterization`; if present,
+    // chain the feature query to see if `smoothLines` is supported. Both
+    // must be true to enable coverage-based line AA on the edge overlay.
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> extProps(extCount);
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, extProps.data());
+
+    bool extSupported = false;
+    for (const auto& ext : extProps) {
+        if (std::string_view(ext.extensionName) == VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME) {
+            extSupported = true;
+            break;
+        }
+    }
+    if (!extSupported) {
+        if (bimeup::tools::Log::GetLogger()) {
+            LOG_INFO("Edge overlay AA: VK_EXT_line_rasterization not supported "
+                     "— falling back to aliased 1-px lines");
+        }
+        return;
+    }
+
+    VkPhysicalDeviceLineRasterizationFeaturesEXT lineFeatures{};
+    lineFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT;
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &lineFeatures;
+    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
+
+    m_hasSmoothLines =
+        (lineFeatures.smoothLines == VK_TRUE) && (lineFeatures.rectangularLines == VK_TRUE);
+    if (bimeup::tools::Log::GetLogger()) {
+        LOG_INFO("Edge overlay AA: {}",
+                 m_hasSmoothLines ? "VK_EXT_line_rasterization smoothLines enabled"
+                                  : "smoothLines feature unavailable — aliased lines");
+    }
 }
 
 bool Device::FindGraphicsQueueFamily(VkPhysicalDevice device, uint32_t& index) {

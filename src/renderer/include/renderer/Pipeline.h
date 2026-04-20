@@ -25,6 +25,12 @@ struct PipelineConfig {
     bool depthBiasEnable = false;
     float depthBiasConstantFactor = 0.0F;
     float depthBiasSlopeFactor = 0.0F;
+    // RP.17.7 — when true, chains `VkPipelineRasterizationLineStateCreateInfoEXT`
+    // onto the rasterizer with `RECTANGULAR_SMOOTH_EXT`, giving the GPU driver
+    // coverage-based line anti-aliasing. Caller must ensure the device was
+    // created with `VK_EXT_line_rasterization` + `smoothLines` enabled (see
+    // `Device::HasSmoothLines`); ignored when topology isn't a line type.
+    bool smoothLines = false;
     bool alphaBlendEnable = false;
     // RP.10c — when true, attachment 0's blend state is configured as
     // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =

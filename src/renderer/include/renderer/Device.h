@@ -24,10 +24,18 @@ public:
     [[nodiscard]] uint32_t GetPresentQueueFamily() const;
     [[nodiscard]] VmaAllocator GetAllocator() const;
 
+    /// RP.17.7 — true when the device exposes `VK_EXT_line_rasterization` with
+    /// the `smoothLines` feature. Pipelines that want coverage-based line AA
+    /// (e.g. the edge overlay) should gate their `smoothLines` pipeline flag on
+    /// this. When false, line-rasterization falls back to the default aliased
+    /// Bresenham path silently.
+    [[nodiscard]] bool HasSmoothLines() const { return m_hasSmoothLines; }
+
 private:
     void CreateAllocator(VkInstance instance);
     void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
     void CreateLogicalDevice(bool enableSwapchain);
+    void ProbeLineRasterization();
     static int RateDevice(VkPhysicalDevice device);
     static bool FindGraphicsQueueFamily(VkPhysicalDevice device, uint32_t& index);
     static bool FindPresentQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface,
@@ -40,6 +48,7 @@ private:
     uint32_t m_graphicsQueueFamily = 0;
     uint32_t m_presentQueueFamily = 0;
     bool m_hasPresentQueue = false;
+    bool m_hasSmoothLines = false;
     VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 

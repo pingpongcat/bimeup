@@ -556,7 +556,8 @@ int main(int argc, char* argv[]) {
         edgeOverlayPipeline = std::make_unique<bimeup::renderer::EdgeOverlayPipeline>(
             device, edgeOverlayVertShader, edgeOverlayFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(),
-            /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
+            /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true,
+            /*smoothLines=*/device.HasSmoothLines());
     };
     buildEdgeOverlayPipeline();
     // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"

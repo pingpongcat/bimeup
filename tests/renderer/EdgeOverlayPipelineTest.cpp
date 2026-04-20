@@ -160,6 +160,22 @@ TEST_F(EdgeOverlayPipelineTest, ConstructsForMrtMainPass) {
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
 }
 
+TEST_F(EdgeOverlayPipelineTest, ConstructsWithSmoothLinesWhenSupported) {
+    if (!m_device->HasSmoothLines()) {
+        GTEST_SKIP() << "VK_EXT_line_rasterization / smoothLines not supported "
+                        "by this device — falling back to aliased lines.";
+    }
+    m_pipeline = std::make_unique<EdgeOverlayPipeline>(
+        *m_device, *m_vert, *m_frag, m_renderPass,
+        m_cameraLayout->GetLayout(),
+        /*colorAttachmentCount=*/1,
+        /*disableSecondaryColorWrites=*/false,
+        /*smoothLines=*/true);
+
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+    EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
+}
+
 TEST_F(EdgeOverlayPipelineTest, DestructorCleansUp) {
     {
         EdgeOverlayPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,

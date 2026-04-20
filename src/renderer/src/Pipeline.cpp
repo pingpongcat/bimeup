@@ -96,6 +96,15 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     rasterizer.depthBiasSlopeFactor = config.depthBiasSlopeFactor;
     rasterizer.depthBiasClamp = 0.0F;
 
+    // RP.17.7 — coverage-based line AA via VK_EXT_line_rasterization.
+    VkPipelineRasterizationLineStateCreateInfoEXT lineState{};
+    if (config.smoothLines) {
+        lineState.sType =
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT;
+        lineState.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
+        rasterizer.pNext = &lineState;
+    }
+
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;

@@ -266,3 +266,21 @@ Strictly linear — each step's output is the next step's input. 17.1 and 17.2 b
 
 ---
 
+### RP.17.7 — Smooth-line rasterization via `VK_EXT_line_rasterization` (added 2026-04-20)
+
+After RP.17.5 shipped, the 1-px aliased line overlay reads poorly on sloped wall corners and window reveals — SMAA is post-process and too coarse to catch the thin high-contrast line on its own. Instead of a quad-expansion + SDF rewrite (the CAD-standard, but a full session's work), start with the GPU-provided path: request `VK_EXT_line_rasterization` with `rectangularLines` + `smoothLines`, and chain `VkPipelineRasterizationLineStateCreateInfoEXT` onto the `EdgeOverlayPipeline` with `VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT`. Driver does coverage-based AA, the overlay's existing alpha-blend state composites the partial coverage correctly. If the extension is absent (headless CI, some mobile drivers), fall back silently to aliased lines — log once at device init.
+
+**Scope**
+- **In:** `Device` queries + optionally enables `VK_EXT_line_rasterization` and the `smoothLines` feature; `Device::HasSmoothLines()` accessor; `PipelineConfig::smoothLines` bool gate; `Pipeline.cpp` chains the line-state struct when set; `EdgeOverlayPipeline` ctor takes a `smoothLines` flag and forwards it; `main.cpp` passes `device.HasSmoothLines()` at pipeline build.
+- **Out:** Stippled / dashed lines (different `VkLineRasterizationModeEXT`, separate UX question), wide lines (still 1-px), fallback quad-expansion for driver-less paths (deferred to a potential RP.17.8 if silent fallback proves inadequate).
+
+**Tasks**
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.17.7 | Enable smooth-line rasterization on the edge overlay. `Device` queries `VK_EXT_line_rasterization` + `VkPhysicalDeviceLineRasterizationFeaturesEXT.smoothLines` at physical-device pick; when both are available, adds the extension to the device create list and chains the features struct on `VkDeviceCreateInfo.pNext`. `HasSmoothLines()` returns the negotiated flag. `PipelineConfig` grows `bool smoothLines = false`; `Pipeline.cpp` chains `VkPipelineRasterizationLineStateCreateInfoEXT{lineRasterizationMode = RECTANGULAR_SMOOTH_EXT}` onto the rasterizer when true. `EdgeOverlayPipeline` takes a `smoothLines` ctor param; `main.cpp` passes `device.HasSmoothLines()`. | Extend `EdgeOverlayPipelineTest` with a `ConstructsWithSmoothLinesWhenSupported` case: `GTEST_SKIP` when `HasSmoothLines()` is false, else assert the pipeline builds with the flag on. Keeps the existing build tests unchanged. | `renderer/Device.{h,cpp}`, `renderer/Pipeline.{h,cpp}`, `renderer/EdgeOverlayPipeline.{h,cpp}`, `app/main.cpp`, `tests/renderer/EdgeOverlayPipelineTest.cpp` |
+
+**Stage framing**: same as RP.17 — stage RP re-opens a fifth time for a one-task polish that couldn't be predicted at RP.17 kickoff. Stage gate: full `ctest -j$(nproc) --output-on-failure`.
+
+---
+
