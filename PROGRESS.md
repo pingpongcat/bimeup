@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
-## Current Task: 9.1 RT-capability probe + BLAS per mesh — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
+## Current Task: 9.1.b BLAS-per-mesh (`renderer::AccelerationStructure`) — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -254,6 +254,8 @@ Stage gate at end of Stage RP: full `ctest -j$(nproc) --output-on-failure` all p
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.
 - [ ] 9.1 RT-capability probe + BLAS per mesh (`AccelerationStructure`)
+  - [x] 9.1.a `Device::HasRayTracing()` probe — enumerates `VK_KHR_acceleration_structure` + `ray_tracing_pipeline` + `deferred_host_operations`, queries `accelerationStructure` / `rayTracingPipeline` + 1.2-core `bufferDeviceAddress` / `descriptorIndexing`. RT extensions + feature chain (`VkPhysicalDeviceVulkan12Features` + AS/RT KHR structs) enabled on the logical device. Retry-without-RT fallback when `vkCreateDevice` rejects the chain (observed on NVIDIA 595 headless) so classical path always stays live. `HasRayTracing()` reflects the post-create truth.
+  - [ ] 9.1.b `renderer::AccelerationStructure` — BLAS-per-mesh build from `MeshData`, dispatch-pointer load via `vkGetDeviceProcAddr`, no-op when `device.HasRayTracing() == false`.
 - [ ] 9.2 TLAS build from scene instances (built only when an RT mode is active)
 - [ ] 9.3 RT pipeline + SBT (raygen / closest-hit / miss / any-hit), built lazily
 - [ ] 9.4 RT sun shadows — *additive* alongside shadow-map path; Hybrid picks RT, Rasterised still uses PCF

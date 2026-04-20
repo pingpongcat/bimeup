@@ -2,6 +2,7 @@
 #include <renderer/Device.h>
 #include <tools/Log.h>
 
+#include <algorithm>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -12,6 +13,7 @@ namespace bimeup::renderer {
 Device::Device(VkInstance instance) {
     PickPhysicalDevice(instance, VK_NULL_HANDLE);
     ProbeLineRasterization();
+    ProbeRayTracing();
     CreateLogicalDevice(false);
     CreateAllocator(instance);
 }
@@ -19,6 +21,7 @@ Device::Device(VkInstance instance) {
 Device::Device(VkInstance instance, VkSurfaceKHR surface) {
     PickPhysicalDevice(instance, surface);
     ProbeLineRasterization();
+    ProbeRayTracing();
     CreateLogicalDevice(true);
     CreateAllocator(instance);
 }
@@ -170,12 +173,25 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
         deviceFeatures.wideLines = VK_TRUE;
     }
 
+    // Collect every enabled extension first so the vector never reallocates
+    // after `ppEnabledExtensionNames` captures `.data()`. Growing the vector
+    // after that pointer is read dangles it and segfaults `vk_string_validate`.
     std::vector<const char*> enabledExtensions;
     if (enableSwapchain) {
         enabledExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
     if (m_hasSmoothLines) {
         enabledExtensions.push_back(VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME);
+    }
+    if (m_hasRayTracing) {
+        // `VK_KHR_acceleration_structure` pulls in `deferred_host_operations`,
+        // `bufferDeviceAddress` (1.2 core) and `descriptorIndexing` (1.2 core)
+        // as hard prerequisites. BDA and descriptor_indexing flow through
+        // `VkPhysicalDeviceVulkan12Features` below — NVIDIA rejects the
+        // promoted extension strings on a 1.2+ instance.
+        enabledExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     }
 
     // Chain `smoothLines` into the feature struct so the EdgeOverlayPipeline
@@ -188,6 +204,24 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     lineFeatures.smoothLines = m_hasSmoothLines ? VK_TRUE : VK_FALSE;
     lineFeatures.rectangularLines = m_hasSmoothLines ? VK_TRUE : VK_FALSE;
 
+    // Stage 9.1.a — opt-in RT feature chain. Populated only when
+    // `ProbeRayTracing` succeeded. `VkPhysicalDeviceVulkan12Features` carries
+    // the promoted `bufferDeviceAddress` + `descriptorIndexing` meta-features;
+    // `accelerationStructure` + `rayTracingPipeline` come from their KHR
+    // feature structs.
+    VkPhysicalDeviceVulkan12Features v12Features{};
+    v12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    v12Features.bufferDeviceAddress = VK_TRUE;
+    v12Features.descriptorIndexing = VK_TRUE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.accelerationStructure = VK_TRUE;
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    rtFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rtFeatures.rayTracingPipeline = VK_TRUE;
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
@@ -197,11 +231,57 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
     createInfo.ppEnabledExtensionNames =
         enabledExtensions.empty() ? nullptr : enabledExtensions.data();
+
+    // Build the pNext chain head-first. Multiple feature groups may be live
+    // simultaneously (smooth-lines + RT are independent capabilities on some
+    // GPUs), so we walk a `head` pointer rather than hard-wiring one branch.
+    void* featureChainHead = nullptr;
+    auto prependFeature = [&](auto& feature) {
+        feature.pNext = featureChainHead;
+        featureChainHead = &feature;
+    };
     if (m_hasSmoothLines) {
-        createInfo.pNext = &lineFeatures;
+        prependFeature(lineFeatures);
     }
+    if (m_hasRayTracing) {
+        prependFeature(v12Features);
+        prependFeature(asFeatures);
+        prependFeature(rtFeatures);
+    }
+    createInfo.pNext = featureChainHead;
 
     VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+    if (result != VK_SUCCESS && m_hasRayTracing) {
+        // Stage 9.1.a — NVIDIA's driver advertises every RT feature but some
+        // versions (observed on 595.44 in headless setups) still reject the
+        // logical-device create with `VK_ERROR_INITIALIZATION_FAILED`. The
+        // probe is optimistic by design; when the device truly can't start
+        // with RT on, we quietly drop it and retry without, so the raster
+        // path keeps working. `HasRayTracing()` then reflects reality.
+        if (bimeup::tools::Log::GetLogger()) {
+            LOG_WARN("Ray tracing: vkCreateDevice rejected RT extensions "
+                     "(VkResult={}); retrying without RT", static_cast<int>(result));
+        }
+        m_hasRayTracing = false;
+        enabledExtensions.erase(
+            std::remove_if(enabledExtensions.begin(), enabledExtensions.end(),
+                [](const char* name) {
+                    std::string_view n(name);
+                    return n == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ||
+                           n == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME ||
+                           n == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME;
+                }),
+            enabledExtensions.end());
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+        createInfo.ppEnabledExtensionNames =
+            enabledExtensions.empty() ? nullptr : enabledExtensions.data();
+        featureChainHead = nullptr;
+        if (m_hasSmoothLines) {
+            prependFeature(lineFeatures);
+        }
+        createInfo.pNext = featureChainHead;
+        result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
+    }
     if (result != VK_SUCCESS) {
         throw std::runtime_error("Failed to create Vulkan logical device");
     }
@@ -285,6 +365,74 @@ void Device::ProbeLineRasterization() {
         LOG_INFO("Edge overlay AA: {}",
                  m_hasSmoothLines ? "VK_EXT_line_rasterization smoothLines enabled"
                                   : "smoothLines feature unavailable — aliased lines");
+    }
+}
+
+void Device::ProbeRayTracing() {
+    // Stage 9.1.a — probe for the Stage-9 ray-tracing render modes. The probe
+    // is strictly a runtime query: when it reports false the logical device
+    // is built without RT extensions and the classical raster path runs as
+    // today. We require:
+    //   - `VK_KHR_acceleration_structure` + `VK_KHR_ray_tracing_pipeline` +
+    //     `VK_KHR_deferred_host_operations` as extension strings (the first
+    //     two are the actual RT feature carriers; the third is an AS
+    //     prerequisite).
+    //   - `VkPhysicalDeviceVulkan12Features.bufferDeviceAddress` +
+    //     `.descriptorIndexing` as features. These were promoted to core in
+    //     1.2 and the NVIDIA driver rejects them as extension strings on a
+    //     1.2+ instance — the core feature struct is the supported path.
+    //   - `accelerationStructure` and `rayTracingPipeline` feature bits.
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> extProps(extCount);
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, extProps.data());
+
+    auto hasExt = [&](std::string_view name) {
+        for (const auto& ext : extProps) {
+            if (std::string_view(ext.extensionName) == name) return true;
+        }
+        return false;
+    };
+
+    const bool extsPresent =
+        hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+        hasExt(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    if (!extsPresent) {
+        if (bimeup::tools::Log::GetLogger()) {
+            LOG_INFO("Ray tracing: one or more required extensions missing — "
+                     "RT render modes will be disabled");
+        }
+        return;
+    }
+
+    VkPhysicalDeviceVulkan12Features v12Features{};
+    v12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.pNext = &v12Features;
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    rtFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rtFeatures.pNext = &asFeatures;
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &rtFeatures;
+    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
+
+    m_hasRayTracing =
+        (asFeatures.accelerationStructure == VK_TRUE) &&
+        (rtFeatures.rayTracingPipeline == VK_TRUE) &&
+        (v12Features.bufferDeviceAddress == VK_TRUE);
+
+    if (bimeup::tools::Log::GetLogger()) {
+        LOG_INFO("Ray tracing: {}",
+                 m_hasRayTracing ? "VK_KHR_acceleration_structure + "
+                                   "ray_tracing_pipeline enabled"
+                                 : "required features unavailable — "
+                                   "RT render modes will be disabled");
     }
 }
 

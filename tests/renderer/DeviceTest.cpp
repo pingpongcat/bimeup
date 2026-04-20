@@ -2,6 +2,9 @@
 #include <renderer/Device.h>
 #include <renderer/VulkanContext.h>
 
+#include <string_view>
+#include <vector>
+
 using bimeup::renderer::Device;
 using bimeup::renderer::VulkanContext;
 
@@ -63,4 +66,47 @@ TEST_F(DeviceTest, DestructorCleansUp) {
         EXPECT_NE(device.GetDevice(), VK_NULL_HANDLE);
     }
     // Validation layers + sanitizers would catch leaks or use-after-free
+}
+
+// 9.1.a — RT-capability probe. The probe must return a boolean that's consistent
+// with the physical device's advertised extensions. If the probe says yes, all
+// five RT-adjacent extensions must be present on the physical device. If *any*
+// of them is missing, the probe must report false. Construction must succeed
+// either way — RT is opt-in, never a hard requirement.
+TEST_F(DeviceTest, RayTracingProbeConsistentWithExtensions) {
+    m_device = std::make_unique<Device>(m_context->GetInstance());
+
+    VkPhysicalDevice physDev = m_device->GetPhysicalDevice();
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physDev, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> exts(extCount);
+    vkEnumerateDeviceExtensionProperties(physDev, nullptr, &extCount, exts.data());
+
+    auto hasExt = [&](std::string_view name) {
+        for (const auto& e : exts) {
+            if (std::string_view(e.extensionName) == name) return true;
+        }
+        return false;
+    };
+
+    const bool allPresent =
+        hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+        hasExt(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    if (!allPresent) {
+        EXPECT_FALSE(m_device->HasRayTracing())
+            << "Probe must report false when any RT extension is missing";
+    }
+    if (m_device->HasRayTracing()) {
+        EXPECT_TRUE(allPresent)
+            << "Probe reporting true implies all RT extensions are present";
+    }
+}
+
+TEST_F(DeviceTest, DeviceConstructsRegardlessOfRayTracing) {
+    m_device = std::make_unique<Device>(m_context->GetInstance());
+
+    EXPECT_NE(m_device->GetDevice(), VK_NULL_HANDLE);
+    [[maybe_unused]] const bool probe = m_device->HasRayTracing();
 }
