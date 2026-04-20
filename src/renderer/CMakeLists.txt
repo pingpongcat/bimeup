@@ -40,6 +40,7 @@ add_library(bimeup_renderer STATIC
     src/SunPosition.cpp
     src/SkyColor.cpp
     src/AccelerationStructure.cpp
+    src/TopLevelAS.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

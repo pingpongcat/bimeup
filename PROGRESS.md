@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
-## Current Task: 9.2 TLAS build from scene instances — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
+## Current Task: 9.3 RT pipeline + SBT (`renderer::RayTracingPipeline`) — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -256,7 +256,7 @@ Goal: add an RT light-transport render mode *alongside* the classical renderer. 
 - [ ] 9.1 RT-capability probe + BLAS per mesh (`AccelerationStructure`)
   - [x] 9.1.a `Device::HasRayTracing()` probe — enumerates `VK_KHR_acceleration_structure` + `ray_tracing_pipeline` + `deferred_host_operations`, queries `accelerationStructure` / `rayTracingPipeline` + 1.2-core `bufferDeviceAddress` / `descriptorIndexing`. RT extensions + feature chain (`VkPhysicalDeviceVulkan12Features` + AS/RT KHR structs) enabled on the logical device. Retry-without-RT fallback when `vkCreateDevice` rejects the chain (observed on NVIDIA 595 headless) so classical path always stays live. `HasRayTracing()` reflects the post-create truth.
   - [x] 9.1.b `renderer::AccelerationStructure` — BLAS-per-mesh build from `MeshData`, dispatch-pointer load via `vkGetDeviceProcAddr`, no-op when `device.HasRayTracing() == false`. Raw-Vulkan buffers with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` (VMA's BDA flag not configured on this codebase); synchronous fence-wait on the graphics queue for the one-shot BLAS build; RT-device tests `GTEST_SKIP` gracefully when the probe says no.
-- [ ] 9.2 TLAS build from scene instances (built only when an RT mode is active)
+- [x] 9.2 TLAS build from scene instances (built only when an RT mode is active) — `renderer::TopLevelAS` + `TlasInstance{transform, blasAddress, customIndex, mask}`. `Build(instances)` rebuilds from scratch: tears down any previous AS first (even when the new list is empty), transposes glm::mat4 into VK's 3×4 row-major `VkTransformMatrixKHR`, packs `VkAccelerationStructureInstanceKHR`s, queries sizes, allocates AS storage + scratch, submits a synchronous build on the graphics queue. Caches TLAS handle + device address for SBT descriptor binding in 9.3. Strict no-op on non-RT devices; same raw-Vulkan-BDA buffer pattern as 9.1.b. Tests cover count-matches, rebuild-replaces-handle, rebuild-to-zero-resets, empty-list-no-op, and non-RT-is-no-op; 263/263 renderer suite ✓.
 - [ ] 9.3 RT pipeline + SBT (raygen / closest-hit / miss / any-hit), built lazily
 - [ ] 9.4 RT sun shadows — *additive* alongside shadow-map path; Hybrid picks RT, Rasterised still uses PCF
 - [ ] 9.5 RTAO — *additive* alongside XeGTAO; Hybrid picks RTAO, Rasterised still uses XeGTAO
