@@ -1,13 +1,13 @@
 # Bimeup — Session Instructions
 
 ## Project
-Bimeup is a C++ BIM viewer (Vulkan + ImGui + OpenXR). Full plan: `PLAN.md`. Progress: `PROGRESS.md`.
+Bimeup is a C++ BIM viewer (Vulkan + ImGui + OpenXR). Plan index: `PLAN.md` (per-stage detail in `docs/plan/stage_<X>.md`). Progress: `PROGRESS.md`.
 
 ## Session Protocol
 
 At the START of every session:
-1. Read `PROGRESS.md` — find the current stage and next unchecked task
-2. Read only the PLAN.md section for that stage — do NOT read the whole plan
+1. Read `PROGRESS.md` — find the current stage and next unchecked task (the file is a terse checklist; detailed completion notes live in `git log`)
+2. Read **only** `docs/plan/stage_<X>.md` for the current stage — do NOT read the top-level `PLAN.md` (it's a stages index) and do NOT read other stage files
 3. Read only the headers/APIs of modules you will touch — do NOT explore the full codebase
 4. State what you will do and which task(s) you will complete
 
