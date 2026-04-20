@@ -106,7 +106,11 @@ bool TopLevelAS::Build(const std::vector<TlasInstance>& instances) {
         inst.instanceCustomIndex = src.customIndex & 0x00FFFFFFu;
         inst.mask = src.mask;
         inst.instanceShaderBindingTableRecordOffset = 0;
-        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        // Stage 9.6.a — cull-disable stays on unconditionally (BIM meshes
+        // don't carry a consistent winding); OR in caller-supplied flags so
+        // a glass instance can request `FORCE_NO_OPAQUE_BIT` to opt into
+        // any-hit-based sun-light transmission.
+        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR | src.flags;
         inst.accelerationStructureReference = src.blasAddress;
         gpuInstances.push_back(inst);
     }

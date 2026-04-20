@@ -125,6 +125,33 @@ TEST_F(TopLevelASTest, RebuildUpdatesInstanceCount) {
     EXPECT_TRUE(tlas.IsValid());
 }
 
+TEST_F(TopLevelASTest, DefaultInstanceFlagsAreZero) {
+    // Stage 9.6.a — `flags` defaults to 0 so callers that don't opt into
+    // transmission keep the pre-9.6 opaque-ray semantics. `TopLevelAS::Build`
+    // OR's the always-on `TRIANGLE_FACING_CULL_DISABLE_BIT` on top.
+    TlasInstance inst;
+    EXPECT_EQ(inst.flags, 0u);
+}
+
+TEST_F(TopLevelASTest, BuildWithTransmissiveFlagsSucceedsOnRtDevice) {
+    if (!m_device->HasRayTracing()) {
+        GTEST_SKIP() << "Device does not advertise RT — TLAS-build path skipped";
+    }
+    AccelerationStructure accel(*m_device);
+    auto blas = accel.BuildBlas(MakeTriangle());
+    ASSERT_NE(blas, AccelerationStructure::InvalidHandle);
+
+    // Stage 9.6.a — glass instance: per-instance flag forces the geometry
+    // non-opaque so the shadow ray's any-hit shader runs (9.6.b).
+    TopLevelAS tlas(*m_device);
+    TlasInstance glass{glm::mat4(1.0F), accel.GetDeviceAddress(blas), 0, 0xFF};
+    glass.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+
+    EXPECT_TRUE(tlas.Build({glass}));
+    EXPECT_TRUE(tlas.IsValid());
+    EXPECT_EQ(tlas.InstanceCount(), 1u);
+}
+
 TEST_F(TopLevelASTest, RebuildDownToZeroInstancesResets) {
     if (!m_device->HasRayTracing()) {
         GTEST_SKIP() << "Device does not advertise RT — TLAS-build path skipped";

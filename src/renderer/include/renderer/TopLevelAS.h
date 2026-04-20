@@ -15,11 +15,19 @@ class Device;
 /// (Stage 9.1.b) with a world-space transform. The `transform` is stored
 /// as a `glm::mat4` on the CPU side and transposed-trimmed into the 3×4
 /// row-major Vulkan form at build time.
+///
+/// Stage 9.6.a — `flags` is OR'd with the always-on
+/// `VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR` at build
+/// time. Window-glass instances set
+/// `VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR` here so the shadow-ray
+/// any-hit shader runs for them (9.6.b), letting sun light attenuate
+/// through windows into interior rooms.
 struct TlasInstance {
     glm::mat4 transform{1.0F};
     VkDeviceAddress blasAddress = 0;
     uint32_t customIndex = 0;
     uint32_t mask = 0xFF;
+    VkGeometryInstanceFlagsKHR flags = 0;
 };
 
 /// Stage 9.2 — Top-level ray-tracing acceleration structure.
