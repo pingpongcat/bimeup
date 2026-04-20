@@ -458,10 +458,16 @@ TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
                                           shadowMap.GetTransmissionSampler(),
                                           lightingBuffer.GetBuffer(),
                                           sizeof(LightingUbo));
+    // Stage 9.8.c.3 — indoor composite shares the `LightingUBO` but does
+    // not consume the transmission map (windows are the sun's problem,
+    // not the indoor fill's). Separate setter keeps the API orthogonal.
+    m_renderLoop->SetRtIndoorCompositeInputs(lightingBuffer.GetBuffer(),
+                                             sizeof(LightingUbo));
     EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
     EXPECT_NE(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
     EXPECT_NE(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
     EXPECT_TRUE(m_renderLoop->IsRtSunCompositeBuilt());
+    EXPECT_TRUE(m_renderLoop->IsRtIndoorCompositeBuilt());
 
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
@@ -479,6 +485,7 @@ TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
     EXPECT_EQ(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
     EXPECT_EQ(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
     EXPECT_FALSE(m_renderLoop->IsRtSunCompositeBuilt());
+    EXPECT_FALSE(m_renderLoop->IsRtIndoorCompositeBuilt());
 }
 
 // Stage 9.8.a — tonemap AO source must follow mode + capability. Default is

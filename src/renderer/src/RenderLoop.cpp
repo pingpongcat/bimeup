@@ -7,6 +7,7 @@
 #include <renderer/RtIndoorPass.h>
 #include <renderer/RtShadowPass.h>
 #include <renderer/RtSunCompositePipeline.h>
+#include <renderer/RtIndoorCompositePipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/SmaaLut.h>
 #include <renderer/SsaoBlurPipeline.h>
@@ -170,6 +171,13 @@ bool RenderLoop::EndFrame() {
     // shadow dispatch above actually wrote visibility (`m_rtTlas` non-null
     // + shadow pass valid).
     DispatchRtSunComposite(cmd);
+
+    // Stage 9.8.c.3 — RT indoor-fill composite. Same HDR general/read-only
+    // transition pattern as the sun composite, additively writes
+    // `fillColor * NdotL * rtIndoorVisibility` into the HDR image.
+    // Independent of the sun composite's state so it runs even when the
+    // sun is disabled (indoor-preset-only lighting at night).
+    DispatchRtIndoorComposite(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
     // tonemap pass. Dispatches linearize then three mip downsamples with
@@ -427,10 +435,16 @@ void RenderLoop::SetRenderMode(RenderMode mode) {
         // dispatch gate skips until the caller wires up the transmission
         // + LightingUBO handles via `SetRtSunCompositeInputs`.
         BuildRtSunComposite();
+        // Stage 9.8.c.3 — indoor composite consumes the RT indoor
+        // visibility view (owned by `m_rtIndoorPass`), so it must build
+        // AFTER the indoor pass. Independent of the sun composite —
+        // caller wires the LightingUBO via `SetRtIndoorCompositeInputs`.
+        BuildRtIndoorComposite();
     } else {
         // Wait for in-flight frames so it's safe to destroy the pipelines /
         // storage images without racing a pending trace.
         WaitIdle();
+        DestroyRtIndoorComposite();
         DestroyRtSunComposite();
         DestroyRtShadowPass();
         DestroyRtAoPass();
@@ -946,6 +960,270 @@ void RenderLoop::DispatchRtSunComposite(VkCommandBuffer cmd) {
                          0, nullptr, 1, &toRead);
 }
 
+void RenderLoop::SetRtIndoorCompositeInputs(VkBuffer lightingUbo,
+                                            VkDeviceSize lightingUboSize) {
+    m_rtIndoorCompositeLightingUbo = lightingUbo;
+    m_rtIndoorCompositeLightingUboSize = lightingUboSize;
+    // Matches `SetRtSunCompositeInputs` semantics: refresh now if the
+    // pipeline is already built; otherwise the cache is retained and the
+    // `BuildRtIndoorComposite` call on the next `SetRenderMode(HybridRt)`
+    // will pick it up via its own descriptor-update call.
+    UpdateRtIndoorCompositeDescriptors();
+}
+
+void RenderLoop::BuildRtIndoorComposite() {
+    if (!m_device.HasRayTracing()) {
+        return;
+    }
+    if (m_rtIndoorCompositePipeline) {
+        return;
+    }
+    VkDevice dev = m_device.GetDevice();
+
+    // Descriptor set layout — five bindings matching
+    // `rt_indoor_composite.comp` (one fewer than sun composite since
+    // the indoor fill ignores window transmission):
+    //   0-2: CIS (depth / normal / rt indoor visibility)
+    //   3: LightingUBO (uniform buffer)
+    //   4: HDR storage image (additive RW)
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorCount = 1;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    bindings[3].binding = 3;
+    bindings[3].descriptorCount = 1;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[4].binding = 4;
+    bindings[4].descriptorCount = 1;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr,
+                                    &m_rtIndoorCompositeSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtIndoorComposite descriptor-set layout failed");
+    }
+
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 3U * imageCount;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = imageCount;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[2].descriptorCount = imageCount;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = imageCount;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    if (vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+                               &m_rtIndoorCompositeDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtIndoorComposite descriptor pool failed");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_rtIndoorCompositeSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_rtIndoorCompositeDescriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+    m_rtIndoorCompositeDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(dev, &allocInfo,
+                                 m_rtIndoorCompositeDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtIndoorComposite descriptor-set alloc failed");
+    }
+
+    m_rtIndoorCompositeShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/rt_indoor_composite.comp.spv");
+    m_rtIndoorCompositePipeline = std::make_unique<RtIndoorCompositePipeline>(
+        m_device, *m_rtIndoorCompositeShader, m_rtIndoorCompositeSetLayout);
+
+    UpdateRtIndoorCompositeDescriptors();
+}
+
+void RenderLoop::DestroyRtIndoorComposite() {
+    m_rtIndoorCompositePipeline.reset();
+    m_rtIndoorCompositeShader.reset();
+    if (m_rtIndoorCompositeDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device.GetDevice(), m_rtIndoorCompositeDescriptorPool, nullptr);
+        m_rtIndoorCompositeDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_rtIndoorCompositeDescriptorSets.clear();
+    if (m_rtIndoorCompositeSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device.GetDevice(), m_rtIndoorCompositeSetLayout, nullptr);
+        m_rtIndoorCompositeSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+void RenderLoop::UpdateRtIndoorCompositeDescriptors() {
+    if (!m_rtIndoorCompositePipeline) {
+        return;
+    }
+    if (m_rtIndoorCompositeDescriptorSets.empty()) {
+        return;
+    }
+    // Skip until every input is live. `m_rtIndoorPass` owns binding 2's
+    // visibility view; the caller must have wired the LightingUBO via
+    // `SetRtIndoorCompositeInputs`. If any is missing the dispatch gate
+    // already short-circuits; leaving descriptor bindings uninitialised
+    // here is fine because dispatch never fires.
+    if (!m_rtIndoorPass || m_rtIndoorPass->GetVisibilityImageView() == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_rtIndoorCompositeLightingUbo == VK_NULL_HANDLE ||
+        m_rtIndoorCompositeLightingUboSize == 0) {
+        return;
+    }
+    if (m_rtDepthSampler == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const uint32_t imageCount = static_cast<uint32_t>(m_rtIndoorCompositeDescriptorSets.size());
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = m_depthImageView;
+        depthInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_normalImageViews[i];
+        normalInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorImageInfo visibilityInfo{};
+        visibilityInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        visibilityInfo.imageView = m_rtIndoorPass->GetVisibilityImageView();
+        visibilityInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_rtIndoorCompositeLightingUbo;
+        uboInfo.offset = 0;
+        uboInfo.range = m_rtIndoorCompositeLightingUboSize;
+
+        VkDescriptorImageInfo hdrInfo{};
+        hdrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        hdrInfo.imageView = m_hdrImageViews[i];
+
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (uint32_t b = 0; b < writes.size(); ++b) {
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet = m_rtIndoorCompositeDescriptorSets[i];
+            writes[b].dstBinding = b;
+            writes[b].descriptorCount = 1;
+        }
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &depthInfo;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &normalInfo;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].pImageInfo = &visibilityInfo;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[3].pBufferInfo = &uboInfo;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[4].pImageInfo = &hdrInfo;
+
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(writes.size()), writes.data(),
+                               0, nullptr);
+    }
+}
+
+void RenderLoop::DispatchRtIndoorComposite(VkCommandBuffer cmd) {
+    if (m_renderMode != RenderMode::HybridRt) {
+        return;
+    }
+    if (!m_rtIndoorCompositePipeline) {
+        return;
+    }
+    if (!m_rtIndoorPass || m_rtIndoorPass->GetVisibilityImageView() == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_rtTlas == VK_NULL_HANDLE) {
+        return;
+    }
+    // Skip when the indoor preset is off — no visibility trace ran this
+    // frame, so compositing would sample stale / cleared data. Matches
+    // the gate `DispatchRtIndoor` already applies to the trace itself.
+    if (!m_rtIndoorEnabled) {
+        return;
+    }
+    if (m_rtIndoorCompositeLightingUbo == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_currentImageIndex >= m_rtIndoorCompositeDescriptorSets.size()) {
+        return;
+    }
+
+    const VkExtent2D extent = m_swapchain.GetExtent();
+
+    // HDR transition: the most recent writer is either the main render
+    // pass (COLOR_ATTACHMENT_OUTPUT) or the sun composite (COMPUTE_SHADER)
+    // — both finalise the image to SHADER_READ_ONLY_OPTIMAL, but we need
+    // the barrier's srcStage/srcAccess to cover whichever actually ran so
+    // the write is visible to this compute read. OR'ing both stages keeps
+    // the barrier correct regardless of which composite fired first.
+    VkImageMemoryBarrier toGeneral{};
+    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGeneral.srcAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toGeneral.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.image = m_hdrImages[m_currentImageIndex];
+    toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toGeneral.subresourceRange.levelCount = 1;
+    toGeneral.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toGeneral);
+
+    m_rtIndoorCompositePipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_rtIndoorCompositePipeline->GetLayout(), 0, 1,
+                            &m_rtIndoorCompositeDescriptorSets[m_currentImageIndex], 0,
+                            nullptr);
+
+    RtIndoorCompositePipeline::PushConstants pc{};
+    pc.invViewProj = glm::inverse(m_proj * m_rtView);
+    pc.invView = glm::inverse(m_rtView);
+    pc.extent = glm::uvec2(extent.width, extent.height);
+    vkCmdPushConstants(cmd, m_rtIndoorCompositePipeline->GetLayout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+    constexpr uint32_t kTileSize = 8;
+    vkCmdDispatch(cmd, (extent.width + kTileSize - 1) / kTileSize,
+                  (extent.height + kTileSize - 1) / kTileSize, 1);
+
+    VkImageMemoryBarrier toRead{};
+    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.image = m_hdrImages[m_currentImageIndex];
+    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toRead.subresourceRange.levelCount = 1;
+    toRead.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toRead);
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -971,13 +1249,15 @@ void RenderLoop::RecreateForSwapchain() {
         BuildRtShadowPass();
         BuildRtAoPass();
         BuildRtIndoorPass();
-        // Stage 9.8.b.3 — composite descriptor sets point at per-swap HDR +
-        // normal views which were just re-created, and at the freshly
-        // rebuilt RT shadow-visibility view. Full rebuild is simpler than
-        // a targeted descriptor refresh and matches the lifecycle of the
-        // other RT passes.
+        // Stage 9.8.b.3 / 9.8.c.3 — composite descriptor sets point at
+        // per-swap HDR + normal views which were just re-created, and at
+        // the freshly rebuilt RT shadow / indoor visibility views. Full
+        // rebuild is simpler than a targeted descriptor refresh and
+        // matches the lifecycle of the other RT passes.
+        DestroyRtIndoorComposite();
         DestroyRtSunComposite();
         BuildRtSunComposite();
+        BuildRtIndoorComposite();
     }
     // Stage 9.8.a — rebinding the tonemap's RT AO sampler to the freshly
     // created RT AO view. Safe no-op in raster mode (shouldUseRtAo ==
@@ -2509,11 +2789,12 @@ void RenderLoop::Cleanup() {
     // Stage 9.4.b / 9.5.b / 9.7.b — RT pass resources. Each pass owns
     // its own VMA allocations (visibility / AO / indoor image) so the
     // teardown must run before the allocator shuts down with the rest
-    // of the renderer. Stage 9.8.b.3 — sun composite doesn't own VMA
-    // images, but its descriptor pool + pipeline layout need destroying
-    // before the logical device is torn down. Drop it first so the
-    // per-swap descriptor sets release cleanly before the underlying
-    // views go away in `CleanupFrameResources` below.
+    // of the renderer. Stage 9.8.b.3 / 9.8.c.3 — sun + indoor composites
+    // don't own VMA images, but their descriptor pools + pipeline layouts
+    // need destroying before the logical device is torn down. Drop them
+    // first so the per-swap descriptor sets release cleanly before the
+    // underlying views go away in `CleanupFrameResources` below.
+    DestroyRtIndoorComposite();
     DestroyRtSunComposite();
     DestroyRtShadowPass();
     DestroyRtAoPass();

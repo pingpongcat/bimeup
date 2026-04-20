@@ -31,6 +31,7 @@ class RtShadowPass;
 class RtAoPass;
 class RtIndoorPass;
 class RtSunCompositePipeline;
+class RtIndoorCompositePipeline;
 
 class RenderLoop {
 public:
@@ -279,6 +280,27 @@ public:
     /// that flip render mode to verify resources come and go in lockstep.
     [[nodiscard]] bool IsRtSunCompositeBuilt() const {
         return m_rtSunCompositePipeline != nullptr;
+    }
+
+    /// Stage 9.8.c.3 — wire the `LightingUBO` for the Hybrid-RT indoor-fill
+    /// composite. The indoor composite samples the same buffer the raster
+    /// path uses (`SunLightingScene`-packed); the RT indoor-fill visibility
+    /// view is sourced internally from `m_rtIndoorPass` and needs no caller
+    /// plumbing. Wiring is lazy: calling this while the render mode is
+    /// `Rasterised` caches the handle so a later `SetRenderMode(HybridRt)`
+    /// picks it up. Passing `VK_NULL_HANDLE` / size 0 clears the cache;
+    /// the per-frame dispatch gate then skips until a valid buffer is
+    /// re-supplied. Separate from `SetRtSunCompositeInputs` so that
+    /// enabling one composite doesn't silently couple the other's inputs.
+    void SetRtIndoorCompositeInputs(VkBuffer lightingUbo,
+                                    VkDeviceSize lightingUboSize);
+
+    /// Stage 9.8.c.3 — true when the Hybrid-RT indoor-fill composite
+    /// pipeline + descriptors are allocated. Mirrors
+    /// `IsRtSunCompositeBuilt`. Observable from tests that flip render
+    /// mode to verify resources come and go in lockstep.
+    [[nodiscard]] bool IsRtIndoorCompositeBuilt() const {
+        return m_rtIndoorCompositePipeline != nullptr;
     }
 
 private:
@@ -647,6 +669,25 @@ private:
     void DestroyRtSunComposite();
     void UpdateRtSunCompositeDescriptors();
     void DispatchRtSunComposite(VkCommandBuffer cmd);
+
+    // Stage 9.8.c.3 — RT indoor-fill composite wire. Shape identical to
+    // the sun composite above: lazy build on flip to `HybridRt`, rebuild
+    // on swapchain resize, teardown on flip to `Rasterised`. Five
+    // descriptor bindings (depth / normal / RT indoor visibility / UBO /
+    // HDR storage) vs. the sun composite's six — no shadow-transmission
+    // sample since architectural indoor fill doesn't model window tint.
+    std::unique_ptr<Shader> m_rtIndoorCompositeShader;
+    std::unique_ptr<RtIndoorCompositePipeline> m_rtIndoorCompositePipeline;
+    VkDescriptorSetLayout m_rtIndoorCompositeSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_rtIndoorCompositeDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_rtIndoorCompositeDescriptorSets;
+    VkBuffer m_rtIndoorCompositeLightingUbo = VK_NULL_HANDLE;
+    VkDeviceSize m_rtIndoorCompositeLightingUboSize = 0;
+
+    void BuildRtIndoorComposite();
+    void DestroyRtIndoorComposite();
+    void UpdateRtIndoorCompositeDescriptors();
+    void DispatchRtIndoorComposite(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer
