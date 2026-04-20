@@ -150,15 +150,21 @@ TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     EXPECT_STREQ(info.pName, "main");
 }
 
-// RP.15.b contract: basic.frag declares a fragment-stage push constant block
-// containing exactly one 32-bit unsigned int member (`transparentBit`) at
-// byte offset 64 — the byte after the 64-byte vertex-stage model matrix push
-// range. Walk the SPIR-V module: find the OpVariable in the PushConstant
-// storage class, follow its OpTypePointer → OpTypeStruct, assert the struct
-// has exactly one member, that member is a 32-bit OpTypeInt with
-// signedness=0, and an OpMemberDecorate Offset=64 is attached at member
-// index 0. The "exactly one member" clause catches a resurrection of the
-// retired `stencilId` member (RP.6d) alongside `transparentBit` (RP.12b).
+// Stage 9.8.b.1 contract: basic.frag declares a fragment-stage push
+// constant block containing exactly two 32-bit unsigned int members:
+//   - member 0 `transparentBit` at byte offset 64 (RP.12b — 0 opaque, 4
+//     transparent; written to the stencil G-buffer)
+//   - member 1 `useRtSunPath` at byte offset 68 (Stage 9.8.b.1 — 0 keeps
+//     the raster sun-PCF path bit-compatible, 1 skips the in-shader sun
+//     term so the Stage 9.8.b.2 composite can re-apply it with RT
+//     visibility)
+// Walk the SPIR-V module: find the OpVariable in the PushConstant storage
+// class, follow its OpTypePointer → OpTypeStruct, assert the struct has
+// exactly two members, each is a 32-bit OpTypeInt with signedness=0, and
+// OpMemberDecorate Offsets 64 + 68 are attached at member indices 0 + 1.
+// "Exactly two members" catches both a resurrection of the retired
+// `stencilId` member (RP.6d) and a future regression that drops the
+// Stage-9.8.b.1 `useRtSunPath` mode flag.
 TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -226,30 +232,38 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
         i += count;
     }
 
-    // Resolve the struct type behind every PushConstant pointer variable, then
-    // assert exactly one has a single 32-bit unsigned int member at Offset=64.
-    // "Exactly one member" catches a resurrection of the retired `stencilId`
-    // member — the post-RP.15.b block is `{ uint transparentBit @ 64 }`, not
-    // `{ uint stencilId @ 64, uint transparentBit @ 68 }`.
+    // Resolve the struct type behind every PushConstant pointer variable,
+    // then assert exactly one has two 32-bit unsigned int members at
+    // Offsets 64 + 68. "Exactly two members" catches both a resurrection of
+    // the retired `stencilId` member (RP.6d) and a regression that drops
+    // the Stage-9.8.b.1 `useRtSunPath` flag.
+    auto isU32 = [&](uint32_t typeId) {
+        auto it = ints.find(typeId);
+        return it != ints.end() && it->second.width == 32U &&
+               it->second.signedness == 0U;
+    };
     bool found = false;
     for (uint32_t pointerTypeId : pushConstantVarTypeIds) {
         auto pIt = pointers.find(pointerTypeId);
         if (pIt == pointers.end()) continue;
         auto sIt = structs.find(pIt->second.typeId);
         if (sIt == structs.end()) continue;
-        if (sIt->second.memberTypes.size() != 1U) continue;
+        if (sIt->second.memberTypes.size() != 2U) continue;
         auto offIt = memberOffsets.find(pIt->second.typeId);
         if (offIt == memberOffsets.end()) continue;
-        auto memberOffsetIt = offIt->second.find(0U);
-        if (memberOffsetIt == offIt->second.end()) continue;
-        if (memberOffsetIt->second != 64U) continue;
-        auto intIt = ints.find(sIt->second.memberTypes[0]);
-        if (intIt == ints.end()) continue;
-        if (intIt->second.width == 32U && intIt->second.signedness == 0U) {
-            found = true;
-            break;
+        auto m0 = offIt->second.find(0U);
+        auto m1 = offIt->second.find(1U);
+        if (m0 == offIt->second.end() || m1 == offIt->second.end()) continue;
+        if (m0->second != 64U || m1->second != 68U) continue;
+        if (!isU32(sIt->second.memberTypes[0]) ||
+            !isU32(sIt->second.memberTypes[1])) {
+            continue;
         }
+        found = true;
+        break;
     }
-    EXPECT_TRUE(found) << "basic.frag missing fragment push constant `uint transparentBit` at "
-                          "offset 64 (exactly one 32-bit uint member expected)";
+    EXPECT_TRUE(found)
+        << "basic.frag missing fragment push constants `uint transparentBit` @ "
+           "offset 64 + `uint useRtSunPath` @ offset 68 (exactly two 32-bit "
+           "uint members expected)";
 }

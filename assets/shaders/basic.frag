@@ -17,10 +17,18 @@ layout(location = 2) out uint outStencilId;
 // 64-byte vertex-stage model matrix range pushed by basic.vert. Shaded /
 // wireframe / transparent pipelines all share this layout; overlay pipelines
 // (section-fill, disk-marker) keep their layouts untouched and never touch
-// the new range. `transparentBit` is 0 for opaque draws and 4 for the
+// the range. `transparentBit` is 0 for opaque draws and 4 for the
 // transparent pipeline — the fragment writes it into the stencil G-buffer.
+// Stage 9.8.b.1: `useRtSunPath` is 0 for the classical raster path (sun
+// term baked here with PCF + transmission, bit-compatible with pre-9.8
+// output) and 1 when Hybrid RT is active and the downstream sun composite
+// pass (Stage 9.8.b.2) will re-apply the key term using RT visibility —
+// this fragment then skips the sun block so the composite doesn't double
+// up. Transparent draws stay on path 0 in every mode (the composite only
+// covers opaque surfaces).
 layout(push_constant) uniform StencilPush {
     layout(offset = 64) uint transparentBit;
+    layout(offset = 68) uint useRtSunPath;
 } push;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
@@ -150,29 +158,35 @@ void main() {
 
     vec3 lit = hemisphereAmbient(n);
 
-    // Shadow only attenuates the key light; fill and rim stay unshadowed for now.
-    vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);
-    float shadowEnabled = lights.shadowParams.x;
-    float visibility = mix(1.0, pcfShadow(fragWorldPos), shadowEnabled);
-    // RP.18.4 / RP.18.7 — sample the window-transmission map at the fragment's
-    // lightUV. Need the fragment's own light-space Z too (not just the UV) so
-    // `computeTransmittedSun` can gate the tint on "glass is in front of this
-    // fragment". Compute the light-space projection once here; out-of-frustum
-    // clips use fragLightZ = 0 so `glassAhead = (transmit.a < 0 - bias)` is
-    // always false. Shadow-disabled path keeps the old bit-compatible output
-    // by passing transmit = opaque white (glassAhead still false).
-    vec4 lightClip = lights.lightSpaceMatrix * vec4(fragWorldPos, 1.0);
-    float fragLightZ = 0.0;
-    vec4 transmit = vec4(1.0);
-    if (lightClip.w > 0.0) {
-        vec3 lightNdc = lightClip.xyz / lightClip.w;
-        vec2 lightUv = lightNdc.xy * 0.5 + 0.5;
-        fragLightZ = lightNdc.z;
-        vec4 sampled = texture(shadowTransmissionMap, lightUv);
-        transmit = mix(vec4(1.0), sampled, shadowEnabled);
+    // Stage 9.8.b.1 — skip the sun block when the Hybrid RT composite
+    // pass will re-apply it with RT visibility. `useRtSunPath == 0`
+    // keeps the raster path (PCF shadow + glass transmission) fully
+    // baked here and bit-compatible with pre-9.8 output.
+    if (push.useRtSunPath == 0U) {
+        // Shadow only attenuates the key light; fill and rim stay unshadowed for now.
+        vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);
+        float shadowEnabled = lights.shadowParams.x;
+        float visibility = mix(1.0, pcfShadow(fragWorldPos), shadowEnabled);
+        // RP.18.4 / RP.18.7 — sample the window-transmission map at the fragment's
+        // lightUV. Need the fragment's own light-space Z too (not just the UV) so
+        // `computeTransmittedSun` can gate the tint on "glass is in front of this
+        // fragment". Compute the light-space projection once here; out-of-frustum
+        // clips use fragLightZ = 0 so `glassAhead = (transmit.a < 0 - bias)` is
+        // always false. Shadow-disabled path keeps the old bit-compatible output
+        // by passing transmit = opaque white (glassAhead still false).
+        vec4 lightClip = lights.lightSpaceMatrix * vec4(fragWorldPos, 1.0);
+        float fragLightZ = 0.0;
+        vec4 transmit = vec4(1.0);
+        if (lightClip.w > 0.0) {
+            vec3 lightNdc = lightClip.xyz / lightClip.w;
+            vec2 lightUv = lightNdc.xy * 0.5 + 0.5;
+            fragLightZ = lightNdc.z;
+            vec4 sampled = texture(shadowTransmissionMap, lightUv);
+            transmit = mix(vec4(1.0), sampled, shadowEnabled);
+        }
+        float bias = lights.shadowParams.y;
+        lit += computeTransmittedSun(visibility, fragLightZ, bias, key, transmit);
     }
-    float bias = lights.shadowParams.y;
-    lit += computeTransmittedSun(visibility, fragLightZ, bias, key, transmit);
 
     lit += lambertContribution(n, lights.fillDirectionIntensity, lights.fillColorEnabled);
     lit += lambertContribution(n, lights.rimDirectionIntensity, lights.rimColorEnabled);

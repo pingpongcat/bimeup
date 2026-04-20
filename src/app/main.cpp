@@ -64,6 +64,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -483,14 +484,18 @@ int main(int argc, char* argv[]) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.12b fragment-stage push range at offset 64: `uint transparentBit`
-    // (4 bytes) — 0 for the opaque pipeline, 4 for the transparent pipeline.
-    // basic.frag writes it into the R8_UINT stencil G-buffer so XeGTAO can
-    // treat glass as transparent instead of AO-occluding.
+    // RP.12b + Stage 9.8.b.1 fragment-stage push range at offset 64:
+    //   [64] `uint transparentBit` (RP.12b — 0 opaque, 4 transparent;
+    //        written to the R8_UINT stencil G-buffer for XeGTAO)
+    //   [68] `uint useRtSunPath` (Stage 9.8.b.1 — 0 bakes sun+PCF in the
+    //        shader, 1 skips the sun term so the Hybrid RT composite pass
+    //        can re-apply it with RT visibility)
+    // 8 bytes total. Both members MUST be pushed every draw; Vulkan's
+    // push-constant state is undefined for ranges that weren't written.
     VkPushConstantRange transparentBitPushRange{};
     transparentBitPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     transparentBitPushRange.offset = 64;
-    transparentBitPushRange.size = sizeof(uint32_t);
+    transparentBitPushRange.size = 2U * sizeof(uint32_t);
 
     bimeup::renderer::PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderLoop.GetRenderPass();
@@ -1741,6 +1746,16 @@ int main(int argc, char* argv[]) {
                 sceneResult->meshes[h].IsTransparent()) return true;
             return handlesWithAlphaOverride.count(h) > 0;
         };
+        // Stage 9.8.b.1 — opaque draws route the sun term to the Hybrid RT
+        // composite pass when the mode is `HybridRt` (flag = 1). Rasterised
+        // mode keeps flag = 0 so `basic.frag` bakes sun + PCF + transmission
+        // exactly as in pre-9.8 output. The 9.8.b.2 composite is not yet
+        // implemented, so Hybrid RT visibly loses the sun contribution until
+        // that task lands — expected during the sub-sub-split.
+        const uint32_t opaqueSunFlag =
+            (renderLoop.GetRenderMode() == bimeup::renderer::RenderLoop::RenderMode::HybridRt)
+                ? 1U
+                : 0U;
         if (!sectionOnly) {
             for (const auto& [handle, transform] : drawCalls) {
                 if (needsTransparentPass(handle)) {
@@ -1748,10 +1763,10 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                uint32_t transparentBit = 0U;
+                const std::array<uint32_t, 2> fragPush{0U, opaqueSunFlag};
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(transparentBit),
-                                   &transparentBit);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64,
+                                   static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
                 meshBuffer.Draw(cmd, handle);
             }
         }
@@ -1872,10 +1887,15 @@ int main(int argc, char* argv[]) {
                                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
                 // RP.12b: transparent pipeline writes bit 2 into the stencil
                 // G-buffer so XeGTAO can treat glass as transparent.
-                uint32_t transparentBit = 0x4U;
+                // Stage 9.8.b.1: transparent always stays on the raster sun
+                // path (flag = 0) in every render mode — the Hybrid RT sun
+                // composite only covers front-most opaque surfaces, so
+                // switching transparent to the composite path would drop the
+                // sun term entirely on glass.
+                const std::array<uint32_t, 2> fragPush{0x4U, 0U};
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
-                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(transparentBit),
-                                   &transparentBit);
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64,
+                                   static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
                 meshBuffer.Draw(cmd, handle);
             }
         }
