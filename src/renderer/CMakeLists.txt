@@ -14,6 +14,7 @@ add_library(bimeup_renderer STATIC
     src/Highlight.cpp
     src/Lighting.cpp
     src/ShadowPass.cpp
+    src/ShadowTransmissionPipeline.cpp
     src/ViewportNavigator.cpp
     src/FirstPersonController.cpp
     src/ClipPlane.cpp

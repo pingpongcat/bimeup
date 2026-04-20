@@ -43,6 +43,14 @@ struct PipelineConfig {
     // tap or a composite shader. Mutually exclusive with `alphaBlendEnable`
     // (set at most one; setting both is caller error — alpha wins).
     bool additiveBlend = false;
+    // RP.18.2 — when true, attachment 0's blend state is configured as
+    // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =
+    // MIN so overlapping draws compose as the darkest/most-tinted tap. Used
+    // by the shadow-transmission pipeline to stack glass panes (the classic
+    // coloured-shadow-map approximation of multiplicative attenuation).
+    // Precedence: alphaBlendEnable > additiveBlend > minBlend (set at most
+    // one; setting more than one is caller error).
+    bool minBlend = false;
     uint32_t colorAttachmentCount = 1;  // set to 0 for depth-only passes
     // If true, colour attachments beyond attachment 0 have colorWriteMask = 0 —
     // i.e. the fragment shader emits only `outColor` and leaves every other

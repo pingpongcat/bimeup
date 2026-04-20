@@ -14,6 +14,7 @@ add_executable(renderer_tests
     HighlightTest.cpp
     LightingTest.cpp
     ShadowPassTest.cpp
+    ShadowTransmissionPipelineTest.cpp
     ViewportNavigatorTest.cpp
     FirstPersonControllerTest.cpp
     ClipPlaneTest.cpp
@@ -82,6 +83,7 @@ set(_renderer_gpu_fixtures
     CubeRenderTest
     MeshBufferTest
     ShadowMapTest
+    ShadowTransmissionPipelineTest
     SectionFillPipelineTest
     EdgeOverlayPipelineTest
     DiskMarkerPipelineTest

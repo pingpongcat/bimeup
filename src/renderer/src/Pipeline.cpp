@@ -142,8 +142,9 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
         // alphaBlendEnable / additiveBlend so the transparent pipeline
         // (which targets the MRT pass) doesn't fail VUID-04727.
         const bool isPrimary = (i == 0);
-        const bool blendOn = isPrimary && !suppress &&
-                             (config.alphaBlendEnable || config.additiveBlend);
+        const bool blendOn =
+            isPrimary && !suppress &&
+            (config.alphaBlendEnable || config.additiveBlend || config.minBlend);
         b.blendEnable = blendOn ? VK_TRUE : VK_FALSE;
         if (b.blendEnable == VK_TRUE) {
             if (config.alphaBlendEnable) {
@@ -153,13 +154,23 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
                 b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 b.alphaBlendOp = VK_BLEND_OP_ADD;
-            } else {
+            } else if (config.additiveBlend) {
                 b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.colorBlendOp = VK_BLEND_OP_ADD;
                 b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
                 b.alphaBlendOp = VK_BLEND_OP_ADD;
+            } else {
+                // minBlend: darkest/most-tinted tap wins per channel.
+                // Factors must be ONE/ONE for VK_BLEND_OP_MIN to be
+                // meaningful (factors are applied before the min).
+                b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.colorBlendOp = VK_BLEND_OP_MIN;
+                b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                b.alphaBlendOp = VK_BLEND_OP_MIN;
             }
         }
     }
