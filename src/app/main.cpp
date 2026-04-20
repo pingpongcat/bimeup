@@ -564,7 +564,7 @@ int main(int argc, char* argv[]) {
     // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"
     // checkbox and `W` keyboard shortcut mutate `edgesEnabled`.
     bool edgesEnabled = true;
-    const glm::vec4 kEdgeColor{0.05F, 0.05F, 0.05F, 0.8F};
+    const glm::vec4 kEdgeColor{0.25F, 0.25F, 0.25F, 0.55F};
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
     VkPushConstantRange shadowPushRange{};
