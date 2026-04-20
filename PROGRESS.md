@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP (re-opened for RP.16) — Render Polish
-## Current Task: RP.16.4 SunLightingScene + PackSunLighting (retire three-point)
+## Current Task: RP.16.4.b Retire `LightingScene`/`MakeDefaultLighting`/`PackLighting` + update callers
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -208,7 +208,9 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.16.1 Solar-position math (`renderer/SunPosition.{h,cpp}`, NOAA-simplified)
   - [x] RP.16.2 Sky colour from elevation (`renderer/SkyColor.{h,cpp}`, 5-key LUT)
   - [x] RP.16.3 IfcSite location extraction (`ifc/IfcSiteLocation.{h,cpp}` — RefLat/Lon DMS, RefElevation, TrueNorth)
-  - [ ] RP.16.4 `SunLightingScene` + `PackSunLighting` (retire `LightingScene`/`MakeDefaultLighting`). **Flagged for sub-split at kickoff** (16.4.a new API + tests, 16.4.b old-API removal).
+  - [ ] RP.16.4 `SunLightingScene` + `PackSunLighting` (retire `LightingScene`/`MakeDefaultLighting`). Sub-split:
+    - [x] RP.16.4.a `SunLightingScene` + `PackSunLighting` additive (sun→key, fill/rim zeroed, ambient from sky LUT)
+    - [ ] RP.16.4.b Retire `LightingScene`/`MakeDefaultLighting`/`PackLighting` + update callers (`main.cpp`, `RenderQualityPanel`)
   - [ ] RP.16.5 Artificial-indoor preset (overhead fill + ambient boost)
   - [ ] RP.16.6 `RenderQualityPanel` rewrite (Sun header; retire three-point + sky-colour)
   - [ ] RP.16.7 Wire site → panel → renderer in `main.cpp`

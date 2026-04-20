@@ -61,6 +61,30 @@ static_assert(sizeof(LightingUbo) == 224, "LightingUbo must match std140 layout"
 LightingScene MakeDefaultLighting();
 LightingUbo PackLighting(const LightingScene& scene);
 
+// Renderer-local mirror of geographic site info (intentionally not tied to the
+// `ifc` module). Lat/lon are geodetic radians; longitude is positive east.
+struct SunSite {
+    double latitudeRad{0.0};
+    double longitudeRad{0.0};
+    double elevationM{0.0};
+};
+
+// Sun-driven replacement for `LightingScene`. One directional sun in the key
+// slot (direction + colour from `ComputeSunDirection` + `ComputeSkyColor`);
+// fill/rim slots zeroed (filled by the indoor preset in RP.16.5); hemisphere
+// ambient derived from sun elevation. `exposure` is scene metadata routed to
+// the tonemap pass by the caller — not consumed by `PackSunLighting`.
+struct SunLightingScene {
+    double julianDayUtc{2451545.0};  // J2000 epoch — arbitrary fallback
+    SunSite siteLocation{};
+    double trueNorthRad{0.0};
+    bool indoorLightsEnabled{false};
+    float exposure{1.0F};
+    ShadowSettings shadow{};
+};
+
+LightingUbo PackSunLighting(const SunLightingScene& scene);
+
 // Lambertian contribution from a single directional light on a surface with the
 // given world-space normal. Mirrors the fragment-shader math so unit tests can
 // verify lighting behavior without a GPU.

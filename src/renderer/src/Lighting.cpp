@@ -1,5 +1,8 @@
 #include <renderer/Lighting.h>
 
+#include <renderer/SkyColor.h>
+#include <renderer/SunPosition.h>
+
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
@@ -45,6 +48,36 @@ LightingUbo PackLighting(const LightingScene& scene) {
     ubo.skyZenith = glm::vec4(scene.sky.zenith, 0.0F);
     ubo.skyHorizon = glm::vec4(scene.sky.horizon, 0.0F);
     ubo.skyGround = glm::vec4(scene.sky.ground, 0.0F);
+
+    ubo.lightSpaceMatrix = scene.shadow.lightSpaceMatrix;
+    const float invRes = scene.shadow.mapResolution > 0
+                             ? 1.0F / static_cast<float>(scene.shadow.mapResolution)
+                             : 0.0F;
+    ubo.shadowParams = glm::vec4(scene.shadow.enabled ? 1.0F : 0.0F, scene.shadow.bias,
+                                 scene.shadow.pcfRadius, invRes);
+    return ubo;
+}
+
+LightingUbo PackSunLighting(const SunLightingScene& scene) {
+    const SunPosition sun = ComputeSunDirection(scene.julianDayUtc,
+                                                scene.siteLocation.latitudeRad,
+                                                scene.siteLocation.longitudeRad,
+                                                scene.trueNorthRad);
+    const SkyColor sky = ComputeSkyColor(sun.elevation);
+
+    LightingUbo ubo{};
+    ubo.keyDirectionIntensity = glm::vec4(sun.dirWorld, 1.0F);
+    ubo.keyColorEnabled = glm::vec4(sky.sunColor, 1.0F);
+    // Fill and rim slots zero-filled. RP.16.5 populates fill when the indoor
+    // preset is on; rim is retired in the sun-driven model.
+    ubo.fillDirectionIntensity = glm::vec4(0.0F);
+    ubo.fillColorEnabled = glm::vec4(0.0F);
+    ubo.rimDirectionIntensity = glm::vec4(0.0F);
+    ubo.rimColorEnabled = glm::vec4(0.0F);
+
+    ubo.skyZenith = glm::vec4(sky.zenith, 0.0F);
+    ubo.skyHorizon = glm::vec4(sky.horizon, 0.0F);
+    ubo.skyGround = glm::vec4(sky.ground, 0.0F);
 
     ubo.lightSpaceMatrix = scene.shadow.lightSpaceMatrix;
     const float invRes = scene.shadow.mapResolution > 0
