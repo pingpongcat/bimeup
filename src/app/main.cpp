@@ -8,6 +8,7 @@
 #include <ifc/AsyncLoader.h>
 #include <ifc/IfcHierarchy.h>
 #include <ifc/IfcModel.h>
+#include <ifc/IfcSiteLocation.h>
 #include <platform/Input.h>
 #include <platform/Window.h>
 #include <renderer/Buffer.h>
@@ -389,6 +390,27 @@ int main(int argc, char* argv[]) {
     }
     auto& ifcModel = *loadedModel;
     LOG_INFO("IFC loaded: {} elements", ifcModel.GetElementCount());
+
+    // RP.16.7 — extract IfcSite geolocation + TrueNorth. Fall back to Warsaw
+    // (52.23° N, 21.01° E, TrueNorth 0) when the file has no site metadata;
+    // the northern-hemisphere default matches the SkyColor LUT's tuning and
+    // keeps the sun in plausible positions before the user edits anything.
+    constexpr double kDegToRadApp = 3.14159265358979323846 / 180.0;
+    double ifcSiteLatRad = 52.2297 * kDegToRadApp;
+    double ifcSiteLonRad = 21.0122 * kDegToRadApp;
+    double ifcSiteElevationM = 0.0;
+    double ifcSiteTrueNorthRad = 0.0;
+    if (auto extracted = bimeup::ifc::ExtractSiteLocation(ifcModel); extracted) {
+        ifcSiteLatRad = extracted->latitudeRad;
+        ifcSiteLonRad = extracted->longitudeRad;
+        ifcSiteElevationM = extracted->elevationM;
+        ifcSiteTrueNorthRad = extracted->trueNorthRad;
+        LOG_INFO("IfcSite: lat={:.4f}°, lon={:.4f}°, elev={:.2f} m, trueN={:.3f}°",
+                 ifcSiteLatRad / kDegToRadApp, ifcSiteLonRad / kDegToRadApp,
+                 ifcSiteElevationM, ifcSiteTrueNorthRad / kDegToRadApp);
+    } else {
+        LOG_INFO("IfcSite metadata missing — defaulting to Warsaw (52.23°N, 21.01°E)");
+    }
 
     std::optional<bimeup::scene::BuildResult> sceneResult;
 
@@ -1449,6 +1471,20 @@ int main(int argc, char* argv[]) {
         // space, so the tonemap needs a multiplier to keep direct-lit
         // surfaces off the ACES curve shoulder.
         renderLoop.SetExposure(renderQualityPanel->GetSettings().sun.exposure);
+
+        // RP.16.7 — when the panel's "Use site geolocation" toggle is on,
+        // overwrite lat/lon/elev/trueNorth with the IfcSite values we cached
+        // at load. When off, whatever the user has dialled into the manual
+        // sliders stays intact.
+        {
+            auto& panelSettings = renderQualityPanel->MutableSettings();
+            if (panelSettings.useSiteGeolocation) {
+                panelSettings.sun.siteLocation.latitudeRad = ifcSiteLatRad;
+                panelSettings.sun.siteLocation.longitudeRad = ifcSiteLonRad;
+                panelSettings.sun.siteLocation.elevationM = ifcSiteElevationM;
+                panelSettings.sun.trueNorthRad = ifcSiteTrueNorthRad;
+            }
+        }
 
         // Resolve shadow settings: compute light-space matrix from current scene
         // bounds + sun direction, and (re)build the shadow map if resolution or

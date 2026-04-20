@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP (re-opened for RP.16) — Render Polish
-## Current Task: RP.16.7 Wire site → panel → renderer in main.cpp
+## Current Task: RP.16.8 Fix pre-existing `ApplicationTest` VMA-leak (blocks RP.16 stage gate)
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -213,9 +213,10 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
     - [x] RP.16.4.b Retired `LightingScene`/`MakeDefaultLighting`/`PackLighting` + wired `sun` through `main.cpp`/`RenderQualityPanel`
   - [x] RP.16.5 Artificial-indoor preset (overhead fill + ambient boost)
   - [x] RP.16.6 `RenderQualityPanel` rewrite (Sun header; retire three-point + sky-colour)
-  - [ ] RP.16.7 Wire site → panel → renderer in `main.cpp`
-  - Ordering: 16.1 / 16.2 / 16.3 parallelizable → 16.4 → 16.5 → 16.6 → 16.7
-  - Stage gate at RP.16.7: full `ctest -j$(nproc) --output-on-failure` + visual spot-check on `sample_house.ifc` (noon / golden-hour / night / indoor-preset)
+  - [x] RP.16.7 Wire site → panel → renderer in `main.cpp`
+  - [ ] RP.16.8 Pre-existing `ApplicationTest` VMA-leak blocks the RP.16 stage gate (4 suites aborted under `RenderLoop` teardown — unrelated to RP.16 code). Fix before closing Stage RP.
+  - Ordering: 16.1 / 16.2 / 16.3 parallelizable → 16.4 → 16.5 → 16.6 → 16.7 → 16.8 (stage gate)
+  - Stage gate at RP.16.8: full `ctest -j$(nproc) --output-on-failure` + visual spot-check on `sample_house.ifc` (noon / golden-hour / night / indoor-preset)
 
 ## Stage 9 — Ray Tracing
 - [ ] 9.1 Acceleration structures (BLAS)
