@@ -1427,13 +1427,15 @@ int main(int argc, char* argv[]) {
                 vkCmdPushConstants(cmd, shadowTransmissionPipeline->GetLayout(),
                                    VK_SHADER_STAGE_VERTEX_BIT, 0,
                                    sizeof(glm::mat4), &lightSpaceModel);
-                glm::vec3 surfaceRgb(1.0F);
-                if (handle < sceneResult->meshes.size()) {
-                    const auto& colors = sceneResult->meshes[handle].GetColors();
-                    if (!colors.empty()) surfaceRgb = glm::vec3(colors[0]);
-                }
+                // RP.18.6 — architectural glass is near-neutral in
+                // transmission; the blue of `IfcWindow` is a surface /
+                // reflection colour, not a spectral filter. Pushing the surface
+                // RGB here bled strong blue patches onto sunlit floors. Drop
+                // the surface factor and tint only by `(1 - alpha)`, keeping
+                // the "sun through glass is dimmer" read without the colour
+                // bleed.
                 const float alpha = effectiveAlphas[idx];
-                glm::vec4 glassTint(surfaceRgb * (1.0F - alpha), 1.0F);
+                glm::vec4 glassTint(glm::vec3(1.0F - alpha), 1.0F);
                 vkCmdPushConstants(cmd, shadowTransmissionPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
                                    sizeof(glm::vec4), &glassTint);
