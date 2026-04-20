@@ -217,3 +217,52 @@ RP.16.3 ─┘
 
 ---
 
+### RP.17 — Feature-edge overlay (added 2026-04-20)
+
+The current "Wireframe" render mode is a global `VK_POLYGON_MODE_LINE` toggle: every triangulation seam is drawn, which turns any non-trivial IFC into a tangle of diagonal lines and is useless both visually and for measurement. Replace it with a proper **feature-edge overlay** — the CAD-viewer approach: extract boundary edges + dihedral-angle-thresholded edges per mesh at scene-build time, draw them as a dedicated line pass on top of the shaded surface. Gives the model crisp silhouettes, exposes the architecturally meaningful edges (wall corners, slab tops, opening reveals), and sets up `scene::Snap` for edge-snap candidates later.
+
+**Scope**
+- **In:** CPU edge extraction (dihedral-angle filter, position welding), line buffers on `SceneMesh`, `SceneBuilder` wiring, `EdgeOverlayPipeline` (line topology, depth ≤, polygon-offset, alpha), GLSL `edge_overlay.{vert,frag}`, RenderLoop draw-pass wiring, Toolbar "Edges" toggle (off / on) replacing the current "Wireframe" radio, retire `renderer::RenderMode::Wireframe` + the wireframe graphics pipeline in `main.cpp`.
+- **Out:** Geometry-shader / tessellation-shader edge detection (CPU extraction is deterministic, cacheable, and snap-ready), wide-line emulation via quad expansion (use `VK_LINE_WIDTH` + `wideLines` feature first; escalate only if needed), screen-space edge enhancement (Option B in the design discussion — may revisit as a separate effect), edge colour per-IFC-type (single flat colour for now).
+- **Deferred:** 17.6 (feed edges into `scene::Snap`) is optional — keep it as a follow-up if 17.1–17.5 ship cleanly.
+
+**Third-party libraries evaluated**
+- `meshoptimizer`: already widely used, but no feature-edge API (LOD / simplification / overdraw only). Not a fit.
+- `libigl`: has `sharp_edges`, but Eigen-heavy and would pull a large dep for ~80 lines of algorithm.
+- `CGAL`: overkill + licensing friction.
+- **Decision**: custom implementation. Matches codebase culture (small focused modules with unit tests).
+
+**Modules involved**
+- `scene/` (new `EdgeExtractor`, `SceneMesh` gains a line-buffer field, `SceneBuilder` wires extraction)
+- `renderer/` (new `EdgeOverlayPipeline`, `edge_overlay.{vert,frag}`, `RenderLoop` draw-pass addition, retire `RenderMode::Wireframe`)
+- `ui/` (Toolbar: "Wireframe" radio → "Edges" toggle; `main.cpp` wires the toggle through to the RenderLoop)
+
+**Tasks**
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.17.1 | **`scene::EdgeExtractor`** — `ExtractFeatureEdges(positions, indices, config) → {positions, indices}` producing a line-list. Welds vertices by `config.weldEpsilon` (default 1e-5) before building edge→triangle adjacency. Keeps (a) boundary edges (1 triangle) and (b) edges where `acos(dot(n_a, n_b)) ≥ config.dihedralAngleDegrees` (default 30°). Drops co-planar seams. Triangle normals computed from welded positions; degenerate triangles (zero-area) skipped. | Unit: cube → 12 unique line segments (not 36); regular tetrahedron → 6; coplanar quad (two triangles sharing a diagonal) → 4 (diagonal dropped); boundary-open strip → 2 long edges + 2 short (the seam between strips is co-planar → dropped); degenerate input → empty output. Determinism: output is stable across runs. | `scene/EdgeExtractor.{h,cpp}`, `tests/scene/test_edge_extractor.cpp` |
+| RP.17.2 | **`SceneMesh` line buffer + builder wiring** — add `SetEdgeIndices(std::vector<uint32_t>)` / `GetEdgeIndices()` + `GetEdgeIndexCount()` to `SceneMesh`. `SceneBuilder` runs `ExtractFeatureEdges` on each source mesh, offsets the returned indices by the batch-vertex-base, and appends into the batch's edge-index buffer. Empty if the batch has no extractable edges. | Unit: builder fed a single cube mesh produces a `SceneMesh` with `GetEdgeIndexCount() == 24` (12 edges × 2). Builder fed two meshes in a batch produces concatenated edge indices with correct vertex-base offsets. | `scene/SceneMesh.{h,cpp}`, `scene/SceneBuilder.{h,cpp}`, tests in `test_scene_mesh.cpp` + `test_scene_builder.cpp` |
+| RP.17.3 | **`renderer::EdgeOverlayPipeline`** — new graphics pipeline: `VK_PRIMITIVE_TOPOLOGY_LINE_LIST`, `VK_POLYGON_MODE_FILL` (not LINE — we *are* lines), depth-test `VK_COMPARE_OP_LESS_OR_EQUAL`, depth-write off, polygon-offset `{constant: -1.0, slope: -1.0}` so lines win the z-fight with the surface, alpha-blend on (for the opacity knob). Reuses the existing `basic` vertex layout (position only sampled in shader; normal/colour ignored). | Unit: pipeline-build test in `tests/renderer/` — creates the pipeline under `HeadlessRenderer`, asserts handle non-null and VkResult success; no visual assertion yet. | `renderer/EdgeOverlayPipeline.{h,cpp}`, update `tests/renderer/CMakeLists.txt` + a pipeline-build test |
+| RP.17.4 | **`edge_overlay.{vert,frag}` + RenderLoop draw** — minimal shaders: vert applies `uniform.viewProj * position`, frag writes `vec4(edgeColor.rgb, edgeColor.a)` from a push-constant (16 B: `vec4 color`). RenderLoop gets a new draw block inside the existing main-pass command buffer, ordered **after opaque, after section caps, before transparent**. Uses the per-batch edge-index buffer from 17.2. Skipped when the "Edges" toggle is off. | Visual: run the app on `sample.ifc` — wall corners, slab edges, window reveals are crisp single lines (no more X-diagonals through rectangular faces). Unit: smoke test `RenderLoopTest` renders a frame with edges on and compares a checksum or pixel count of the edge-overlay region; if that's too flaky, just assert no validation layer errors. | `assets/shaders/edge_overlay.{vert,frag}`, `renderer/RenderLoop.cpp` (draw wire-up), `renderer/RenderLoop.h` (toggle setter) |
+| RP.17.5 | **Toolbar "Edges" toggle + `main.cpp` cleanup** — retire `renderer::RenderMode::Wireframe` and the wireframe graphics pipeline; `Toolbar` replaces the Shaded/Wireframe radio pair with a "Shaded" label + an "Edges" checkbox (defaulting on). `main.cpp` drops `wireframePipeline`, `buildPipelines` returns a single shaded pipeline, keyboard shortcut `W` toggles the Edges overlay (not the mode). `RenderMode.h` can keep the enum if anything else uses it; otherwise delete. | Update `ToolbarTest` (or equivalent UI test) to pin the new shape: radio pair → bool toggle; wireframe radio no longer present. `ctest -j$(nproc)` passes. Visual spot-check: toggle edges on/off with `W` mid-session; no visible regressions in section view / PoV / first-person. | `ui/Toolbar.{h,cpp}`, `ui/tests/ToolbarTest.cpp`, `app/main.cpp`, `renderer/include/renderer/RenderMode.h` (possibly deleted) |
+| RP.17.6 (optional) | **Edge-snap integration** — `scene::Snap` gains an edge-snap mode that searches the per-batch edge-index buffers for the line closest to the mouse ray (foot-of-perpendicular). Returns a snap point + the owning edge. Useful for "snap to wall corner edge" when measuring. | Unit: ray aimed at a cube-edge midpoint returns a snap point on the expected edge within epsilon; ray parallel-offset from an edge returns that edge's nearest point. | `scene/Snap.{h,cpp}`, `tests/scene/test_snap.cpp` additions |
+
+**Ordering**
+
+```
+RP.17.1 ── RP.17.2 ── RP.17.3 ── RP.17.4 ── RP.17.5 ── (RP.17.6 optional) ── stage gate
+```
+
+Strictly linear — each step's output is the next step's input. 17.1 and 17.2 both live in `scene/` (≤2-modules-per-session rule satisfied per task). 17.3 / 17.4 are renderer-only. 17.5 spans `ui/` + `app/main.cpp` + optional `renderer/RenderMode.h` retire — borderline; split if `main.cpp` cleanup balloons.
+
+**Risks**
+- **IFC meshes may be flat-shaded** (one vertex per face-corner, no index sharing between adjacent faces). Without position-welding, the extractor would see every edge as a boundary. The `weldEpsilon` default is the mitigation; `test_edge_extractor.cpp` includes a flat-shaded-cube case (3×12=36 vertices, 12 unique positions) to lock this in.
+- **Curved surfaces over-fire edges** (e.g. a cylinder triangulated as 32 facets at 30° dihedral would emit 32 edges, which is correct but busy). Acceptable for v1 — curved IFC geometry is rare in buildings; raise the default threshold to 30–35° if the sample house looks cluttered. Configurable via the extractor config so the Toolbar can expose a slider later without re-extracting (we'd need an edge-angle buffer to do that; out of scope for 17).
+- **`wideLines` not guaranteed** on all Vulkan devices. Default to `1.0f` line width; if we want thicker later, guard behind a feature check or escalate to quad-expansion (out of scope for 17).
+- **Edge z-fighting with surface**. Mitigated by `polygonOffset` + `depthTestEnable=VK_TRUE, depthWriteEnable=VK_FALSE, compareOp=LESS_OR_EQUAL`. If artefacts persist under MSAA-off renderer, bump the bias; lines should always render slightly in front of their owning surface.
+
+**Stage framing**: Stage RP has been "closed" three times (RP.13b, RP.15b, RP.16.8). RP.17 re-opens it a fourth time rather than standing up a new "Stage E — Edges", by the same logic as RP.16: it's architectural-viewer cleanup (retiring a feature that doesn't work for BIM) that couldn't be known at original RP kickoff. Stage 9 (RT) follows after RP.17 closes.
+
+---
+

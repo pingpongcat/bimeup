@@ -9,6 +9,7 @@ add_executable(test_scene
     test_slicing.cpp
     test_section_cap_geometry.cpp
     test_axis_section_controller.cpp
+    test_edge_extractor.cpp
 )
 
 target_link_libraries(test_scene PRIVATE

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage 9 — Ray Tracing
-## Current Task: 9.1 Acceleration structures (BLAS)
+## Current Stage: Stage RP — Render Polish (reopened for RP.17)
+## Current Task: RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -217,6 +217,16 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.16.8 `ApplicationTest` VMA-leak — fixed via CMakeLists.txt shader-path ordering (set() before add_subdirectory(src/core) so `BIMEUP_SHADER_DIR` isn't empty) + `RenderLoop::Cleanup()` now calls `CleanupDepthPyramidResources / CleanupSmaaResources / CleanupSsaoResources`.
   - Ordering: 16.1 / 16.2 / 16.3 parallelizable → 16.4 → 16.5 → 16.6 → 16.7 → 16.8 (stage gate)
   - Stage gate at RP.16.8: full `ctest -j$(nproc) --output-on-failure` 547/547 ✓ (2026-04-20)
+
+- [ ] RP.17 Feature-edge overlay — retire the noisy `VK_POLYGON_MODE_LINE` wireframe (every triangulation seam visible) in favour of an overlay that draws only **feature edges** (boundary + dihedral-angle > threshold). Extracted CPU-side per source mesh at scene-build time, drawn after opaque + before transparent with depth-test ≤, polygon-offset bias, configurable alpha/thickness. Sharper read on the model and, later, a first-class snap source for measurement. Plan: `docs/plan/stage_RP_render_polish.md` → "RP.17".
+  - [x] RP.17.1 `scene::EdgeExtractor` (dihedral-angle filter, weld by position, CPU) + unit tests
+  - [ ] RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
+  - [ ] RP.17.3 `renderer::EdgeOverlayPipeline` (line topology, depth ≤, polygon-offset, alpha)
+  - [ ] RP.17.4 `edge_overlay.{vert,frag}` + RenderLoop draw-pass wiring
+  - [ ] RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup
+  - [ ] RP.17.6 (Optional) feed extracted edges into `scene::Snap` as edge-snap source
+  - Ordering: 17.1 → 17.2 → 17.3 → 17.4 → 17.5 → (optional 17.6) → stage gate
+  - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure`
 
 ## Stage 9 — Ray Tracing
 - [ ] 9.1 Acceleration structures (BLAS)
