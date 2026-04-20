@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage 9 — Ray Tracing (Stage RP closed 2026-04-20 at RP.18.5)
-## Current Task: 9.1 RT-capability probe + BLAS per mesh. RP.17.6 edge-snap still deferred.
+## Current Stage: Stage RP — Render Polish (reopened 2026-04-20 for RP.18.6 + RP.19)
+## Current Task: RP.18.6 neutralise glass transmission tint — next session. RP.19 SMAA tuning panel + RP.17.6 edge-snap still deferred; Stage 9 starts after RP.18.6 + RP.19 close.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -240,6 +240,9 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.18.5 Panel toggle `windowTransmission` (default on) + stage gate
   - Ordering: 18.1 → 18.2 → 18.3 → 18.4 → 18.5 → stage gate
   - Stage gate at RP.18.5: full `ctest -j$(nproc) --output-on-failure` 570/570 ✓ (2026-04-20)
+  - [ ] RP.18.6 Neutralise glass transmission tint. Post-RP.18.5 visual-test surfaced strong blue light patches behind `IfcWindow` at certain sun angles. Root cause: `main.cpp`'s RP.18.3 draw block pushes `glassTint = surfaceColor.rgb * (1 - alpha)`, so the window's viewer-authored blue becomes a spectral filter on the sun. Architectural glass is near-neutral in transmission — the blue is surface/reflection, not a filter. Fix: drop `surfaceColor` factor, push `vec3(1 - alpha)` (or a very mild tint, `mix(vec3(1), surfaceColor, ~0.15) * (1 - alpha)`). Keeps the "sun through glass is dimmer" read, drops the colour bleed. No test changes — `ComputeTransmittedSun` takes transmit as an input; the fix is upstream in the push-constant.
+
+- [ ] RP.19 SMAA tuning knobs in `RenderQualityPanel`. Today the panel only exposes `enabled`. Wire threshold (edge-detection, ~0.05–0.2) + quality preset (LOW/MEDIUM/HIGH affecting max-search-steps) through `SmaaSettings` → `SmaaEdgePipeline`/`SmaaWeightsPipeline` push constants → panel sliders. Pin defaults in a `RenderQualityPanelTest` case.
 
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.
