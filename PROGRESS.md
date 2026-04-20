@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage RP — Render Polish (reopened for RP.18)
-## Current Task: RP.18.5 `windowTransmission` toggle (default on) + stage gate — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.18 closes.
+## Current Stage: Stage 9 — Ray Tracing (Stage RP closed 2026-04-20 at RP.18.5)
+## Current Task: 9.1 RT-capability probe + BLAS per mesh. RP.17.6 edge-snap still deferred.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -237,8 +237,9 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.18.2 `shadow_transmission.{vert,frag}` + `ShadowTransmissionPipeline` (min-blend, depth-test only)
   - [x] RP.18.3 Draw-loop wiring: classify opaque vs transmissive via existing `effectiveAlpha` plumbing
   - [x] RP.18.4 `basic.frag` samples transmission map + multiplies sun tint (+ `ComputeTransmittedSun` CPU mirror)
-  - [ ] RP.18.5 Panel toggle `windowTransmission` (default on) + stage gate
+  - [x] RP.18.5 Panel toggle `windowTransmission` (default on) + stage gate
   - Ordering: 18.1 → 18.2 → 18.3 → 18.4 → 18.5 → stage gate
+  - Stage gate at RP.18.5: full `ctest -j$(nproc) --output-on-failure` 570/570 ✓ (2026-04-20)
 
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.

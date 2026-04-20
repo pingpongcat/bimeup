@@ -1413,7 +1413,12 @@ int main(int argc, char* argv[]) {
         // Transmissive bucket — tinted attenuation written to the transmission
         // attachment via min-blend. Depth-test is on (LESS) but depth-write is
         // off, so an opaque wall behind glass still fully blocks the sun.
-        if (!buckets.transmissiveIndices.empty()) {
+        // RP.18.5 — skip the entire sub-pass when the window-transmission
+        // toggle is off; the attachment stays cleared white and basic.frag's
+        // `glassPresent` detect falls back to `sunColor * visibility`.
+        const bool windowTransmission =
+            renderQualityPanel->GetSettings().sun.shadow.windowTransmission;
+        if (windowTransmission && !buckets.transmissiveIndices.empty()) {
             shadowTransmissionPipeline->Bind(cmd);
             meshBuffer.Bind(cmd);
             for (std::size_t idx : buckets.transmissiveIndices) {

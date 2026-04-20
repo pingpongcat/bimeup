@@ -20,6 +20,13 @@ struct ShadowSettings {
     float pcfRadius{1.0F};                    // PCF tap offset in texels
     std::uint32_t mapResolution{1024};
     glm::mat4 lightSpaceMatrix{1.0F};         // world → light clip space
+    // RP.18.5 — route sun through the RP.18 window-transmission path. On:
+    // `IfcWindow` glass writes a tinted attenuation into the shadow pass's
+    // second attachment, and `basic.frag` samples it to light floors behind
+    // windows at glass-tinted intensity. Off: transmissive draws are skipped
+    // (transmission map stays cleared white) and the sun reverts to the
+    // pre-RP.18 binary visibility test — bit-compatible regression guard.
+    bool windowTransmission{true};
 };
 
 // 3-tone hemisphere ambient: sampled along dot(normal, +Y world-up). +Y picks

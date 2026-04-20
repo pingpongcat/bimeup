@@ -69,6 +69,15 @@ TEST(RenderQualityPanelTest, DefaultIndoorLightsOff) {
     EXPECT_FALSE(panel.GetSettings().sun.indoorLightsEnabled);
 }
 
+// RP.18.5 — window transmission ships enabled; the whole point of RP.18 is
+// that the default raster renderer tints sun through IfcWindow glass without
+// user opt-in. Disabling this toggle falls back to the pre-RP.18 binary
+// visibility path (bit-compatible regression guard).
+TEST(RenderQualityPanelTest, DefaultWindowTransmissionOn) {
+    RenderQualityPanel panel;
+    EXPECT_TRUE(panel.GetSettings().sun.shadow.windowTransmission);
+}
+
 TEST(RenderQualityPanelTest, MutableSettingsAllowsDateTimeEdits) {
     RenderQualityPanel panel;
     auto& s = panel.MutableSettings();

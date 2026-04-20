@@ -115,6 +115,7 @@ void RenderQualityPanel::OnDraw() {
 
         ImGui::SliderFloat("Bias", &shadow.bias, 0.0F, 0.02F, "%.4f");
         ImGui::SliderFloat("PCF radius (texels)", &shadow.pcfRadius, 0.0F, 4.0F);
+        ImGui::Checkbox("Window transmission", &shadow.windowTransmission);
         ImGui::EndDisabled();
     }
 
