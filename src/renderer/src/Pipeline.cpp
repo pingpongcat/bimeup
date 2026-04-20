@@ -75,7 +75,7 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.topology = config.topology;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     VkPipelineViewportStateCreateInfo viewportState{};
@@ -91,7 +91,10 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     rasterizer.lineWidth = 1.0F;
     rasterizer.cullMode = config.cullMode;
     rasterizer.frontFace = config.frontFace;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    rasterizer.depthBiasEnable = config.depthBiasEnable ? VK_TRUE : VK_FALSE;
+    rasterizer.depthBiasConstantFactor = config.depthBiasConstantFactor;
+    rasterizer.depthBiasSlopeFactor = config.depthBiasSlopeFactor;
+    rasterizer.depthBiasClamp = 0.0F;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;

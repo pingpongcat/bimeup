@@ -20,6 +20,7 @@ add_executable(renderer_tests
     ClipPlaneTest.cpp
     ClipPlaneManagerTest.cpp
     SectionFillPipelineTest.cpp
+    EdgeOverlayPipelineTest.cpp
     DiskMarkerPipelineTest.cpp
     DiskMarkerTest.cpp
     TonemapTest.cpp
@@ -84,6 +85,7 @@ set(_renderer_gpu_fixtures
     RenderModePipelineTest
     ShadowMapTest
     SectionFillPipelineTest
+    EdgeOverlayPipelineTest
     DiskMarkerPipelineTest
     TonemapPipelineTest
     DepthLinearizePipelineTest

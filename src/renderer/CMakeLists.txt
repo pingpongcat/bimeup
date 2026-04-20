@@ -19,6 +19,7 @@ add_library(bimeup_renderer STATIC
     src/ClipPlane.cpp
     src/ClipPlaneManager.cpp
     src/SectionFillPipeline.cpp
+    src/EdgeOverlayPipeline.cpp
     src/DiskMarkerPipeline.cpp
     src/DiskMarker.cpp
     src/Tonemap.cpp

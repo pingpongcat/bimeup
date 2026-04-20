@@ -12,12 +12,19 @@ class Shader;
 struct PipelineConfig {
     VkRenderPass renderPass = VK_NULL_HANDLE;
     uint32_t subpass = 0;
+    VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
     VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
     VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     bool depthTestEnable = false;
     bool depthWriteEnable = false;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
+    // RP.17.3 — polygon-offset bias so line-topology overlays win the z-fight
+    // against the surface they sit on. Negative values pull fragments closer
+    // to the camera in clip-space. Applied when `depthBiasEnable = true`.
+    bool depthBiasEnable = false;
+    float depthBiasConstantFactor = 0.0F;
+    float depthBiasSlopeFactor = 0.0F;
     bool alphaBlendEnable = false;
     // RP.10c — when true, attachment 0's blend state is configured as
     // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =
