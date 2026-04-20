@@ -1,5 +1,6 @@
 #include <scene/SceneBuilder.h>
 #include <scene/AABB.h>
+#include <scene/EdgeExtractor.h>
 #include <scene/SceneNode.h>
 
 #include <ifc/IfcGeometryExtractor.h>
@@ -48,9 +49,16 @@ SceneMesh ConvertMesh(const ifc::TriangulatedMesh& src) {
         n = glm::normalize(normalMatrix * n);
     }
 
+    // Extract feature edges on the post-transform positions so the line
+    // list matches the world-space mesh without a later transform pass.
+    // Indices returned reference `positions` directly; batching offsets
+    // them alongside triangle indices below.
+    auto edgeIndices = ExtractFeatureEdges(positions, src.indices, {});
+
     mesh.SetPositions(std::move(positions));
     mesh.SetNormals(std::move(normals));
     mesh.SetIndices(src.indices);
+    mesh.SetEdgeIndices(std::move(edgeIndices));
     mesh.SetUniformColor(color);
 
     return mesh;
@@ -172,6 +180,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
     std::vector<glm::vec3> normals;
     std::vector<glm::vec4> colors;
     std::vector<uint32_t> indices;
+    std::vector<uint32_t> edgeIndices;
     std::vector<NodeId> triangleOwners;
 
     uint32_t vertexOffset = 0;
@@ -180,6 +189,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
         const auto& mNrm = m->GetNormals();
         const auto& mCol = m->GetColors();
         const auto& mIdx = m->GetIndices();
+        const auto& mEdge = m->GetEdgeIndices();
         const auto& mOwn = m->GetTriangleOwners();
 
         positions.insert(positions.end(), mPos.begin(), mPos.end());
@@ -187,6 +197,9 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
         colors.insert(colors.end(), mCol.begin(), mCol.end());
         for (auto idx : mIdx) {
             indices.push_back(idx + vertexOffset);
+        }
+        for (auto idx : mEdge) {
+            edgeIndices.push_back(idx + vertexOffset);
         }
         triangleOwners.insert(triangleOwners.end(), mOwn.begin(), mOwn.end());
         vertexOffset += static_cast<uint32_t>(m->GetVertexCount());
@@ -196,6 +209,7 @@ SceneMesh MergeMeshes(const std::vector<const SceneMesh*>& meshes) {
     merged.SetNormals(std::move(normals));
     merged.SetColors(std::move(colors));
     merged.SetIndices(std::move(indices));
+    merged.SetEdgeIndices(std::move(edgeIndices));
     merged.SetTriangleOwners(std::move(triangleOwners));
 
     return merged;

@@ -68,6 +68,48 @@ TEST(BatchingTest, HundredSmallElementsProduceFewerMeshes) {
     EXPECT_EQ(result.meshes.size(), 1u);
 }
 
+TEST(BatchingTest, BatchedMeshConcatenatesEdgeIndicesWithOffset) {
+    // Two small meshes carrying pre-populated edge indices — the merge
+    // must concatenate them with a vertex-base offset so indices still
+    // reference the right vertices in the merged position buffer.
+    using namespace bimeup::scene;
+    BuildResult result;
+    glm::vec4 color(0.5f, 0.5f, 0.5f, 1.0f);
+
+    SceneMesh a = MakeSmallMesh(color);
+    a.SetEdgeIndices({0, 1, 1, 2});  // two lines inside mesh A (verts 0-1, 1-2)
+
+    SceneMesh b = MakeSmallMesh(color);
+    b.SetEdgeIndices({0, 2});  // one line inside mesh B (verts 0-2)
+
+    auto handleA = static_cast<MeshHandle>(result.meshes.size());
+    result.meshes.push_back(std::move(a));
+    SceneNode nA; nA.ifcType = "IfcWall"; nA.mesh = handleA;
+    result.scene.AddNode(std::move(nA));
+
+    auto handleB = static_cast<MeshHandle>(result.meshes.size());
+    result.meshes.push_back(std::move(b));
+    SceneNode nB; nB.ifcType = "IfcWall"; nB.mesh = handleB;
+    result.scene.AddNode(std::move(nB));
+
+    SceneBuilder::ApplyBatching(result);
+
+    ASSERT_EQ(result.meshes.size(), 1u);
+    const auto& merged = result.meshes[0];
+    // Mesh A contributes 3 verts (indices 0..2), mesh B's 3 verts come
+    // after at base 3. Expected merged edge list:
+    //   [0, 1, 1, 2]           — from A, unchanged
+    //   [0+3, 2+3] = [3, 5]    — from B, offset by A's vertex count
+    ASSERT_EQ(merged.GetEdgeIndexCount(), 6u);
+    const auto& e = merged.GetEdgeIndices();
+    EXPECT_EQ(e[0], 0u);
+    EXPECT_EQ(e[1], 1u);
+    EXPECT_EQ(e[2], 1u);
+    EXPECT_EQ(e[3], 2u);
+    EXPECT_EQ(e[4], 3u);
+    EXPECT_EQ(e[5], 5u);
+}
+
 TEST(BatchingTest, BatchedMeshPreservesTotalVertexCount) {
     auto result = MakeResultWithSmallMeshes(50, "IfcWall", {0.5f, 0.5f, 0.5f, 1.0f});
     size_t totalVertsBefore = 0;

@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP — Render Polish (reopened for RP.17)
-## Current Task: RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
+## Current Task: RP.17.3 `renderer::EdgeOverlayPipeline` (line topology, depth ≤, polygon-offset, alpha)
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -220,7 +220,7 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
 
 - [ ] RP.17 Feature-edge overlay — retire the noisy `VK_POLYGON_MODE_LINE` wireframe (every triangulation seam visible) in favour of an overlay that draws only **feature edges** (boundary + dihedral-angle > threshold). Extracted CPU-side per source mesh at scene-build time, drawn after opaque + before transparent with depth-test ≤, polygon-offset bias, configurable alpha/thickness. Sharper read on the model and, later, a first-class snap source for measurement. Plan: `docs/plan/stage_RP_render_polish.md` → "RP.17".
   - [x] RP.17.1 `scene::EdgeExtractor` (dihedral-angle filter, weld by position, CPU) + unit tests
-  - [ ] RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
+  - [x] RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
   - [ ] RP.17.3 `renderer::EdgeOverlayPipeline` (line topology, depth ≤, polygon-offset, alpha)
   - [ ] RP.17.4 `edge_overlay.{vert,frag}` + RenderLoop draw-pass wiring
   - [ ] RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup

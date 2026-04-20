@@ -18,6 +18,10 @@ void SceneMesh::SetIndices(std::vector<uint32_t> indices) {
     indices_ = std::move(indices);
 }
 
+void SceneMesh::SetEdgeIndices(std::vector<uint32_t> edgeIndices) {
+    edgeIndices_ = std::move(edgeIndices);
+}
+
 void SceneMesh::SetTriangleOwners(std::vector<NodeId> owners) {
     triangleOwners_ = std::move(owners);
 }

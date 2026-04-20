@@ -20,19 +20,21 @@ struct EdgeExtractionConfig {
     float weldEpsilon = 1e-5f;
 };
 
-/// Line-list geometry: `indices.size()` is always even, each consecutive
-/// pair is one line segment into `positions`.
-struct ExtractedEdges {
-    std::vector<glm::vec3> positions;
-    std::vector<uint32_t> indices;
-};
-
 /// Build a feature-edge line list from a triangle mesh. Pure CPU, no Vulkan.
-/// See `EdgeExtractionConfig` for the filter rules. Input `indices` length
-/// must be a multiple of 3; non-multiples trigger no emit for the partial
-/// triangle. Degenerate (zero-area) triangles are skipped.
-ExtractedEdges ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
-                                   const std::vector<uint32_t>& indices,
-                                   const EdgeExtractionConfig& config = {});
+/// The returned vector is a flat line-list of indices into the *input*
+/// `positions` array — consecutive pairs form one line segment. This lets
+/// callers reuse the same vertex buffer for triangle and edge draws. When
+/// the input was flat-shaded (multiple position copies per welded vertex),
+/// the extractor picks the first input index that maps to each welded
+/// vertex, so output indices are always valid subscripts into `positions`.
+///
+/// Rules (see `EdgeExtractionConfig`):
+///   - boundary edges (one adjacent triangle) are always kept;
+///   - edges whose dihedral angle ≥ `dihedralAngleDegrees` are kept;
+///   - co-planar seams (triangles sharing an edge at < threshold) are dropped;
+///   - degenerate (zero-area) triangles are skipped.
+std::vector<uint32_t> ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
+                                          const std::vector<uint32_t>& indices,
+                                          const EdgeExtractionConfig& config = {});
 
 }  // namespace bimeup::scene

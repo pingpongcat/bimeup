@@ -67,6 +67,23 @@ TEST(SceneMeshTest, SetAndGetIndices) {
     EXPECT_EQ(mesh.GetIndexCount(), 3);
 }
 
+TEST(SceneMeshTest, EdgeIndicesDefaultEmpty) {
+    SceneMesh mesh;
+    EXPECT_TRUE(mesh.GetEdgeIndices().empty());
+    EXPECT_EQ(mesh.GetEdgeIndexCount(), 0u);
+}
+
+TEST(SceneMeshTest, SetAndGetEdgeIndices) {
+    SceneMesh mesh;
+    std::vector<uint32_t> edgeIndices = {0, 1, 1, 2, 2, 0};
+    mesh.SetEdgeIndices(edgeIndices);
+
+    ASSERT_EQ(mesh.GetEdgeIndices().size(), 6u);
+    EXPECT_EQ(mesh.GetEdgeIndexCount(), 6u);
+    EXPECT_EQ(mesh.GetEdgeIndices()[0], 0u);
+    EXPECT_EQ(mesh.GetEdgeIndices()[5], 0u);
+}
+
 TEST(SceneMeshTest, GetInterleavedVerticesMatchesRendererLayout) {
     // Renderer expects: vec3 position, vec3 normal, vec4 color per vertex
     // Total: 10 floats per vertex

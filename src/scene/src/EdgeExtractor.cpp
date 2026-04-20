@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -14,15 +15,19 @@ namespace {
 
 // Bucket positions on a uniform integer lattice sized by `weldEpsilon`, then
 // union vertices whose buckets agree after rounding. A 27-cell neighbourhood
-// scan catches positions straddling bucket boundaries.
+// scan catches positions straddling bucket boundaries. Also records, for
+// each welded vertex, the first input index that mapped to it — so the
+// extractor can emit output indices in the *input* positions space.
 struct VertexWelder {
     explicit VertexWelder(float epsilon) : epsilon_(std::max(epsilon, 1e-12f)) {}
 
-    uint32_t Weld(const std::vector<glm::vec3>& positions,
-                  std::vector<glm::vec3>& outUnique,
-                  std::vector<uint32_t>& outRemap) {
+    void Weld(const std::vector<glm::vec3>& positions,
+              std::vector<glm::vec3>& outUnique,
+              std::vector<uint32_t>& outInputToWelded,
+              std::vector<uint32_t>& outWeldedToFirstInput) {
         outUnique.clear();
-        outRemap.assign(positions.size(), UINT32_MAX);
+        outInputToWelded.assign(positions.size(), UINT32_MAX);
+        outWeldedToFirstInput.clear();
 
         const float invEps = 1.0f / epsilon_;
         std::unordered_map<std::uint64_t, std::vector<uint32_t>> grid;
@@ -56,12 +61,11 @@ struct VertexWelder {
             if (found == UINT32_MAX) {
                 found = static_cast<uint32_t>(outUnique.size());
                 outUnique.push_back(p);
+                outWeldedToFirstInput.push_back(i);
                 grid[Key(bx, by, bz)].push_back(found);
             }
-            outRemap[i] = found;
+            outInputToWelded[i] = found;
         }
-
-        return static_cast<uint32_t>(outUnique.size());
     }
 
 private:
@@ -106,27 +110,29 @@ struct EdgeAdjacency {
 
 }  // namespace
 
-ExtractedEdges ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
-                                   const std::vector<uint32_t>& indices,
-                                   const EdgeExtractionConfig& config) {
-    ExtractedEdges out;
-    if (positions.empty() || indices.size() < 3) return out;
+std::vector<uint32_t> ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
+                                          const std::vector<uint32_t>& indices,
+                                          const EdgeExtractionConfig& config) {
+    if (positions.empty() || indices.size() < 3) return {};
 
-    // 1. Weld positions — topological comparison has to happen on unique verts.
+    // 1. Weld positions — topological comparison has to happen on unique
+    //    vertices — and remember a representative input index per welded
+    //    vertex so output indices land in input-positions space.
     std::vector<glm::vec3> welded;
-    std::vector<uint32_t> remap;
+    std::vector<uint32_t> inputToWelded;
+    std::vector<uint32_t> weldedToFirstInput;
     VertexWelder welder(config.weldEpsilon);
-    welder.Weld(positions, welded, remap);
+    welder.Weld(positions, welded, inputToWelded, weldedToFirstInput);
 
     // 2. Walk triangles, compute normals, accumulate edge adjacency.
     std::unordered_map<EdgeKey, EdgeAdjacency, EdgeKeyHash> adjacency;
-    adjacency.reserve(indices.size());  // upper bound ~= 3 * triCount
+    adjacency.reserve(indices.size());
 
     const size_t triCount = indices.size() / 3;
     for (size_t t = 0; t < triCount; ++t) {
-        const uint32_t i0 = remap[indices[3 * t + 0]];
-        const uint32_t i1 = remap[indices[3 * t + 1]];
-        const uint32_t i2 = remap[indices[3 * t + 2]];
+        const uint32_t i0 = inputToWelded[indices[3 * t + 0]];
+        const uint32_t i1 = inputToWelded[indices[3 * t + 1]];
+        const uint32_t i2 = inputToWelded[indices[3 * t + 2]];
         if (i0 == i1 || i1 == i2 || i0 == i2) continue;  // degenerate
 
         const glm::vec3& p0 = welded[i0];
@@ -134,7 +140,7 @@ ExtractedEdges ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
         const glm::vec3& p2 = welded[i2];
         const glm::vec3 cross = glm::cross(p1 - p0, p2 - p0);
         const float area = glm::length(cross);
-        if (area < 1e-12f) continue;  // zero-area triangle
+        if (area < 1e-12f) continue;
         const glm::vec3 normal = cross / area;
 
         const EdgeKey edges[3] = {
@@ -155,9 +161,7 @@ ExtractedEdges ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
         }
     }
 
-    // 3. Classify edges. Keep boundary (count==1), non-manifold, or dihedral
-    // >= threshold. Ordering of the output follows a sorted sweep so
-    // determinism does not depend on unordered_map iteration.
+    // 3. Classify. Keep boundary / non-manifold / dihedral >= threshold.
     const float cosThreshold = std::cos(glm::radians(config.dihedralAngleDegrees));
 
     std::vector<EdgeKey> kept;
@@ -167,33 +171,27 @@ ExtractedEdges ExtractFeatureEdges(const std::vector<glm::vec3>& positions,
             kept.push_back(edge);
             continue;
         }
-        // count == 2: compare normals. Dihedral angle = acos(dot).
         const float d = glm::dot(adj.normalA, adj.normalB);
-        // Clamp guards against fp overshoot; a small negative overshoot
+        // Clamp guards against fp overshoot; a tiny negative overshoot
         // would flip the comparison otherwise.
         const float clamped = std::clamp(d, -1.0f, 1.0f);
         if (clamped <= cosThreshold) {
             kept.push_back(edge);
         }
     }
+    // Sort so the output is independent of unordered_map iteration order.
     std::sort(kept.begin(), kept.end(), [](const EdgeKey& a, const EdgeKey& b) {
         return std::tuple{a.a, a.b} < std::tuple{b.a, b.b};
     });
 
-    // 4. Emit. Only welded positions that participate in a kept edge are
-    // copied into the output, with indices remapped to the compact range.
-    std::vector<uint32_t> compact(welded.size(), UINT32_MAX);
-    out.indices.reserve(kept.size() * 2);
+    // 4. Emit indices in input-positions space, picking a representative
+    //    input index per welded vertex.
+    std::vector<uint32_t> out;
+    out.reserve(kept.size() * 2);
     for (const EdgeKey& e : kept) {
-        for (uint32_t v : {e.a, e.b}) {
-            if (compact[v] == UINT32_MAX) {
-                compact[v] = static_cast<uint32_t>(out.positions.size());
-                out.positions.push_back(welded[v]);
-            }
-            out.indices.push_back(compact[v]);
-        }
+        out.push_back(weldedToFirstInput[e.a]);
+        out.push_back(weldedToFirstInput[e.b]);
     }
-
     return out;
 }
 
