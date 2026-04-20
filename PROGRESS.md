@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage 9 — Ray Tracing
-## Current Task: 9.1 Acceleration structures (BLAS)
+## Current Stage: Stage RP — Render Polish (reopened for RP.17.8)
+## Current Task: RP.17.8.a Edge overlay respects axis clip planes
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -226,8 +226,11 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup
   - [ ] RP.17.6 (Optional) feed extracted edges into `scene::Snap` as edge-snap source
   - [x] RP.17.7 Smooth-line rasterization via `VK_EXT_line_rasterization` (added 2026-04-20)
-  - Ordering: 17.1 → 17.2 → 17.3 → 17.4 → 17.5 → 17.7 → (optional 17.6) → stage gate
-  - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure` 558/558 ✓ (2026-04-20; re-run after 17.7 still 558/558 ✓)
+  - [ ] RP.17.8 Edge overlay + axis section (added 2026-04-20)
+    - [ ] RP.17.8.a Edge overlay respects axis clip planes (ClipPlanesUbo binding + `edge_overlay.frag` discard)
+    - [ ] RP.17.8.b Section-plane element outlines (reuse `SectionCapGeometry` stitched polylines; draw via `EdgeOverlayPipeline` after caps)
+  - Ordering: 17.1 → 17.2 → 17.3 → 17.4 → 17.5 → 17.7 → 17.8.a → 17.8.b → (optional 17.6) → stage gate
+  - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure` 558/558 ✓ (2026-04-20; re-run after 17.8)
 
 ## Stage 9 — Ray Tracing
 - [ ] 9.1 Acceleration structures (BLAS)

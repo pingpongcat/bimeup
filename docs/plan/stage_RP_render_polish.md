@@ -284,3 +284,41 @@ After RP.17.5 shipped, the 1-px aliased line overlay reads poorly on sloped wall
 
 ---
 
+### RP.17.8 — Edge overlay + axis section (added 2026-04-20)
+
+Two tied issues surfaced after RP.17.7 + the softer grey+alpha tweak: (1) the edge overlay draws *through* axis clip planes — edges keep rendering on the hidden side of the cut — and (2) when the user triggers a section-fill, the cap is a solid-colour polygon with no silhouette, so cross-sections don't read as architectural plans do (where every cut element shows an outline around its filled slice). Fix both so the edge pass becomes a first-class citizen of the section-view pipeline, not just an overlay on the unclipped model.
+
+**Scope**
+- **In:** add `ClipPlanesUbo` to the edge-overlay descriptor layout + replicate `basic.frag`'s clip-plane discard loop in `edge_overlay.frag`; derive per-plane section outline geometry from the existing `scene::StitchSegments` output (the same polyline path that feeds `SectionCapGeometry` before triangulation) and draw it via the edge pipeline each frame an axis plane is active.
+- **Out:** Hidden-line-removal in section view (i.e. occluded cap edges shown as dashed) — deferred; user-configurable dashed/dotted cap outlines (single solid line for v1); per-IFC-type cap-edge colour (deferred with the same rationale as RP.17's flat edge colour).
+
+**Modules involved**
+- `assets/shaders/` (edge_overlay.frag clip-plane discard)
+- `renderer/` (EdgeOverlayPipeline descriptor layout bump)
+- `scene/` (new `SectionEdgeGeometry` reusing the stitched-segment output from `SectionCapGeometry` — share the dirty-hash so rebuild cost stays single-pass)
+- `app/main.cpp` (two new draw blocks: one keeping the overlay aware of clips, one drawing section edges after caps)
+
+**Tasks**
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.17.8.a | **Edge overlay respects axis clip planes.** Add binding 3 (ClipPlanesUbo) to the edge-overlay descriptor layout; `edge_overlay.frag` gains the `basic.frag` discard loop (reject fragments where any enabled plane evaluates `dot(plane.xyz, worldPos) + plane.w < 0`). Pass `worldPos` from vert → frag via a new `layout(location=0)` varying. Pipeline rebuild checks the layout change. | Extend `EdgeOverlayPipelineTest` with a `ConstructsWithClipPlaneLayout` case asserting the new binding. Visual: activate an axis clip plane with `CutFront` mode — edges on the hidden half disappear cleanly. | `assets/shaders/edge_overlay.{vert,frag}`, `renderer/EdgeOverlayPipeline.{h,cpp}` |
+| RP.17.8.b | **Section-plane element outlines.** New `scene::SectionEdgeGeometry` reusing the per-plane polylines that `SectionCapGeometry::Rebuild` already stitches from triangle-slice segments (factor a shared producer so both dirty-track on the same hash). Upload as a line-list vertex buffer per active plane; `main.cpp` draws after the section-fill pass (so outlines sit on top of caps) using the `EdgeOverlayPipeline`. Drawn whenever a clip plane has `sectionFill = true`, independent of the Toolbar "Edges" toggle (section outlines are a hard architectural-drawing expectation, not a stylistic choice). | Unit: cube mesh + axial plane → 4 segments (one per side of the square cap); two disconnected meshes → two independent outlines. Visual: cross-section through `sample.ifc` reads like a floor plan — filled rooms, outlined walls. | `scene/SectionEdgeGeometry.{h,cpp}`, `scene/SectionCapGeometry.{h,cpp}` (refactor to share polyline producer), `app/main.cpp` |
+
+**Ordering**
+
+```
+RP.17.8.a ── independent, ships first
+RP.17.8.b ── depends on .a's varying + clip-plane wire-up for the new section-edge draw block
+```
+
+Two sessions; each lands as a single commit. Stage gate at end of 17.8: full `ctest -j$(nproc) --output-on-failure`.
+
+**Risks**
+- **`SectionCapGeometry` internals leak into `SectionEdgeGeometry`.** Current `Rebuild` triangulates inline; lifting the polyline producer out without regressing cap triangulation is the real cost of 17.8.b. Mitigation: factor a `SliceAndStitch(scene, meshes, manager) → per-plane polyline map` helper that both geometries consume; cap keeps triangulating, edge just appends segments.
+- **Clip-plane discard on lines has alpha edge effects.** Smooth-line rasterization writes coverage into alpha; combined with the `discard` the anti-aliased fringe near the cut may look hard. Acceptable for v1; revisit if visually jarring.
+
+**Stage framing**: stage RP re-opens a sixth time. Same pattern as RP.17.5/17.7 — a viewer-specific polish that couldn't be planned at 17 kickoff.
+
+---
+
