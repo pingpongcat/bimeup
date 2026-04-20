@@ -23,6 +23,16 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # External dependencies
 add_subdirectory(external)
 
+# Shaders — paths set BEFORE add_subdirectory so every module that bakes
+# BIMEUP_SHADER_DIR into its compile defs (bimeup_core, bimeup app, the
+# renderer tests) sees a non-empty path. Previously src/core was added
+# before these set() calls, so `-DBIMEUP_SHADER_DIR=""` landed in
+# bimeup_core — Application::Application threw on first SPV load in
+# headless tests, leaking ctor-state VMA allocations on unwind.
+set(BIMEUP_SHADER_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
+set(BIMEUP_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+bimeup_compile_shaders(bimeup_shaders "${BIMEUP_SHADER_DIR}" "${BIMEUP_SHADER_OUTPUT_DIR}")
+
 # Modules
 add_subdirectory(src/tools)
 add_subdirectory(src/platform)
@@ -31,11 +41,6 @@ add_subdirectory(src/ifc)
 add_subdirectory(src/scene)
 add_subdirectory(src/core)
 add_subdirectory(src/ui)
-
-# Shaders
-set(BIMEUP_SHADER_DIR "${CMAKE_SOURCE_DIR}/assets/shaders")
-set(BIMEUP_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-bimeup_compile_shaders(bimeup_shaders "${BIMEUP_SHADER_DIR}" "${BIMEUP_SHADER_OUTPUT_DIR}")
 
 # Application
 add_subdirectory(src/app)

@@ -1853,6 +1853,14 @@ void RenderLoop::Cleanup() {
     m_smaaBlendFragShader.reset();
 
     CleanupFrameResources();
+    // RP.16.8 — depth-pyramid / SMAA / SSAO allocate VMA images via their
+    // CreateXxxResources paths (wired for resize). Teardown used to free
+    // only the descriptors, leaking the images on dtor. Freeing the
+    // resources too so VmaAllocator shuts down with an empty metadata
+    // block.
+    CleanupDepthPyramidResources();
+    CleanupSmaaResources();
+    CleanupSsaoResources();
     CleanupTonemapDescriptors();
     CleanupDepthPyramidDescriptors();
     CleanupSsaoDescriptors();
