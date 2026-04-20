@@ -322,3 +322,57 @@ Two sessions; each lands as a single commit. Stage gate at end of 17.8: full `ct
 
 ---
 
+### RP.18 — Window-transmitted sun shadows (classical raster, added 2026-04-20)
+
+The raster renderer's sun-shadow test today is binary: depth sample says "lit" or "shadowed". That means sun hitting an `IfcWindow` is treated exactly like sun hitting a concrete wall — the floor behind the window stays fully shadowed, which is wrong on every architectural scene. Stage 9.6 solves this with RT, but only in RT modes. The classical raster path is the default renderer (per the Stage 9 additive rule), so it needs its own approximation — one that works on every GPU, regardless of RT capability. The technique is **colored transmissive shadow maps** (Dachsbacher-Stamminger 2003 family): a second render pass from the light's POV captures the tinted attenuation of transparent geometry; the main fragment multiplies the sun contribution by the sampled tint after the PCF visibility test.
+
+**Quick-read semantics (what the user will see):**
+- Sun hits a south-facing window → the floor behind the window is lit at glass-tinted intensity (40–60% of direct sun, tinted by the `IfcWindow` surface colour), not pitch-dark as today.
+- Multiple glass panes in the light path → attenuations multiply (min-blended in the transmission pass).
+- Opaque wall anywhere in the light path → fragment is fully shadowed regardless of transmission (opaque depth wins).
+- Hemisphere ambient + indoor preset (artificial interior lights from RP.16.5) stay unchanged — RP.18 only tints the sun.
+
+**Scope**
+- **In:** second colour attachment on the shadow render pass (R16G16B16A16_SFLOAT, cleared to white each frame); new `shadow_transmission.{vert,frag}` pipeline that renders transparent-only geometry with min-blend into the transmission attachment; classification in `main.cpp` of opaque vs transmissive draw calls (reuses existing surface-alpha + per-type-alpha plumbing from 7.8a / 7.8d); `basic.frag` samples the transmission map and multiplies the sun-key contribution by the sampled tint; `RenderQualityPanel` toggle defaulting **on**; docs.
+- **Out:** Per-window normal-mapped caustics (out of budget; needs a photon-map-ish approach); coloured *indirect* bounce off the sunlit floor (that's Stage 9's path-tracer scope); transmission from artificial indoor lights (they're point-ish and don't need windows); alpha-stippled or thin-frame transmission (we treat frames as opaque — correct, since `IfcWindow` frames are opaque in most IFCs). RT path already handles everything above in Hybrid / Path Traced modes.
+
+**Why additive + consistent with Stage 9:** the raster transmission map is the classical equivalent of Stage 9.6's any-hit shadow ray. Both read the same `IfcWindow` + surface-alpha info; both feed the same `SunLightingScene.sun.color`. Raster gets a direct-light approximation (floor lit, back wall not), RT gets the full solution. The renderer-mode switch (Stage 9.10) toggles which one runs.
+
+**Modules involved**
+- `renderer/` — `ShadowPass` (second attachment), new `ShadowTransmissionPipeline`
+- `assets/shaders/` — `shadow_transmission.{vert,frag}`; `basic.frag` (sun-tint multiply)
+- `app/main.cpp` — classify opaque vs transmissive draw calls for the shadow render pass; bind the transmission map as a sampler to the main descriptor set
+- `ui/RenderQualityPanel.cpp` — new "Window transmission" checkbox under the Shadows header (default on)
+
+**Tasks**
+
+| # | Task | Test | Output |
+|---|------|------|--------|
+| RP.18.1 | **Transmission attachment in `ShadowPass`.** Extend the shadow render pass with a second attachment: `R16G16B16A16_SFLOAT`, same resolution as the shadow depth map, `LOAD_OP_CLEAR` with clearValue = (1,1,1,1), `STORE_OP_STORE`. Add `GetTransmissionImageView()` + `GetTransmissionSampler()` accessors. Expose `transmissionMapResolution` tied to `mapResolution`. | `ShadowPassTest`: new `ExposesTransmissionAttachment` case — build a shadow pass at 1024², assert non-null image view + sampler and that the attachment format is `R16G16B16A16_SFLOAT`. | `renderer/ShadowPass.{h,cpp}`, test |
+| RP.18.2 | **`shadow_transmission.{vert,frag}` + `ShadowTransmissionPipeline`.** Vertex shader = standard light-space transform (push-constant `lightSpace × model`, same as `shadow.vert`). Fragment shader outputs `vec4(materialColor.rgb * (1 - alpha), 1)` — glass tint scaled by transmission factor — with **min blending** (`VK_BLEND_OP_MIN`) so multiple panes compose multiplicatively (darkest/most-tinted wins). Depth-test LESS against the opaque depth map (so a wall behind glass still blocks); depth-write OFF. | `ShadowTransmissionPipelineTest`: construct with the same render pass; assert pipeline builds; assert min-blend state is wired. | `assets/shaders/shadow_transmission.{vert,frag}`, `renderer/ShadowTransmissionPipeline.{h,cpp}`, test |
+| RP.18.3 | **Draw-loop wiring: two sub-passes in the shadow render pass.** In `main.cpp`'s shadow-depth block, split the per-draw loop into (a) opaque — write depth via existing `shadowPipeline`; (b) transmissive — bind `ShadowTransmissionPipeline`, push the glass RGBA (scene mesh surface colour × `(1 - effectiveAlpha)`), draw with depth-test but no depth-write. Classification uses the already-plumbed `effectiveAlpha = min(surfaceStyleAlpha, typeAlphaOverride, perElementAlpha)` — alpha < ~0.95 → transmissive bucket. | Unit test in `ShadowPassTest`: helper `ClassifyOpaqueVsTransmissive` on a synthetic draw-call list with alphas {1.0, 0.4, 1.0, 0.8} returns the correct two buckets. No visual expectation at this step — the attachment exists and is populated but `basic.frag` doesn't sample it yet. | `app/main.cpp`, tiny classifier helper + test |
+| RP.18.4 | **`basic.frag` samples transmission + multiplies sun tint.** Add sampler binding (binding 4 on the main descriptor set layout, slot borrowed next to the existing shadow-map at binding 2 + shadow-transmission at binding 4). After the PCF visibility test, sample the transmission map at the same light-space UV: `vec4 transmit = texture(shadowTransmissionMap, lightUv)`. Compute the sun contribution as `sunColor * max(visibility, transmit.rgb)` — visibility wins for fully-lit fragments; transmission wins for fragments the opaque depth pass marked shadowed but the glass passes light through. Update descriptor set + binding count. | CPU mirror `ComputeTransmittedSun(visibility, sunColor, transmit)` in `renderer/Lighting.{h,cpp}` with unit tests: full visibility → unchanged sun; zero visibility + white transmit → black (wall-shadowed); zero visibility + tinted transmit → sunColor × tint (window-shadowed). Visual: on `sample.ifc`, the floor behind a south-facing `IfcWindow` is noticeably lit while surrounding wall-shadowed floor stays dark. | `assets/shaders/basic.frag`, `renderer/Lighting.{h,cpp}`, `renderer/DescriptorSet.*` (binding), `app/main.cpp` (wire sampler) |
+| RP.18.5 | **Panel toggle + stage gate.** Add `bool windowTransmission = true` to `ShadowSettings` (default on — the whole point is that this ships enabled). `RenderQualityPanel`: new checkbox under the Shadows header, disabled when shadows are off. When off, the shadow-transmission pass is skipped and `basic.frag` uses `visibility` alone (bit-compatible with pre-18 output — regression guard). | `RenderQualityPanelTest` case pinning the default `windowTransmission == true`. `ShadowPassTest` guard: when `windowTransmission == false`, the transmission sub-pass early-outs without any `vkCmdDraw` calls. Stage gate: full `ctest -j$(nproc) --output-on-failure`. | `renderer/Lighting.h` (field), `ui/RenderQualityPanel.{h,cpp}`, `app/main.cpp` (skip when off) |
+
+**Ordering**
+
+```
+RP.18.1 ── independent (attachment plumbing)
+RP.18.2 ── independent of .1 shader-wise, but the pipeline needs .1's render pass
+RP.18.3 ── depends on .1 + .2 (draws into the attachment with the new pipeline)
+RP.18.4 ── depends on .3 (needs a populated transmission map to read from)
+RP.18.5 ── depends on .4 (the toggle gates the whole chain end-to-end)
+```
+
+Single session expected; sub-tasks each land as their own `[RP.18.N]` commit per the per-task-per-commit rule.
+
+**Risks**
+- **Min-blend on MoltenVK / older drivers.** `VK_BLEND_OP_MIN` is core Vulkan 1.0, but a few mobile drivers historically had issues. Mitigation: unit-test pipeline construction; if a device pick hits a problem, fall back to `VK_BLEND_OP_DST_COLOR`-style multiplicative blending (mathematically equivalent for 0-or-one-pane cases; multi-pane overlap gets dimmer than min-blend but not wrong).
+- **Transmission map resolution tied to shadow-map resolution.** At 4096² the transmission attachment is another 128 MB (R16G16B16A16). Mitigation: half-res is sufficient for a smoothly-tinted result; can downsize in a follow-up if the VRAM cost annoys. For first version, match shadow-map resolution — if user picks 4096 they've opted into the memory.
+- **Per-mesh material colour on the transmission pipeline.** The shadow pass today doesn't carry material state — push constants are light-space × model only. We'll push a small `vec4` (glass RGBA = surface-style colour × (1-alpha)) via an additional push-constant range on the transmission pipeline. Keeps the existing opaque shadow pipeline untouched.
+- **Double-counting with hemisphere ambient.** Hemisphere ambient already lights interior-facing normals a little. That's fine — transmission only augments the *sun* term, which was zero on shadowed interior floors before. Ambient + transmitted sun stacks to a visually correct amount.
+
+**Stage framing**: stage RP re-opens a seventh time. RP.18 is a classical-raster feature that RT (Stage 9.6) happens to duplicate in a more principled way — both ship because the classical renderer is the default and can't wait on RT (per the "additive, never replace" feedback from 2026-04-20). Stage gate at end of RP.18: full `ctest -j$(nproc) --output-on-failure`, then proceed to Stage 9.
+
+---
+

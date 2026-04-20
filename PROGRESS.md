@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage 9 — Ray Tracing
-## Current Task: 9.1 Acceleration structures (BLAS) — optional RP.17.6 edge-snap deferred
+## Current Stage: Stage RP — Render Polish (reopened for RP.18)
+## Current Task: RP.18.1 Transmission attachment in ShadowPass — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.18 closes.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -232,15 +232,26 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - Ordering: 17.1 → 17.2 → 17.3 → 17.4 → 17.5 → 17.7 → 17.8.a → 17.8.b → (optional 17.6) → stage gate
   - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure` 565/565 ✓ (2026-04-20, re-run after 17.8)
 
-## Stage 9 — Ray Tracing
-- [ ] 9.1 Acceleration structures (BLAS)
-- [ ] 9.2 Build TLAS
-- [ ] 9.3 RT pipeline + SBT
-- [ ] 9.4 RT ambient occlusion
-- [ ] 9.5 RT soft shadows
-- [ ] 9.6 RT reflections
-- [ ] 9.7 Hybrid rendering
-- [ ] 9.8 Toggle RT/rasterized via UI
+- [ ] RP.18 Window-transmitted sun shadows — classical raster approximation of Stage 9.6's RT transmission, so sun lights the floor behind `IfcWindow` glass in the default (non-RT) renderer. Coloured transmissive shadow map: second attachment on the shadow render pass, min-blended RGBA glass tint, sampled in `basic.frag` and multiplied into the sun term after the PCF visibility test. Default on. Plan: `docs/plan/stage_RP_render_polish.md` → "RP.18".
+  - [ ] RP.18.1 Transmission attachment in `ShadowPass` (R16G16B16A16_SFLOAT, cleared white)
+  - [ ] RP.18.2 `shadow_transmission.{vert,frag}` + `ShadowTransmissionPipeline` (min-blend, depth-test only)
+  - [ ] RP.18.3 Draw-loop wiring: classify opaque vs transmissive via existing `effectiveAlpha` plumbing
+  - [ ] RP.18.4 `basic.frag` samples transmission map + multiplies sun tint (+ `ComputeTransmittedSun` CPU mirror)
+  - [ ] RP.18.5 Panel toggle `windowTransmission` (default on) + stage gate
+  - Ordering: 18.1 → 18.2 → 18.3 → 18.4 → 18.5 → stage gate
+
+## Stage 9 — Ray Tracing (additive, opt-in render mode)
+Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.
+- [ ] 9.1 RT-capability probe + BLAS per mesh (`AccelerationStructure`)
+- [ ] 9.2 TLAS build from scene instances (built only when an RT mode is active)
+- [ ] 9.3 RT pipeline + SBT (raygen / closest-hit / miss / any-hit), built lazily
+- [ ] 9.4 RT sun shadows — *additive* alongside shadow-map path; Hybrid picks RT, Rasterised still uses PCF
+- [ ] 9.5 RTAO — *additive* alongside XeGTAO; Hybrid picks RTAO, Rasterised still uses XeGTAO
+- [ ] 9.6 Window transmission — sun through `IfcWindow` into interior rooms (RT modes only)
+- [ ] 9.7 Indoor-light sampling — overhead fill respects walls when `indoorLightsEnabled` (RT modes only)
+- [ ] 9.8 Hybrid composite — per-contribution raster/RT routing; Rasterised mode stays bit-compatible with pre-Stage-9 output
+- [ ] 9.9 Optional path tracer — multi-bounce GI accumulator; resets on camera move
+- [ ] 9.10 UI render-mode switch: `{Rasterised (default), Hybrid RT, Path Traced}` — RT modes disabled + tooltipped when probe says no
 
 ## Stage 10 — VR Integration
 - [ ] 10.1 OpenXR session lifecycle
