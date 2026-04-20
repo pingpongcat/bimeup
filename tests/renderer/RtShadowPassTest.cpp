@@ -128,15 +128,21 @@ TEST_F(RtShadowPassTest, DispatchRecordsAndSubmitsCleanlyOnRtDevice) {
     const uint32_t h = 16;
     ASSERT_TRUE(pass.Build(w, h, ShaderDir()));
 
-    // Build a 1-instance TLAS around a single triangle BLAS — gives us a
-    // real AS the raygen can trace against. Addresses / handles land in
-    // the TLAS; the test doesn't inspect the resulting visibility image.
+    // Build a 2-instance TLAS: one opaque (default flags, drives the CH
+    // path writing `payload = 0`) and one transmissive (9.6.a
+    // FORCE_NO_OPAQUE, drives the any-hit path `payload *= 0.95`). This
+    // exercises both 9.6.b shader groups in a single dispatch; validation
+    // layers catch any SBT / layout mismatch on submit.
     AccelerationStructure accel(*m_device);
     auto blas = accel.BuildBlas(MakeTriangle());
     ASSERT_NE(blas, AccelerationStructure::InvalidHandle);
     TopLevelAS tlas(*m_device);
-    TlasInstance inst{glm::mat4(1.0F), accel.GetDeviceAddress(blas), 0, 0xFF};
-    ASSERT_TRUE(tlas.Build({inst}));
+    TlasInstance opaqueInst{glm::mat4(1.0F), accel.GetDeviceAddress(blas), 0, 0xFF};
+    TlasInstance glassInst{
+        glm::translate(glm::mat4(1.0F), glm::vec3(2.0F, 0.0F, 0.0F)),
+        accel.GetDeviceAddress(blas), 1, 0xFF};
+    glassInst.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+    ASSERT_TRUE(tlas.Build({opaqueInst, glassInst}));
     ASSERT_NE(tlas.GetHandle(), VK_NULL_HANDLE);
 
     // Tiny depth image (D32_SFLOAT, SAMPLED) — cleared to 0.5 once so

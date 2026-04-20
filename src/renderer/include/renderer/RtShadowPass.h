@@ -28,11 +28,12 @@ class RayTracingPipeline;
 /// image is never allocated, and `Dispatch` is a safe no-op. Mirrors the
 /// Stage-9 rule that classical rendering stays live on GPUs without RT.
 ///
-/// Shaders:
-/// - `shadow.rgen` — raygen with depth reconstruction + `traceRayEXT`.
-/// - `shadow.rmiss` — sets the payload to 1 when the ray misses.
-/// - Closest-hit is reused from the Stage-9.3 `rt_probe.rchit` stub and
-///   skipped at trace time via `gl_RayFlagsSkipClosestHitShaderEXT`.
+/// Shaders (payload is a transmission accumulator — `1` = lit, `0` = blocked):
+/// - `shadow.rgen` — seeds `payload = 1`, traces with `TerminateOnFirstHit`.
+/// - `shadow.rchit` — accepted opaque hit writes `payload = 0`.
+/// - `shadow.rahit` — glass any-hit multiplies the pass-through factor
+///   and `ignoreIntersectionEXT`s so sun light continues through windows.
+/// - `shadow.rmiss` — no-op; accumulated transmission IS the result.
 ///
 /// Descriptor set 0 layout:
 ///   binding 0 — acceleration structure (TLAS)

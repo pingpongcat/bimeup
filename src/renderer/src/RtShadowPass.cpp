@@ -207,11 +207,13 @@ bool RtShadowPass::Build(uint32_t width, uint32_t height, const std::string& sha
     RayTracingPipelineSettings s;
     s.raygenPath = shaderDir + "/shadow.rgen.spv";
     s.missPath = shaderDir + "/shadow.rmiss.spv";
-    // The shadow raygen sets `gl_RayFlagsSkipClosestHitShaderEXT`, so the
-    // CH shader is never invoked — we still have to supply one to
-    // satisfy the RT-pipeline group layout. Reuse the Stage-9.3 empty
-    // `rt_probe.rchit` stub; no dedicated shadow hit shader needed.
-    s.closestHitPath = shaderDir + "/rt_probe.rchit.spv";
+    // Stage 9.6.b — dedicated shadow CH writes `payload = 0` on an
+    // accepted opaque hit (drives the new "1 = lit, 0 = blocked"
+    // convention), while the any-hit multiplies the payload by a glass
+    // pass-through factor and `ignoreIntersectionEXT`s so sun light can
+    // continue through window instances that carry FORCE_NO_OPAQUE.
+    s.closestHitPath = shaderDir + "/shadow.rchit.spv";
+    s.anyHitPath = shaderDir + "/shadow.rahit.spv";
     s.descriptorSetLayout = m_dsLayout;
     s.pushConstantSize = sizeof(PushConstants);
     s.pushConstantStages = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
