@@ -3,6 +3,7 @@
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
+#include <renderer/RtAoPass.h>
 #include <renderer/RtShadowPass.h>
 #include <renderer/Shader.h>
 #include <renderer/SmaaLut.h>
@@ -140,6 +141,14 @@ bool RenderLoop::EndFrame() {
     // transitioned to SHADER_READ_ONLY_OPTIMAL but no downstream pass
     // samples it yet — Stage 9.8 wires the hybrid composite.
     DispatchRtShadow(cmd);
+
+    // Stage 9.5.b — RT AO dispatch. Same gates as the shadow dispatch;
+    // reuses the shadow path's depth sampler + cached TLAS/view. Writes
+    // the per-pixel AO image and transitions it to
+    // SHADER_READ_ONLY_OPTIMAL for the 9.8 composite. On Rasterised mode,
+    // XeGTAO still runs below and feeds the tonemap — the two AO paths
+    // are additive, not exclusive, until 9.8 gates them per-mode.
+    DispatchRtAo(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
     // tonemap pass. Dispatches linearize then three mip downsamples with
@@ -382,14 +391,16 @@ void RenderLoop::SetRenderMode(RenderMode mode) {
 
     if (m_renderMode == RenderMode::HybridRt) {
         // Lazy-build is guarded by `Device::HasRayTracing()` inside
-        // `BuildRtShadowPass`; on non-RT devices this is a no-op and the
-        // dispatch path short-circuits every frame.
+        // `BuildRtShadowPass` / `BuildRtAoPass`; on non-RT devices these are
+        // no-ops and the dispatch paths short-circuit every frame.
         BuildRtShadowPass();
+        BuildRtAoPass();
     } else {
-        // Wait for in-flight frames so it's safe to destroy the pipeline /
-        // visibility image without racing a pending trace.
+        // Wait for in-flight frames so it's safe to destroy the pipelines /
+        // storage images without racing a pending trace.
         WaitIdle();
         DestroyRtShadowPass();
+        DestroyRtAoPass();
         m_rtTlas = VK_NULL_HANDLE;
     }
 }
@@ -404,6 +415,12 @@ void RenderLoop::SetRtShadowInputs(VkAccelerationStructureKHR tlas,
 
 VkImageView RenderLoop::GetRtShadowVisibilityView() const {
     return m_rtShadowPass ? m_rtShadowPass->GetVisibilityImageView() : VK_NULL_HANDLE;
+}
+
+void RenderLoop::SetRtAoInputs(float radius) { m_rtAoRadius = radius; }
+
+VkImageView RenderLoop::GetRtAoImageView() const {
+    return m_rtAoPass ? m_rtAoPass->GetAoImageView() : VK_NULL_HANDLE;
 }
 
 void RenderLoop::BuildRtShadowPass() {
@@ -467,6 +484,62 @@ void RenderLoop::DispatchRtShadow(VkCommandBuffer cmd) {
                              m_rtView, m_proj, m_rtSunDir);
 }
 
+void RenderLoop::BuildRtAoPass() {
+    if (!m_device.HasRayTracing()) {
+        return;
+    }
+    if (!m_rtAoPass) {
+        m_rtAoPass = std::make_unique<RtAoPass>(m_device);
+    }
+    // `m_rtDepthSampler` is owned by the shadow build path (NEAREST/clamp,
+    // correct semantics for raygen depth reads); AO just borrows it.
+    // `SetRenderMode(HybridRt)` calls `BuildRtShadowPass` first, so the
+    // sampler is already live by the time we get here — but build it
+    // defensively just in case the order flips.
+    if (m_rtDepthSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_NEAREST;
+        si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.minLod = 0.0F;
+        si.maxLod = 0.0F;
+        if (vkCreateSampler(m_device.GetDevice(), &si, nullptr, &m_rtDepthSampler) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("RenderLoop: failed to create RT depth sampler");
+        }
+    }
+    const VkExtent2D extent = m_swapchain.GetExtent();
+    if (!m_rtAoPass->Build(extent.width, extent.height, m_shaderDir)) {
+        m_rtAoPass.reset();
+    }
+}
+
+void RenderLoop::DestroyRtAoPass() { m_rtAoPass.reset(); }
+
+void RenderLoop::DispatchRtAo(VkCommandBuffer cmd) {
+    if (m_renderMode != RenderMode::HybridRt) {
+        return;
+    }
+    if (!m_rtAoPass || !m_rtAoPass->IsValid()) {
+        return;
+    }
+    if (m_rtTlas == VK_NULL_HANDLE) {
+        return;
+    }
+    // Depth image is already in SHADER_READ_ONLY_OPTIMAL from the main
+    // render pass's finalLayout transition; the shadow dispatch that
+    // immediately precedes this doesn't touch depth. AO raygen reads
+    // depth + TLAS and writes its own AO image; no barrier needed between
+    // the two RT dispatches since they write to disjoint images.
+    m_rtAoPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+                         m_rtView, m_proj, m_rtAoRadius, m_rtAoFrameIndex);
+    ++m_rtAoFrameIndex;
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -484,12 +557,13 @@ void RenderLoop::RecreateForSwapchain() {
     ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
 
-    // Stage 9.4.b — the RT visibility image matches the swapchain extent;
-    // rebuild on resize when RT mode is active. `BuildRtShadowPass`
-    // rebuilds via `RtShadowPass::Build` which tears down the old image
-    // before allocating the new one.
+    // Stage 9.4.b / 9.5.b — the RT visibility / AO images match the
+    // swapchain extent; rebuild on resize when RT mode is active. Each
+    // `Build*` call tears down the old image before allocating the new
+    // one.
     if (m_renderMode == RenderMode::HybridRt) {
         BuildRtShadowPass();
+        BuildRtAoPass();
     }
 }
 
@@ -1977,10 +2051,11 @@ void RenderLoop::Cleanup() {
     m_smaaWeightsFragShader.reset();
     m_smaaBlendFragShader.reset();
 
-    // Stage 9.4.b — RT sun-shadow resources. The pass owns its own VMA
-    // allocations (visibility image) so `DestroyRtShadowPass` must run
-    // before the allocator shuts down with the rest of the renderer.
+    // Stage 9.4.b / 9.5.b — RT pass resources. Each pass owns its own VMA
+    // allocations (visibility / AO image) so the teardown must run before
+    // the allocator shuts down with the rest of the renderer.
     DestroyRtShadowPass();
+    DestroyRtAoPass();
 
     CleanupFrameResources();
     // RP.16.8 — depth-pyramid / SMAA / SSAO allocate VMA images via their

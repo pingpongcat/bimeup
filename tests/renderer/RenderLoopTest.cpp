@@ -429,7 +429,9 @@ TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
     m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
     m_renderLoop->SetRtShadowInputs(tlas.GetHandle(),
                                     glm::normalize(glm::vec3(-1, -2, -1)), view);
+    m_renderLoop->SetRtAoInputs(1.0F);
     EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
+    EXPECT_NE(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
 
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
@@ -444,5 +446,6 @@ TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
     m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
     m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
     EXPECT_EQ(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
+    EXPECT_EQ(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
 }
 

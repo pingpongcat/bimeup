@@ -28,6 +28,7 @@ class DepthMipPipeline;
 class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
 class RtShadowPass;
+class RtAoPass;
 
 class RenderLoop {
 public:
@@ -206,6 +207,23 @@ public:
     /// but not consumed. Returns `VK_NULL_HANDLE` when RT mode is off or
     /// the device lacks RT support.
     [[nodiscard]] VkImageView GetRtShadowVisibilityView() const;
+
+    /// Stage 9.5.b — per-frame input for the RT AO pass. TLAS and view
+    /// matrix are re-used from `SetRtShadowInputs` (same scene, same
+    /// camera), so this setter only takes the AO-specific knob: the
+    /// world-space ray max-distance in metres. Default 1.0 matches the
+    /// architectural scale in the Stage-9 plan. The per-pixel random
+    /// seed's frame-index component is incremented internally on each
+    /// dispatch so a future 9.5.c can drop a temporal accumulator on
+    /// top without changing this API.
+    void SetRtAoInputs(float radius);
+
+    /// Sampled view of the RT AO pass image (R8_UNORM,
+    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 picks
+    /// this as the AO contribution when `HybridRt` is selected; before
+    /// then it's observable but not consumed. `VK_NULL_HANDLE` when RT
+    /// mode is off or the device lacks RT support.
+    [[nodiscard]] VkImageView GetRtAoImageView() const;
 
 private:
     void CreateCommandPool();
@@ -502,6 +520,22 @@ private:
     void BuildRtShadowPass();
     void DestroyRtShadowPass();
     void DispatchRtShadow(VkCommandBuffer cmd);
+
+    // Stage 9.5.b — RT AO wire. Lifecycle mirrors `m_rtShadowPass`: only
+    // allocated while `m_renderMode == HybridRt` on an RT-capable device,
+    // torn down when the user flips back. The AO pass shares the same
+    // TLAS + depth sampler + view that drive the shadow pass; no parallel
+    // scene state. `m_rtAoFrameIndex` is incremented each dispatch so the
+    // raygen's PCG hash produces different samples per frame — the
+    // foundation for the 9.5.c temporal accumulator without changing the
+    // public API.
+    std::unique_ptr<RtAoPass> m_rtAoPass;
+    float m_rtAoRadius = 1.0F;
+    uint32_t m_rtAoFrameIndex = 0U;
+
+    void BuildRtAoPass();
+    void DestroyRtAoPass();
+    void DispatchRtAo(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer
