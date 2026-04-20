@@ -5,10 +5,13 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
 #include <memory>
 
+using bimeup::renderer::ClassifyOpaqueVsTransmissive;
 using bimeup::renderer::ComputeLightSpaceMatrix;
 using bimeup::renderer::Device;
+using bimeup::renderer::kTransmissiveAlphaCutoff;
 using bimeup::renderer::ShadowMap;
 using bimeup::renderer::VulkanContext;
 
@@ -63,6 +66,55 @@ TEST(ShadowPassTest, ProjectsRightEdgePointToUvXOne) {
 
     EXPECT_NEAR(uv.x, 1.0F, 1e-5F);
     EXPECT_NEAR(uv.y, 0.5F, 1e-5F);
+}
+
+TEST(ShadowPassTest, ClassifyOpaqueVsTransmissiveSplitsAlphasAtDefaultCutoff) {
+    // The task description's reference case: alphas {1.0, 0.4, 1.0, 0.8}
+    // classify as opaque={0, 2}, transmissive={1, 3} at the default cutoff.
+    const std::array<float, 4> alphas{1.0F, 0.4F, 1.0F, 0.8F};
+
+    const auto buckets = ClassifyOpaqueVsTransmissive(alphas);
+
+    ASSERT_EQ(buckets.opaqueIndices.size(), 2U);
+    ASSERT_EQ(buckets.transmissiveIndices.size(), 2U);
+    EXPECT_EQ(buckets.opaqueIndices[0], 0U);
+    EXPECT_EQ(buckets.opaqueIndices[1], 2U);
+    EXPECT_EQ(buckets.transmissiveIndices[0], 1U);
+    EXPECT_EQ(buckets.transmissiveIndices[1], 3U);
+}
+
+TEST(ShadowPassTest, ClassifyOpaqueVsTransmissiveCutoffIsInclusiveForOpaque) {
+    // Values at or above the cutoff stay in the opaque bucket; strictly
+    // below the cutoff go transmissive. Exercises the boundary explicitly.
+    const std::array<float, 3> alphas{kTransmissiveAlphaCutoff,
+                                      kTransmissiveAlphaCutoff - 0.01F,
+                                      1.0F};
+
+    const auto buckets = ClassifyOpaqueVsTransmissive(alphas);
+
+    ASSERT_EQ(buckets.opaqueIndices.size(), 2U);
+    ASSERT_EQ(buckets.transmissiveIndices.size(), 1U);
+    EXPECT_EQ(buckets.opaqueIndices[0], 0U);
+    EXPECT_EQ(buckets.opaqueIndices[1], 2U);
+    EXPECT_EQ(buckets.transmissiveIndices[0], 1U);
+}
+
+TEST(ShadowPassTest, ClassifyOpaqueVsTransmissiveHonoursCustomCutoff) {
+    // Cutoff 0.5 flips a 0.8 that was transmissive at 0.95 into opaque.
+    const std::array<float, 4> alphas{1.0F, 0.4F, 1.0F, 0.8F};
+
+    const auto buckets = ClassifyOpaqueVsTransmissive(alphas, 0.5F);
+
+    ASSERT_EQ(buckets.opaqueIndices.size(), 3U);
+    ASSERT_EQ(buckets.transmissiveIndices.size(), 1U);
+    EXPECT_EQ(buckets.transmissiveIndices[0], 1U);
+}
+
+TEST(ShadowPassTest, ClassifyOpaqueVsTransmissiveEmptyInputYieldsEmptyBuckets) {
+    const auto buckets = ClassifyOpaqueVsTransmissive(std::span<const float>{});
+
+    EXPECT_TRUE(buckets.opaqueIndices.empty());
+    EXPECT_TRUE(buckets.transmissiveIndices.empty());
 }
 
 TEST(ShadowPassTest, PointNearLightHasSmallerDepthThanPointFarFromLight) {

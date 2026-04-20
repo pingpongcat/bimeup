@@ -28,6 +28,7 @@
 #include <renderer/SectionFillPipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/ShadowPass.h>
+#include <renderer/ShadowTransmissionPipeline.h>
 #include <renderer/Swapchain.h>
 #include <renderer/ViewportNavigator.h>
 #include <renderer/VulkanContext.h>
@@ -67,6 +68,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <functional>
 #include <future>
 #include <limits>
@@ -203,6 +205,12 @@ int main(int argc, char* argv[]) {
                                               shaderDir + "/shadow.vert.spv");
     bimeup::renderer::Shader shadowFragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                               shaderDir + "/shadow.frag.spv");
+    bimeup::renderer::Shader shadowTransmissionVertShader(
+        device, bimeup::renderer::ShaderStage::Vertex,
+        shaderDir + "/shadow_transmission.vert.spv");
+    bimeup::renderer::Shader shadowTransmissionFragShader(
+        device, bimeup::renderer::ShaderStage::Fragment,
+        shaderDir + "/shadow_transmission.frag.spv");
     bimeup::renderer::Shader sectionFillVertShader(device, bimeup::renderer::ShaderStage::Vertex,
                                                    shaderDir + "/section_fill.vert.spv");
     bimeup::renderer::Shader sectionFillFragShader(device, bimeup::renderer::ShaderStage::Fragment,
@@ -564,8 +572,12 @@ int main(int argc, char* argv[]) {
     };
     buildEdgeOverlayPipeline();
     // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"
-    // checkbox and `W` keyboard shortcut mutate `edgesEnabled`.
-    bool edgesEnabled = true;
+    // checkbox and `W` keyboard shortcut mutate `edgesEnabled`. Off by
+    // default; Measure-mode auto-enables unless the user has touched the
+    // toggle, tracked by `edgesUserOverride` below.
+    bool edgesEnabled = false;
+    bool edgesUserOverride = false;
+    bool edgesAutoFromMeasure = false;
     const glm::vec4 kEdgeColor{0.25F, 0.25F, 0.25F, 0.55F};
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
@@ -575,6 +587,7 @@ int main(int argc, char* argv[]) {
     shadowPushRange.size = sizeof(glm::mat4);
 
     std::unique_ptr<bimeup::renderer::Pipeline> shadowPipeline;
+    std::unique_ptr<bimeup::renderer::ShadowTransmissionPipeline> shadowTransmissionPipeline;
     auto buildShadowPipeline = [&] {
         if (!shadowMap) return;
         bimeup::renderer::PipelineConfig cfg{};
@@ -593,6 +606,10 @@ int main(int argc, char* argv[]) {
         cfg.disablePrimaryColorWrite = true;
         shadowPipeline = std::make_unique<bimeup::renderer::Pipeline>(
             device, shadowVertShader, shadowFragShader, cfg);
+        shadowTransmissionPipeline =
+            std::make_unique<bimeup::renderer::ShadowTransmissionPipeline>(
+                device, shadowTransmissionVertShader, shadowTransmissionFragShader,
+                shadowMap->GetRenderPass());
     };
 
     // Camera — set orbit target and distance based on scene bounds
@@ -683,6 +700,11 @@ int main(int argc, char* argv[]) {
     // draw loop route forced-transparent meshes into the transparent pass.
     // Rebuild is hash-gated so we only re-upload when something actually changed.
     std::unordered_set<bimeup::renderer::MeshHandle> handlesWithAlphaOverride;
+    // RP.18.3 — per-handle minimum effective alpha seen across nodes that reference
+    // this (possibly batched) mesh. Read by the shadow pass to classify opaque vs
+    // transmissive draws and to pre-scale the glass tint pushed to the transmission
+    // pipeline. Populated at the same cadence as handlesWithAlphaOverride.
+    std::unordered_map<bimeup::renderer::MeshHandle, float> handleMinOverrideAlpha;
     std::size_t alphaOverrideHash = 0;
     auto rebuildAlphaOverrides = [&] {
         std::size_t hash = 0;
@@ -704,12 +726,21 @@ int main(int argc, char* argv[]) {
 
         std::vector<std::pair<uint32_t, float>> pairs;
         handlesWithAlphaOverride.clear();
+        handleMinOverrideAlpha.clear();
         for (const auto& [nodeId, alpha] : perNode) {
             auto vit = nodeVertexIndices.find(nodeId);
             if (vit == nodeVertexIndices.end()) continue;
             for (auto v : vit->second) pairs.emplace_back(v, alpha);
             const auto& node = sceneResult->scene.GetNode(nodeId);
-            if (node.mesh.has_value()) handlesWithAlphaOverride.insert(*node.mesh);
+            if (node.mesh.has_value()) {
+                handlesWithAlphaOverride.insert(*node.mesh);
+                auto it = handleMinOverrideAlpha.find(*node.mesh);
+                if (it == handleMinOverrideAlpha.end()) {
+                    handleMinOverrideAlpha.emplace(*node.mesh, alpha);
+                } else {
+                    it->second = std::min(it->second, alpha);
+                }
+            }
         }
         meshBuffer.SetVertexAlphaOverride(pairs);
     };
@@ -956,6 +987,8 @@ int main(int argc, char* argv[]) {
         }
         if (key == bimeup::platform::Key::W && pressed) {
             edgesEnabled = !edgesEnabled;
+            edgesUserOverride = true;
+            edgesAutoFromMeasure = false;
             LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
         }
         if (key == bimeup::platform::Key::Numpad5 && pressed) {
@@ -1032,6 +1065,32 @@ int main(int argc, char* argv[]) {
     auto* overlay = overlayOwned.get();
     auto* measurementsPanel = measurementsOwned.get();
     auto* renderQualityPanel = renderQualityOwned.get();
+
+    // Application-level default rendering settings: system local date/time
+    // as the sun position, artificial interior lights on, shadows on at
+    // max resolution. The panel's in-class struct defaults stay baseline
+    // (tested in RenderQualityPanelTest); these overrides are what the
+    // running app ships with.
+    {
+        auto& rqs = renderQualityPanel->MutableSettings();
+        const std::time_t nowT = std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now());
+        std::tm nowLocal{};
+#if defined(_WIN32)
+        localtime_s(&nowLocal, &nowT);
+#else
+        localtime_r(&nowT, &nowLocal);
+#endif
+        rqs.year = nowLocal.tm_year + 1900;
+        rqs.month = nowLocal.tm_mon + 1;
+        rqs.day = nowLocal.tm_mday;
+        rqs.hourLocal = static_cast<float>(nowLocal.tm_hour) +
+                        static_cast<float>(nowLocal.tm_min) / 60.0F +
+                        static_cast<float>(nowLocal.tm_sec) / 3600.0F;
+        rqs.sun.indoorLightsEnabled = true;
+        rqs.sun.shadow.enabled = true;
+        rqs.sun.shadow.mapResolution = 4096U;
+    }
     auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
     auto* typeVisibilityPanel = typeVisibilityOwned.get();
@@ -1169,6 +1228,8 @@ int main(int argc, char* argv[]) {
 
     toolbar->SetOnEdgesChanged([&](bool enabled) {
         edgesEnabled = enabled;
+        edgesUserOverride = true;
+        edgesAutoFromMeasure = false;
         LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
     });
     toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
@@ -1196,6 +1257,18 @@ int main(int argc, char* argv[]) {
         measureTool.Cancel();  // drop in-progress; keep saved history
         measureSnapPoint.reset();
         measureSnapIsVertex = false;
+        // Auto-enable edges while in Measure mode so users see snap
+        // candidates clearly — unless they've manually set the toggle
+        // (edgesUserOverride), in which case respect their choice.
+        if (active) {
+            if (!edgesUserOverride && !edgesEnabled) {
+                edgesEnabled = true;
+                edgesAutoFromMeasure = true;
+            }
+        } else if (edgesAutoFromMeasure) {
+            edgesEnabled = false;
+            edgesAutoFromMeasure = false;
+        }
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
     toolbar->SetOnMeasurementsVisibilityChanged([&](bool visible) {
@@ -1255,14 +1328,14 @@ int main(int argc, char* argv[]) {
     // when shadows are enabled. Renders scene geometry from the key light's POV
     // into `shadowMap`; the main pass then samples it via sampler2DShadow.
     renderLoop.SetPreMainPassCallback([&](VkCommandBuffer cmd) {
-        if (!shadowMap || !shadowPipeline ||
+        if (!shadowMap || !shadowPipeline || !shadowTransmissionPipeline ||
             !renderQualityPanel->GetSettings().sun.shadow.enabled) {
             return;
         }
 
         // RP.18.1 — two attachments: depth (cleared to 1.0) + transmission colour
         // (cleared to opaque white = "no attenuation"). Transmission is populated
-        // by RP.18.2's transmission pipeline and read by basic.frag in RP.18.4.
+        // by RP.18.3's transmission draw block and read by basic.frag in RP.18.4.
         std::array<VkClearValue, 2> clears{};
         clears[0].depthStencil = {1.0F, 0};
         clears[1].color = {{1.0F, 1.0F, 1.0F, 1.0F}};
@@ -1289,16 +1362,69 @@ int main(int argc, char* argv[]) {
         sc.extent = {shadowMap->GetResolution(), shadowMap->GetResolution()};
         vkCmdSetScissor(cmd, 0, 1, &sc);
 
-        shadowPipeline->Bind(cmd);
-        meshBuffer.Bind(cmd);
+        // RP.18.3 — classify each draw call by effective alpha: opaque writes
+        // depth via the shadow pipeline; transmissive writes a tinted
+        // attenuation via ShadowTransmissionPipeline (min-blended into the
+        // transmission attachment, depth-tested against the opaque bucket).
+        std::vector<float> effectiveAlphas;
+        effectiveAlphas.reserve(drawCalls.size());
+        for (const auto& [handle, transform] : drawCalls) {
+            (void)transform;
+            float alpha = 1.0F;
+            if (handle < sceneResult->meshes.size()) {
+                const auto& colors = sceneResult->meshes[handle].GetColors();
+                if (!colors.empty()) alpha = colors[0].a;
+            }
+            auto it = handleMinOverrideAlpha.find(handle);
+            if (it != handleMinOverrideAlpha.end()) {
+                alpha = std::min(alpha, it->second);
+            }
+            effectiveAlphas.push_back(alpha);
+        }
+        const auto buckets =
+            bimeup::renderer::ClassifyOpaqueVsTransmissive(effectiveAlphas);
 
         const glm::mat4& ls =
             renderQualityPanel->GetSettings().sun.shadow.lightSpaceMatrix;
-        for (const auto& [handle, transform] : drawCalls) {
-            glm::mat4 lightSpaceModel = ls * transform;
-            vkCmdPushConstants(cmd, shadowPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(glm::mat4), &lightSpaceModel);
-            meshBuffer.Draw(cmd, handle);
+
+        // Opaque bucket — depth-only draws that populate the shadow depth map.
+        if (!buckets.opaqueIndices.empty()) {
+            shadowPipeline->Bind(cmd);
+            meshBuffer.Bind(cmd);
+            for (std::size_t idx : buckets.opaqueIndices) {
+                const auto& [handle, transform] = drawCalls[idx];
+                glm::mat4 lightSpaceModel = ls * transform;
+                vkCmdPushConstants(cmd, shadowPipeline->GetLayout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(glm::mat4), &lightSpaceModel);
+                meshBuffer.Draw(cmd, handle);
+            }
+        }
+
+        // Transmissive bucket — tinted attenuation written to the transmission
+        // attachment via min-blend. Depth-test is on (LESS) but depth-write is
+        // off, so an opaque wall behind glass still fully blocks the sun.
+        if (!buckets.transmissiveIndices.empty()) {
+            shadowTransmissionPipeline->Bind(cmd);
+            meshBuffer.Bind(cmd);
+            for (std::size_t idx : buckets.transmissiveIndices) {
+                const auto& [handle, transform] = drawCalls[idx];
+                glm::mat4 lightSpaceModel = ls * transform;
+                vkCmdPushConstants(cmd, shadowTransmissionPipeline->GetLayout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(glm::mat4), &lightSpaceModel);
+                glm::vec3 surfaceRgb(1.0F);
+                if (handle < sceneResult->meshes.size()) {
+                    const auto& colors = sceneResult->meshes[handle].GetColors();
+                    if (!colors.empty()) surfaceRgb = glm::vec3(colors[0]);
+                }
+                const float alpha = effectiveAlphas[idx];
+                glm::vec4 glassTint(surfaceRgb * (1.0F - alpha), 1.0F);
+                vkCmdPushConstants(cmd, shadowTransmissionPipeline->GetLayout(),
+                                   VK_SHADER_STAGE_FRAGMENT_BIT, 64,
+                                   sizeof(glm::vec4), &glassTint);
+                meshBuffer.Draw(cmd, handle);
+            }
         }
 
         vkCmdEndRenderPass(cmd);

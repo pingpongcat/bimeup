@@ -24,6 +24,20 @@ glm::vec3 PickStableUp(const glm::vec3& forward) {
 
 }  // namespace
 
+ShadowDrawClassification ClassifyOpaqueVsTransmissive(
+    std::span<const float> effectiveAlphas, float transmissiveCutoff) {
+    ShadowDrawClassification buckets;
+    buckets.opaqueIndices.reserve(effectiveAlphas.size());
+    for (std::size_t i = 0; i < effectiveAlphas.size(); ++i) {
+        if (effectiveAlphas[i] < transmissiveCutoff) {
+            buckets.transmissiveIndices.push_back(i);
+        } else {
+            buckets.opaqueIndices.push_back(i);
+        }
+    }
+    return buckets;
+}
+
 glm::mat4 ComputeLightSpaceMatrix(const glm::vec3& lightDirection,
                                   const glm::vec3& sceneCenter,
                                   float sceneRadius) {

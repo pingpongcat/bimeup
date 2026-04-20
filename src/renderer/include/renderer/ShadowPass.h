@@ -5,7 +5,10 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 namespace bimeup::renderer {
 
@@ -25,6 +28,33 @@ class Device;
 [[nodiscard]] glm::mat4 ComputeLightSpaceMatrix(const glm::vec3& lightDirection,
                                                 const glm::vec3& sceneCenter,
                                                 float sceneRadius);
+
+/// RP.18.3 — default effective-alpha threshold for shadow-pass classification.
+/// Surfaces with `effectiveAlpha >= kTransmissiveAlphaCutoff` are opaque (they
+/// write depth with the shadow pipeline); anything strictly below the cutoff
+/// is transmissive and is rendered with `ShadowTransmissionPipeline` to tint
+/// the sun that reaches fragments behind glass. The cutoff is deliberately
+/// loose (0.95) so near-opaque surfaces stay in the depth bucket where they
+/// belong.
+inline constexpr float kTransmissiveAlphaCutoff = 0.95F;
+
+/// Per-bucket draw-call indices for the shadow render pass. Each value is an
+/// index back into the `effectiveAlphas` list passed to
+/// `ClassifyOpaqueVsTransmissive`, so the caller can route the same draw in
+/// both buckets back to its source transform / mesh handle.
+struct ShadowDrawClassification {
+    std::vector<std::size_t> opaqueIndices;
+    std::vector<std::size_t> transmissiveIndices;
+};
+
+/// Split a draw-call list by effective alpha into the two buckets used by
+/// the shadow render pass: opaque (depth-only) and transmissive (tinted
+/// min-blend). Values at or above `transmissiveCutoff` are opaque; strictly
+/// below the cutoff are transmissive. Indices are emitted in input order
+/// within each bucket (stable classification).
+[[nodiscard]] ShadowDrawClassification ClassifyOpaqueVsTransmissive(
+    std::span<const float> effectiveAlphas,
+    float transmissiveCutoff = kTransmissiveAlphaCutoff);
 
 /// GPU resources for a directional-light shadow map: a depth-only VkImage sized
 /// `resolution` × `resolution`, its view and sampler (for the main pass to sample

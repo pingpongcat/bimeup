@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP — Render Polish (reopened for RP.18)
-## Current Task: RP.18.3 split shadow draws into opaque (depth) + transmissive (min-blend) sub-passes — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.18 closes.
+## Current Task: RP.18.4 sample transmission map in `basic.frag` + `ComputeTransmittedSun` CPU mirror — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.18 closes.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -235,7 +235,7 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
 - [ ] RP.18 Window-transmitted sun shadows — classical raster approximation of Stage 9.6's RT transmission, so sun lights the floor behind `IfcWindow` glass in the default (non-RT) renderer. Coloured transmissive shadow map: second attachment on the shadow render pass, min-blended RGBA glass tint, sampled in `basic.frag` and multiplied into the sun term after the PCF visibility test. Default on. Plan: `docs/plan/stage_RP_render_polish.md` → "RP.18".
   - [x] RP.18.1 Transmission attachment in `ShadowPass` (R16G16B16A16_SFLOAT, cleared white)
   - [x] RP.18.2 `shadow_transmission.{vert,frag}` + `ShadowTransmissionPipeline` (min-blend, depth-test only)
-  - [ ] RP.18.3 Draw-loop wiring: classify opaque vs transmissive via existing `effectiveAlpha` plumbing
+  - [x] RP.18.3 Draw-loop wiring: classify opaque vs transmissive via existing `effectiveAlpha` plumbing
   - [ ] RP.18.4 `basic.frag` samples transmission map + multiplies sun tint (+ `ComputeTransmittedSun` CPU mirror)
   - [ ] RP.18.5 Panel toggle `windowTransmission` (default on) + stage gate
   - Ordering: 18.1 → 18.2 → 18.3 → 18.4 → 18.5 → stage gate
