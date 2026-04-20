@@ -23,6 +23,9 @@ struct Vertex {
 struct MeshData {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+    /// RP.17 — feature-edge line-list (pairs of indices into `vertices`).
+    /// Empty for meshes without an extracted edge overlay.
+    std::vector<uint32_t> edgeIndices;
 };
 
 using MeshHandle = uint32_t;
@@ -31,6 +34,11 @@ struct DrawParams {
     uint32_t indexCount = 0;
     uint32_t firstIndex = 0;
     int32_t vertexOffset = 0;
+    /// RP.17 — edge-overlay draw params (line-list, shares `vertexOffset`
+    /// with the triangle draw above). `edgeIndexCount == 0` means the mesh
+    /// has no extracted edges and the edge overlay pass should skip it.
+    uint32_t edgeIndexCount = 0;
+    uint32_t firstEdgeIndex = 0;
 };
 
 class MeshBuffer {
@@ -54,6 +62,16 @@ public:
 
     void Bind(VkCommandBuffer cmd) const;
     void Draw(VkCommandBuffer cmd, MeshHandle handle) const;
+
+    /// RP.17 — bind the vertex buffer and the line-list edge-index buffer
+    /// for the edge-overlay pass. No-op when no mesh has edges uploaded.
+    void BindEdges(VkCommandBuffer cmd) const;
+    /// RP.17 — draw the edge overlay for a mesh. No-op when the mesh has
+    /// no extracted edges.
+    void DrawEdges(VkCommandBuffer cmd, MeshHandle handle) const;
+    /// RP.17 — true when at least one uploaded mesh has extracted edges.
+    /// Callers can skip binding + iterating when this is false.
+    [[nodiscard]] bool HasEdges() const { return !m_edgeIndices.empty(); }
 
     /// Replace the per-vertex color of the given global vertex indices with `color`,
     /// restoring all other vertices to their originally uploaded colors. Pass an
@@ -79,6 +97,9 @@ private:
     std::vector<Vertex> m_vertices;
     std::vector<glm::vec4> m_baselineColors;  // original colors from Upload, parallel to m_vertices
     std::vector<uint32_t> m_indices;
+    // RP.17 — line-list of (vertex, vertex) pairs for the edge overlay.
+    // Per-handle ranges tracked by `DrawParams::firstEdgeIndex/edgeIndexCount`.
+    std::vector<uint32_t> m_edgeIndices;
     std::unordered_map<MeshHandle, DrawParams> m_meshes;
 
     // Override layers (applied in order: baseline -> alpha -> color).
@@ -89,6 +110,7 @@ private:
     // GPU buffers
     std::unique_ptr<Buffer> m_vertexBuffer;
     std::unique_ptr<Buffer> m_indexBuffer;
+    std::unique_ptr<Buffer> m_edgeIndexBuffer;  // RP.17 — line-list index buffer
     bool m_dirty = false;
 };
 

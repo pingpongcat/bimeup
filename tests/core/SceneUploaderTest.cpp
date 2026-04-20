@@ -81,6 +81,22 @@ TEST(SceneUploaderTest, ToMeshDataEmptyMesh) {
 
     EXPECT_TRUE(data.vertices.empty());
     EXPECT_TRUE(data.indices.empty());
+    EXPECT_TRUE(data.edgeIndices.empty());
+}
+
+TEST(SceneUploaderTest, ToMeshDataForwardsEdgeIndices) {
+    SceneMesh mesh;
+    mesh.SetPositions({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    mesh.SetNormals({{0, 0, 1}, {0, 0, 1}, {0, 0, 1}});
+    mesh.SetColors({{1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}});
+    mesh.SetIndices({0, 1, 2});
+    mesh.SetEdgeIndices({0, 1, 1, 2, 2, 0});
+
+    MeshData data = SceneUploader::ToMeshData(mesh);
+
+    ASSERT_EQ(data.edgeIndices.size(), 6u);
+    EXPECT_EQ(data.edgeIndices[0], 0u);
+    EXPECT_EQ(data.edgeIndices[5], 0u);
 }
 
 // --- Upload tests (need Vulkan) ---

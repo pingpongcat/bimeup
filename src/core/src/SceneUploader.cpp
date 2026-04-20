@@ -19,6 +19,7 @@ renderer::MeshData SceneUploader::ToMeshData(const scene::SceneMesh& mesh) {
     }
 
     data.indices = mesh.GetIndices();
+    data.edgeIndices = mesh.GetEdgeIndices();
     return data;
 }
 

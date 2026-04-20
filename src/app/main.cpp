@@ -19,6 +19,7 @@
 #include <renderer/Device.h>
 #include <renderer/DiskMarker.h>
 #include <renderer/DiskMarkerPipeline.h>
+#include <renderer/EdgeOverlayPipeline.h>
 #include <renderer/FirstPersonController.h>
 #include <renderer/Lighting.h>
 #include <renderer/SunPosition.h>
@@ -210,6 +211,10 @@ int main(int argc, char* argv[]) {
                                                   shaderDir + "/disk_marker.vert.spv");
     bimeup::renderer::Shader diskMarkerFragShader(device, bimeup::renderer::ShaderStage::Fragment,
                                                   shaderDir + "/disk_marker.frag.spv");
+    bimeup::renderer::Shader edgeOverlayVertShader(device, bimeup::renderer::ShaderStage::Vertex,
+                                                   shaderDir + "/edge_overlay.vert.spv");
+    bimeup::renderer::Shader edgeOverlayFragShader(device, bimeup::renderer::ShaderStage::Fragment,
+                                                   shaderDir + "/edge_overlay.frag.spv");
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     //                 + clip planes UBO (fragment)
@@ -550,6 +555,24 @@ int main(int argc, char* argv[]) {
     };
     buildDiskMarkerPipeline();
     bimeup::renderer::DiskMarkerBuffer diskMarkerBuffer(device);
+
+    // RP.17.4 — feature-edge overlay pipeline. Targets the MRT main pass with
+    // secondary-write suppression so it doesn't stomp the normal + transparency
+    // G-buffers. Draw block sits after opaque + section caps and before the
+    // transparent pass so edges composite on top of solid surfaces but underneath
+    // alpha-blended glass.
+    std::unique_ptr<bimeup::renderer::EdgeOverlayPipeline> edgeOverlayPipeline;
+    auto buildEdgeOverlayPipeline = [&] {
+        edgeOverlayPipeline = std::make_unique<bimeup::renderer::EdgeOverlayPipeline>(
+            device, edgeOverlayVertShader, edgeOverlayFragShader,
+            renderLoop.GetRenderPass(), dsLayout.GetLayout(),
+            /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
+    };
+    buildEdgeOverlayPipeline();
+    // Edge-overlay runtime state — toggle + colour/alpha. Toolbar control and
+    // keyboard shortcut land in RP.17.5; for now, default on.
+    bool edgesEnabled = true;
+    const glm::vec4 kEdgeColor{0.05F, 0.05F, 0.05F, 0.8F};
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
     VkPushConstantRange shadowPushRange{};
@@ -1613,6 +1636,26 @@ int main(int argc, char* argv[]) {
                     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
                     vkCmdDraw(cmd, sectionCapGeometry.GetVertexCount(), 1, 0, 0);
                 }
+            }
+        }
+
+        // RP.17.4 — feature-edge overlay. Drawn after opaque + section caps and
+        // before the transparent pass so crisp silhouettes sit on top of solid
+        // surfaces but never in front of alpha-blended glass. Skipped in
+        // section-only mode (no opaque surface to overlay) and when the user
+        // toggles edges off.
+        if (edgesEnabled && !sectionOnly && meshBuffer.HasEdges()) {
+            edgeOverlayPipeline->Bind(cmd);
+            descriptorSet.Bind(cmd, edgeOverlayPipeline->GetLayout());
+            meshBuffer.BindEdges(cmd);
+            vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
+                               VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(glm::vec4),
+                               &kEdgeColor);
+            for (const auto& [handle, transform] : drawCalls) {
+                vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(glm::mat4), &transform);
+                meshBuffer.DrawEdges(cmd, handle);
             }
         }
 

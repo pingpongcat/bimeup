@@ -141,6 +141,56 @@ TEST_F(MeshBufferTest, SetVertexColorOverrideRestoresPreviousOverride) {
     EXPECT_EQ(verts[2].color, glm::vec4(0.0F, 0.0F, 1.0F, 1.0F));
 }
 
+// ----- RP.17 feature-edge overlay ----------------------------------------
+
+TEST_F(MeshBufferTest, UploadWithoutEdgesLeavesEdgeParamsZero) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+    MeshHandle handle = m_meshBuffer->Upload(MakeTriangle());
+
+    auto params = m_meshBuffer->GetDrawParams(handle);
+    EXPECT_EQ(params.edgeIndexCount, 0u);
+    EXPECT_EQ(params.firstEdgeIndex, 0u);
+    EXPECT_FALSE(m_meshBuffer->HasEdges());
+}
+
+TEST_F(MeshBufferTest, UploadWithEdgesStoresEdgeParams) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+
+    MeshData data = MakeTriangle();
+    // Three triangle edges: (0,1), (1,2), (2,0) — 6 line-list indices.
+    data.edgeIndices = {0, 1, 1, 2, 2, 0};
+    MeshHandle handle = m_meshBuffer->Upload(data);
+
+    auto params = m_meshBuffer->GetDrawParams(handle);
+    EXPECT_EQ(params.edgeIndexCount, 6u);
+    EXPECT_EQ(params.firstEdgeIndex, 0u);
+    EXPECT_TRUE(m_meshBuffer->HasEdges());
+}
+
+TEST_F(MeshBufferTest, SecondMeshEdgeIndicesAppendAfterFirst) {
+    m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
+
+    MeshData a = MakeTriangle();
+    a.edgeIndices = {0, 1, 1, 2, 2, 0};
+    MeshHandle h1 = m_meshBuffer->Upload(a);
+
+    MeshData b = MakeQuad();
+    b.edgeIndices = {0, 1, 1, 2, 2, 3, 3, 0};
+    MeshHandle h2 = m_meshBuffer->Upload(b);
+
+    auto p1 = m_meshBuffer->GetDrawParams(h1);
+    auto p2 = m_meshBuffer->GetDrawParams(h2);
+    EXPECT_EQ(p1.firstEdgeIndex, 0u);
+    EXPECT_EQ(p1.edgeIndexCount, 6u);
+    EXPECT_EQ(p2.firstEdgeIndex, 6u);  // after the triangle's 6 edge indices
+    EXPECT_EQ(p2.edgeIndexCount, 8u);
+    // Vertex-offset shared with the triangle-index draw — the edge indices
+    // uploaded for the quad reference positions 0..3 in its local frame, and
+    // the renderer relies on `vertexOffset` (not pre-offset edges) to hit the
+    // right vertices in the concatenated VBO.
+    EXPECT_EQ(p2.vertexOffset, 3);
+}
+
 TEST_F(MeshBufferTest, MeshCountTracksUploadAndRemove) {
     m_meshBuffer = std::make_unique<MeshBuffer>(*m_device);
     EXPECT_EQ(m_meshBuffer->MeshCount(), 0);

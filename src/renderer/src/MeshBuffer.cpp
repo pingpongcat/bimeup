@@ -18,11 +18,14 @@ MeshHandle MeshBuffer::Upload(const MeshData& data) {
     params.indexCount = static_cast<uint32_t>(data.indices.size());
     params.firstIndex = static_cast<uint32_t>(m_indices.size());
     params.vertexOffset = static_cast<int32_t>(m_vertices.size());
+    params.edgeIndexCount = static_cast<uint32_t>(data.edgeIndices.size());
+    params.firstEdgeIndex = static_cast<uint32_t>(m_edgeIndices.size());
 
     m_meshes[handle] = params;
 
     m_vertices.insert(m_vertices.end(), data.vertices.begin(), data.vertices.end());
     m_indices.insert(m_indices.end(), data.indices.begin(), data.indices.end());
+    m_edgeIndices.insert(m_edgeIndices.end(), data.edgeIndices.begin(), data.edgeIndices.end());
     m_baselineColors.reserve(m_vertices.size());
     for (const auto& v : data.vertices) {
         m_baselineColors.push_back(v.color);
@@ -116,6 +119,29 @@ void MeshBuffer::Draw(VkCommandBuffer cmd, MeshHandle handle) const {
     vkCmdDrawIndexed(cmd, params.indexCount, 1, params.firstIndex, params.vertexOffset, 0);
 }
 
+void MeshBuffer::BindEdges(VkCommandBuffer cmd) const {
+    if (!m_vertexBuffer || !m_edgeIndexBuffer) {
+        return;
+    }
+    VkBuffer vb = m_vertexBuffer->GetBuffer();
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+    vkCmdBindIndexBuffer(cmd, m_edgeIndexBuffer->GetBuffer(), 0, VK_INDEX_TYPE_UINT32);
+}
+
+void MeshBuffer::DrawEdges(VkCommandBuffer cmd, MeshHandle handle) const {
+    auto it = m_meshes.find(handle);
+    if (it == m_meshes.end()) {
+        return;
+    }
+    const auto& params = it->second;
+    if (params.edgeIndexCount == 0) {
+        return;
+    }
+    vkCmdDrawIndexed(cmd, params.edgeIndexCount, 1, params.firstEdgeIndex,
+                     params.vertexOffset, 0);
+}
+
 void MeshBuffer::RebuildGpuBuffers() {
     if (!m_dirty || m_vertices.empty()) {
         return;
@@ -128,6 +154,14 @@ void MeshBuffer::RebuildGpuBuffers() {
     m_indexBuffer = std::make_unique<Buffer>(
         m_device, BufferType::Index,
         m_indices.size() * sizeof(uint32_t), m_indices.data());
+
+    if (!m_edgeIndices.empty()) {
+        m_edgeIndexBuffer = std::make_unique<Buffer>(
+            m_device, BufferType::Index,
+            m_edgeIndices.size() * sizeof(uint32_t), m_edgeIndices.data());
+    } else {
+        m_edgeIndexBuffer.reset();
+    }
 
     m_dirty = false;
 }
