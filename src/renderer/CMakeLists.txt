@@ -41,6 +41,7 @@ add_library(bimeup_renderer STATIC
     src/SkyColor.cpp
     src/AccelerationStructure.cpp
     src/TopLevelAS.cpp
+    src/RayTracingPipeline.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
