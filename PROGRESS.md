@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
-## Current Task: 9.8.b RT sun-shadow routing — defer the sun term out of `basic.frag` into a screen-space composite that picks RT visibility (Hybrid) or PCF shadow map (Rasterised). Needs an albedo-or-sun-contribution G-buffer channel. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
+## Current Task: 9.8.b.2 Sun composite compute pass — reads depth + normal G-buffer + RT shadow visibility + shadow-transmission map + lighting UBO; writes `keyColor * NdotL * transmittedTint * rtVisibility` additively into HDR. Runs between RT AO dispatch and depth-pyramid build, Hybrid-RT only. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
