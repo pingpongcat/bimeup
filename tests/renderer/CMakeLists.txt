@@ -45,6 +45,7 @@ add_executable(renderer_tests
     RayTracingPipelineTest.cpp
     RtShadowPassTest.cpp
     RtAoPassTest.cpp
+    RtIndoorPassTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")
@@ -105,6 +106,7 @@ set(_renderer_gpu_fixtures
     RayTracingPipelineTest
     RtShadowPassTest
     RtAoPassTest
+    RtIndoorPassTest
 )
 
 foreach(_fixture IN LISTS _renderer_gpu_fixtures)

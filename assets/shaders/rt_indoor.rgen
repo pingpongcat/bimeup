@@ -1,0 +1,61 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Stage 9.7.a — RT indoor-fill shadow raygen.
+//
+// When the scene has `indoorLightsEnabled` and the user selected an RT
+// render mode, each fragment fires one shadow ray toward the overhead
+// fill's light-source (the inverse of its travel direction). Payload
+// semantics follow classical sun-style shadows: raygen seeds 0
+// (occluded), the miss shader writes 1 (lit). `SkipClosestHitShaderEXT`
+// keeps the CH stage out of the cost — only hit/miss matters here.
+// Walls are hard occluders; glass transmission is intentionally not
+// modelled for the fill (it's a room-level ambient proxy, not the sun).
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+layout(set = 0, binding = 2, r8) uniform writeonly image2D visibility;
+
+layout(push_constant) uniform PushC {
+    mat4  invViewProj;
+    vec4  fillDirWorld;  // xyz = direction the fill light TRAVELS
+    uvec2 extent;
+    uint  pad0;
+    uint  pad1;
+} pc;
+
+layout(location = 0) rayPayloadEXT float payload;
+
+void main() {
+    uvec2 pixel = gl_LaunchIDEXT.xy;
+    if (pixel.x >= pc.extent.x || pixel.y >= pc.extent.y) return;
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(pc.extent);
+    float depth = texture(depthTex, uv).r;
+
+    if (depth >= 1.0) {
+        imageStore(visibility, ivec2(pixel), vec4(1.0));
+        return;
+    }
+
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 worldH = pc.invViewProj * ndc;
+    vec3 worldPos = worldH.xyz / worldH.w;
+
+    vec3 rayDir = normalize(-pc.fillDirWorld.xyz);
+    vec3 rayOrigin = worldPos + rayDir * 1e-3;
+
+    payload = 0.0;
+    const uint rayFlags =
+        gl_RayFlagsOpaqueEXT |
+        gl_RayFlagsTerminateOnFirstHitEXT |
+        gl_RayFlagsSkipClosestHitShaderEXT;
+
+    // Building-scale max-distance: the fill represents a diffuse
+    // overhead source, so 1e4 m covers any reasonable scene; real
+    // occlusion is decided by the first opaque hit anyway.
+    traceRayEXT(topLevelAS, rayFlags, 0xFFu, 0u, 0u, 0u,
+                rayOrigin, 0.0, rayDir, 1.0e4, 0);
+
+    imageStore(visibility, ivec2(pixel), vec4(payload));
+}
