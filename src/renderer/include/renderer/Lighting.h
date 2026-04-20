@@ -105,20 +105,25 @@ float ComputePcfShadow(const glm::mat4& lightSpaceMatrix,
                        float invMapResolution,
                        const std::function<float(glm::vec2)>& sampleDepth);
 
-// RP.18.4 — combine PCF shadow visibility with a sample from the window-
-// transmission shadow attachment. `transmit` is a texel from the R16G16B16A16
-// attachment populated by `ShadowTransmissionPipeline` (cleared to opaque
-// white = "no glass", min-blended tints `surfaceColor * (1 - alpha)` where
-// transparent geometry rasterised in the light pass).
+// RP.18.4 / RP.18.7 — combine PCF shadow visibility with a sample from the
+// window-transmission shadow attachment. `transmit.rgb` is the nearest glass
+// tint at this light-space UV (min-blended `vec3(1 - alpha)` written by
+// `ShadowTransmissionPipeline`, cleared to opaque white = "no glass").
+// `transmit.a` is the nearest glass's light-space Z (min-blended
+// `gl_FragCoord.z`, cleared to 1.0 = "no glass / far").
 //
-// Semantics: when the transmission sample is saturated-white (no glass at this
-// lightUV) the result falls back to the classical binary PCF test
-// `sunColor * visibility`. When any channel is below the clear-white
-// threshold, glass is present and the result becomes `sunColor * transmit.rgb`
-// — tinting the fragment whether it was fully lit (floor directly under a
-// window) or opaque-shadowed (wall-shadowed fragment that happens to share a
-// lightUV with a glass pane). Mirrors `basic.frag`.
+// `fragLightZ` is the shading fragment's own light-space Z. Tint applies only
+// when glass is strictly in front of the fragment (`transmit.a < fragLightZ -
+// bias`); otherwise the tint is treated as 1. Visibility (from PCF) still
+// multiplies the result, so an opaque wall between glass and fragment blocks
+// regardless of glass presence at the UV — this is the RP.18.7 correctness
+// fix for "interior rooms getting lit through windows they can't see".
+//
+// Formula: `sunColor * visibility * (glassAhead ? transmit.rgb : 1)`.
+// Mirrors `basic.frag`.
 glm::vec3 ComputeTransmittedSun(float visibility,
+                                float fragLightZ,
+                                float bias,
                                 const glm::vec3& sunColor,
                                 const glm::vec4& transmit);
 

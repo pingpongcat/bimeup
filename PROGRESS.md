@@ -1,6 +1,6 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage RP — Render Polish (reopened 2026-04-20 for RP.18.6 + RP.19)
+## Current Stage: Stage RP — Render Polish (reopened 2026-04-20 for RP.18.6 + RP.18.7 + RP.19)
 ## Current Task: RP.19 SMAA tuning panel — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.19 closes.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
@@ -241,6 +241,7 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - Ordering: 18.1 → 18.2 → 18.3 → 18.4 → 18.5 → stage gate
   - Stage gate at RP.18.5: full `ctest -j$(nproc) --output-on-failure` 570/570 ✓ (2026-04-20)
   - [x] RP.18.6 Neutralise glass transmission tint (push `vec3(1 - alpha)` instead of `surfaceColor.rgb * (1 - alpha)`; architectural glass is near-neutral in transmission, blue was bleeding onto sunlit floors).
+  - [x] RP.18.7 Gate glass tint on light-space depth (store nearest-glass Z in `transmit.a` + `sunColor * visibility * (glassAhead ? tint : 1)`; walls between a window and an unrelated room now correctly block the tint).
 
 - [ ] RP.19 SMAA tuning knobs in `RenderQualityPanel`. Today the panel only exposes `enabled`. Wire threshold (edge-detection, ~0.05–0.2) + quality preset (LOW/MEDIUM/HIGH affecting max-search-steps) through `SmaaSettings` → `SmaaEdgePipeline`/`SmaaWeightsPipeline` push constants → panel sliders. Pin defaults in a `RenderQualityPanelTest` case.
 

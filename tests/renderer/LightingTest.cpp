@@ -213,51 +213,88 @@ TEST(PcfShadowTest, BiasPreventsSelfShadowing) {
 }
 
 // --- ComputeTransmittedSun: raster approximation of sun through IfcWindow glass. ---
+//
+// RP.18.7 — `transmit.a` holds the nearest glass's light-space Z (cleared to 1
+// = "far / no glass"). `fragLightZ` is this fragment's light-space Z. Glass
+// tints the sun only when glass is strictly in front of the fragment
+// (`glassAhead = transmit.a < fragLightZ - bias`); opaque visibility still
+// multiplies the result so a wall between the glass and the fragment blocks.
 
-TEST(TransmittedSunTest, FullVisibilityWhiteTransmitIsUnchangedSun) {
-    // No glass in the light path (transmission cleared to opaque white) + PCF
-    // says fully lit → the sun contribution is unattenuated.
+constexpr float kShadowBias = 0.0005F;
+
+TEST(TransmittedSunTest, FullVisibilityNoGlassIsFullSun) {
+    // No glass in the light path (transmission cleared to opaque white, alpha
+    // = 1 = "far") + PCF fully lit → sun is unattenuated.
     const glm::vec3 sun(1.0F, 0.95F, 0.8F);
     const glm::vec4 transmit(1.0F, 1.0F, 1.0F, 1.0F);
-    glm::vec3 out = ComputeTransmittedSun(1.0F, sun, transmit);
+    const float fragLightZ = 0.5F;
+    glm::vec3 out = ComputeTransmittedSun(1.0F, fragLightZ, kShadowBias, sun, transmit);
     EXPECT_NEAR(out.r, sun.r, kEps);
     EXPECT_NEAR(out.g, sun.g, kEps);
     EXPECT_NEAR(out.b, sun.b, kEps);
 }
 
-TEST(TransmittedSunTest, ZeroVisibilityWhiteTransmitIsBlack) {
-    // Wall shadow with no glass at the lightUV — fragment should be fully dark.
-    // Cleared-white transmit must not leak light into opaque-wall shadow zones.
+TEST(TransmittedSunTest, ZeroVisibilityNoGlassIsBlack) {
+    // Wall shadow, no glass at lightUV → fragment fully dark.
     const glm::vec3 sun(1.0F, 0.95F, 0.8F);
     const glm::vec4 transmit(1.0F, 1.0F, 1.0F, 1.0F);
-    glm::vec3 out = ComputeTransmittedSun(0.0F, sun, transmit);
+    glm::vec3 out = ComputeTransmittedSun(0.0F, 0.5F, kShadowBias, sun, transmit);
     EXPECT_NEAR(out.r, 0.0F, kEps);
     EXPECT_NEAR(out.g, 0.0F, kEps);
     EXPECT_NEAR(out.b, 0.0F, kEps);
 }
 
-TEST(TransmittedSunTest, ZeroVisibilityTintedTransmitIsSunTimesTint) {
-    // Window-shadowed: opaque shadow pass marks the fragment shadowed but a
-    // glass pane wrote a tint at the same lightUV. Result = sunColor × tint.
+TEST(TransmittedSunTest, ZeroVisibilityGlassAheadStillBlack) {
+    // RP.18.7 bug-fix case: the transmission map has glass recorded at this
+    // UV (room-A window), and glassZ is in front of the fragment's light-space
+    // depth. But the opaque PCF says the fragment is shadowed — a wall
+    // (between room A and room B) blocks the light. Must stay black; pre-RP.18.7
+    // code would have lit this fragment with the tint.
     const glm::vec3 sun(1.0F, 1.0F, 1.0F);
-    const glm::vec4 tint(0.2F, 0.3F, 0.5F, 1.0F);  // blue-ish glass
-    glm::vec3 out = ComputeTransmittedSun(0.0F, sun, tint);
-    EXPECT_NEAR(out.r, sun.r * tint.r, kEps);
-    EXPECT_NEAR(out.g, sun.g * tint.g, kEps);
-    EXPECT_NEAR(out.b, sun.b * tint.b, kEps);
+    const glm::vec4 transmit(0.4F, 0.5F, 0.6F, 0.2F);  // glassZ = 0.2
+    const float fragLightZ = 0.5F;                      // glass is in front
+    glm::vec3 out = ComputeTransmittedSun(0.0F, fragLightZ, kShadowBias, sun, transmit);
+    EXPECT_NEAR(out.r, 0.0F, kEps);
+    EXPECT_NEAR(out.g, 0.0F, kEps);
+    EXPECT_NEAR(out.b, 0.0F, kEps);
 }
 
-TEST(TransmittedSunTest, TintedTransmitFiltersFullyLitFragment) {
-    // Floor directly under a window: visibility = 1 (floor is its own opaque
-    // occluder), transmit = glass tint. The floor should read glass-tinted,
-    // not full-sun — otherwise the "sun through window tints the floor"
-    // intent of RP.18 is lost.
+TEST(TransmittedSunTest, FullVisibilityGlassAheadReturnsSunTimesTint) {
+    // Floor directly under a window: PCF = 1 (floor is its own opaque occluder),
+    // glassZ = 0.2 is in front of the floor's light-space Z. Result = sun × tint.
     const glm::vec3 sun(1.0F, 1.0F, 1.0F);
-    const glm::vec4 tint(0.4F, 0.5F, 0.6F, 1.0F);
-    glm::vec3 out = ComputeTransmittedSun(1.0F, sun, tint);
-    EXPECT_NEAR(out.r, sun.r * tint.r, kEps);
-    EXPECT_NEAR(out.g, sun.g * tint.g, kEps);
-    EXPECT_NEAR(out.b, sun.b * tint.b, kEps);
+    const glm::vec4 transmit(0.4F, 0.5F, 0.6F, 0.2F);
+    const float fragLightZ = 0.5F;
+    glm::vec3 out = ComputeTransmittedSun(1.0F, fragLightZ, kShadowBias, sun, transmit);
+    EXPECT_NEAR(out.r, sun.r * transmit.r, kEps);
+    EXPECT_NEAR(out.g, sun.g * transmit.g, kEps);
+    EXPECT_NEAR(out.b, sun.b * transmit.b, kEps);
+}
+
+TEST(TransmittedSunTest, FullVisibilityGlassBehindFragmentIsUnchangedSun) {
+    // Glass is recorded at this UV but its depth is behind the fragment (e.g.
+    // the window is further from the sun than this lit surface). Tint must not
+    // apply — fragment reads as full sun.
+    const glm::vec3 sun(1.0F, 1.0F, 1.0F);
+    const glm::vec4 transmit(0.4F, 0.5F, 0.6F, 0.8F);  // glassZ = 0.8
+    const float fragLightZ = 0.5F;                      // glass is behind
+    glm::vec3 out = ComputeTransmittedSun(1.0F, fragLightZ, kShadowBias, sun, transmit);
+    EXPECT_NEAR(out.r, sun.r, kEps);
+    EXPECT_NEAR(out.g, sun.g, kEps);
+    EXPECT_NEAR(out.b, sun.b, kEps);
+}
+
+TEST(TransmittedSunTest, PartialVisibilityGlassAheadScalesTint) {
+    // Penumbra through glass: PCF tap gives 0.4 visibility (edge of shadow),
+    // glass is in front → result = 0.4 × sun × tint.
+    const glm::vec3 sun(1.0F, 1.0F, 1.0F);
+    const glm::vec4 transmit(0.4F, 0.5F, 0.6F, 0.2F);
+    const float fragLightZ = 0.5F;
+    const float visibility = 0.4F;
+    glm::vec3 out = ComputeTransmittedSun(visibility, fragLightZ, kShadowBias, sun, transmit);
+    EXPECT_NEAR(out.r, visibility * sun.r * transmit.r, kEps);
+    EXPECT_NEAR(out.g, visibility * sun.g * transmit.g, kEps);
+    EXPECT_NEAR(out.b, visibility * sun.b * transmit.b, kEps);
 }
 
 }  // namespace

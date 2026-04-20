@@ -106,14 +106,13 @@ float ComputePcfShadow(const glm::mat4& lightSpaceMatrix,
 }
 
 glm::vec3 ComputeTransmittedSun(float visibility,
+                                float fragLightZ,
+                                float bias,
                                 const glm::vec3& sunColor,
                                 const glm::vec4& transmit) {
-    constexpr float kClearThreshold = 0.999F;
-    const bool glassPresent = (transmit.r < kClearThreshold) ||
-                              (transmit.g < kClearThreshold) ||
-                              (transmit.b < kClearThreshold);
-    const glm::vec3 multiplier = glassPresent ? glm::vec3(transmit) : glm::vec3(visibility);
-    return sunColor * multiplier;
+    const bool glassAhead = transmit.a < (fragLightZ - bias);
+    const glm::vec3 tint = glassAhead ? glm::vec3(transmit) : glm::vec3(1.0F);
+    return sunColor * (visibility * tint);
 }
 
 }  // namespace bimeup::renderer

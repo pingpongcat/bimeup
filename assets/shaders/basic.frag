@@ -82,25 +82,19 @@ vec3 hemisphereAmbient(vec3 n) {
     return mix(lights.skyHorizon.rgb, lights.skyGround.rgb, -t);
 }
 
-// RP.18.4 — mirror of bimeup::renderer::ComputeTransmittedSun. Combines the
-// binary PCF visibility with the window-transmission sample so sunlight can
-// leak tinted through IfcWindow panes into shadowed areas.
-vec3 computeTransmittedSun(float visibility, vec3 sunColor, vec4 transmit) {
-    const float kClearThreshold = 0.999;
-    bool glassPresent = any(lessThan(transmit.rgb, vec3(kClearThreshold)));
-    vec3 multiplier = glassPresent ? transmit.rgb : vec3(visibility);
-    return sunColor * multiplier;
-}
-
-// Project world-space into the shadow-map UV used for both PCF and
-// transmission lookups. Out-of-frustum projections return uv = vec2(-1) so
-// callers know to skip / use a fallback.
-vec2 lightSpaceUv(vec3 worldPos) {
-    vec4 clip = lights.lightSpaceMatrix * vec4(worldPos, 1.0);
-    if (clip.w <= 0.0) return vec2(-1.0);
-    vec3 ndc = clip.xyz / clip.w;
-    if (ndc.z < 0.0 || ndc.z > 1.0) return vec2(-1.0);
-    return ndc.xy * 0.5 + 0.5;
+// RP.18.4 / RP.18.7 — mirror of bimeup::renderer::ComputeTransmittedSun.
+// `transmit.rgb` = nearest glass tint at this lightUV (min-blended
+// `vec3(1 - alpha)`, cleared to 1 = "no glass"); `transmit.a` = nearest glass's
+// light-space Z (min-blended `gl_FragCoord.z`, cleared to 1 = "far"). Tint
+// applies only when glass is strictly in front of the fragment — otherwise the
+// 2D transmission map would leak sunlight into rooms that share a shadow-map
+// texel with a window they can't see. Visibility (PCF) still multiplies, so an
+// opaque wall between glass and fragment blocks regardless of glass presence.
+vec3 computeTransmittedSun(float visibility, float fragLightZ, float bias,
+                           vec3 sunColor, vec4 transmit) {
+    bool glassAhead = transmit.a < fragLightZ - bias;
+    vec3 tint = glassAhead ? transmit.rgb : vec3(1.0);
+    return sunColor * (visibility * tint);
 }
 
 // 3x3 PCF mirror of bimeup::renderer::ComputePcfShadow. Returns visibility in
@@ -160,15 +154,25 @@ void main() {
     vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);
     float shadowEnabled = lights.shadowParams.x;
     float visibility = mix(1.0, pcfShadow(fragWorldPos), shadowEnabled);
-    // RP.18.4 — sample the window-transmission map at the fragment's lightUV
-    // and route the sun through `computeTransmittedSun`. When shadows are
-    // disabled the bound image is a 1×1 placeholder whose texel content is
-    // undefined, so mix against opaque-white (= "no glass") gated by
-    // `shadowEnabled`. Out-of-frustum lightUVs rely on the sampler's
-    // opaque-white border.
-    vec2 lightUv = lightSpaceUv(fragWorldPos);
-    vec4 transmit = mix(vec4(1.0), texture(shadowTransmissionMap, lightUv), shadowEnabled);
-    lit += computeTransmittedSun(visibility, key, transmit);
+    // RP.18.4 / RP.18.7 — sample the window-transmission map at the fragment's
+    // lightUV. Need the fragment's own light-space Z too (not just the UV) so
+    // `computeTransmittedSun` can gate the tint on "glass is in front of this
+    // fragment". Compute the light-space projection once here; out-of-frustum
+    // clips use fragLightZ = 0 so `glassAhead = (transmit.a < 0 - bias)` is
+    // always false. Shadow-disabled path keeps the old bit-compatible output
+    // by passing transmit = opaque white (glassAhead still false).
+    vec4 lightClip = lights.lightSpaceMatrix * vec4(fragWorldPos, 1.0);
+    float fragLightZ = 0.0;
+    vec4 transmit = vec4(1.0);
+    if (lightClip.w > 0.0) {
+        vec3 lightNdc = lightClip.xyz / lightClip.w;
+        vec2 lightUv = lightNdc.xy * 0.5 + 0.5;
+        fragLightZ = lightNdc.z;
+        vec4 sampled = texture(shadowTransmissionMap, lightUv);
+        transmit = mix(vec4(1.0), sampled, shadowEnabled);
+    }
+    float bias = lights.shadowParams.y;
+    lit += computeTransmittedSun(visibility, fragLightZ, bias, key, transmit);
 
     lit += lambertContribution(n, lights.fillDirectionIntensity, lights.fillColorEnabled);
     lit += lambertContribution(n, lights.rimDirectionIntensity, lights.rimColorEnabled);

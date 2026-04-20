@@ -374,5 +374,44 @@ Single session expected; sub-tasks each land as their own `[RP.18.N]` commit per
 
 **Stage framing**: stage RP re-opens a seventh time. RP.18 is a classical-raster feature that RT (Stage 9.6) happens to duplicate in a more principled way — both ship because the classical renderer is the default and can't wait on RT (per the "additive, never replace" feedback from 2026-04-20). Stage gate at end of RP.18: full `ctest -j$(nproc) --output-on-failure`, then proceed to Stage 9.
 
+### RP.18.7 — Gate glass tint on light-space depth comparison (added 2026-04-20)
+
+**Symptom.** After RP.18.6 normalised the tint to `vec3(1 - alpha)`, the spurious blue patches disappeared, but a subtler bug surfaced: *any* interior room with no line-of-sight to a window was still getting softly lit wherever its floor happened to project to a light-space texel that had a window in front of *some other room*. Classic colored-shadow-map artifact — the 2D transmission attachment only records "glass present at this UV", not "glass in front of this fragment".
+
+**Root cause.** `computeTransmittedSun` currently overrides the PCF visibility with the glass tint whenever *any* RGB channel of `transmit` is below the clear-white threshold. That conflates "this pixel's light-space texel has some glass in it" with "this pixel is actually behind glass from the sun's POV". The wall between room-A-with-window and room-B-without-window correctly drives PCF visibility to 0, but the override sees glass at the UV (written by room A's window) and paints light onto room B's floor anyway.
+
+**Fix.** Record the glass's own light-space Z in the transmission attachment's alpha channel (currently written as 1), and only apply the tint when that glassZ is strictly in front of the fragment's light-space Z. The existing min-blend alpha op already gives us "nearest glass wins". The main fragment's sun term becomes:
+
+```glsl
+bool glassAhead = transmit.a < fragLightZ - bias;
+vec3 tint     = glassAhead ? transmit.rgb : vec3(1.0);
+sunTerm       = sunColor * visibility * tint;
+```
+
+- Fragment + wall between it and window → `visibility = 0`, `visibility * tint = 0` → stays dark ✓
+- Floor directly under a window → `visibility = 1`, `glassAhead = true` → tinted ✓
+- Fully lit fragment with no glass in ray → `visibility = 1`, `glassAhead = false` → full sun ✓
+- Fragment behind a wall, unrelated-room window at same UV → as case 1, stays dark ✓ (the bug fix)
+
+**Modules involved**
+- `assets/shaders/shadow_transmission.frag` — write `vec4(tint.rgb, gl_FragCoord.z)` instead of `vec4(tint.rgb, 1)`.
+- `assets/shaders/basic.frag` — pass `fragLightZ` into `computeTransmittedSun`; multiplicative formula above.
+- `renderer/Lighting.{h,cpp}` — `ComputeTransmittedSun(visibility, fragLightZ, bias, sunColor, transmit)` signature; new formula.
+- `tests/renderer/LightingTest.cpp` — replace the old "zero visibility + tint → tint" test with "zero visibility + glass ahead → still dark" (bug-fix case), add "glass ahead + visible → tint", "glass behind + visible → full sun", "partial visibility + glass ahead → partial tint". CPU-only; no pipeline changes.
+
+**Tasks** (single session)
+
+| # | Task |
+|---|------|
+| RP.18.7 | Update `ComputeTransmittedSun` signature + formula + tests; update `shadow_transmission.frag` to write `gl_FragCoord.z` to alpha; update `basic.frag` to compute `fragLightZ` and pass it through. Single commit, per the per-task-per-commit rule. Visual verification on `sample.ifc`: floor under a south-facing `IfcWindow` is still lit; interior corridors behind opaque walls are back to pitch-dark. |
+
+**Why this doesn't need its own pipeline-level test.** Min-blend already covers all four channels (see `Pipeline.cpp:165` — `alphaBlendOp = VK_BLEND_OP_MIN`), so switching alpha from a constant `1.0` to `gl_FragCoord.z` uses the existing blend state unchanged. No new pipeline test.
+
+**Risks**
+- **Self-tint at the glass surface.** The glass pane's own fragments have `fragZ ≈ glassZ`, so without a bias `glassAhead` would flip false→true across the pane. The existing shadow bias (`lights.shadowParams.y`) is sufficient — glass fragments that draw through the *transparent* main-pass pipeline aren't the ones at risk; the glass itself renders via the alpha-blended path and doesn't sample this attachment for its own "am I shadowed" question.
+- **Clear alpha must be 1.0.** Already is. Confirm in `ShadowPass` init — if someone ever changes the clear alpha to 0, min-blend would permanently stick at 0 and `glassAhead` would fire on every UV.
+
+**Stage framing**: RP.18.7 closes the last observed RP.18 correctness bug; RP.19 is still queued after. No new sub-tasks planned after this.
+
 ---
 
