@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
+#include <renderer/AccelerationStructure.h>
+#include <renderer/Device.h>
+#include <renderer/MeshBuffer.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/Swapchain.h>
-#include <renderer/Device.h>
+#include <renderer/TopLevelAS.h>
 #include <renderer/VulkanContext.h>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,9 +14,13 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+using bimeup::renderer::AccelerationStructure;
 using bimeup::renderer::Device;
+using bimeup::renderer::MeshData;
 using bimeup::renderer::RenderLoop;
 using bimeup::renderer::Swapchain;
+using bimeup::renderer::TlasInstance;
+using bimeup::renderer::TopLevelAS;
 using bimeup::renderer::VulkanContext;
 
 // Vulkan context + device + swapchain are shared across all tests in this
@@ -356,5 +363,86 @@ TEST_F(RenderLoopTest, SmaaDisabledStillCyclesFrame) {
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
+}
+
+// Stage 9.4.b — RT render mode plumbing. Default is Rasterised: every
+// existing test above implicitly relies on this, and the classical renderer
+// must stay the out-of-the-box experience (`CLAUDE.md` + Stage-9 ground
+// rules). Switching to Hybrid RT flips on the BLAS/TLAS + RtShadowPass
+// lifecycle; switching back tears them down. Visibility stays un-composited
+// in this task — 9.8 wires the actual contribution into the tonemap.
+TEST_F(RenderLoopTest, DefaultRenderModeIsRasterised) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::Rasterised);
+}
+
+TEST_F(RenderLoopTest, SetRenderModeRoundTrips) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
+    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::HybridRt);
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
+    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::Rasterised);
+}
+
+// No TLAS provided: the per-frame dispatch must safely short-circuit so the
+// classical frame still cycles. Runs on every device — exercises the no-TLAS
+// branch of the dispatch gate.
+TEST_F(RenderLoopTest, HybridRtModeCyclesFrameWithoutTlas) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+// Full RT path: build a minimal BLAS/TLAS, hand them to the RenderLoop, and
+// exercise the per-frame shadow dispatch under Vulkan validation. Skipped on
+// non-RT devices — matches the Stage-9 rule that classical renderer stays
+// live when RT is unavailable.
+TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
+    if (!m_device->HasRayTracing()) {
+        GTEST_SKIP() << "Device does not advertise RT — dispatch path skipped";
+    }
+
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    const glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
+    const glm::mat4 view = glm::lookAt(glm::vec3(0, 0, 2), glm::vec3(0), glm::vec3(0, 1, 0));
+    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
+
+    MeshData tri;
+    tri.vertices = {
+        {{0.0F, 0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {1, 0, 0, 1}},
+        {{-0.5F, -0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {0, 1, 0, 1}},
+        {{0.5F, -0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {0, 0, 1, 1}},
+    };
+    tri.indices = {0, 1, 2};
+
+    AccelerationStructure accel(*m_device);
+    auto blas = accel.BuildBlas(tri);
+    ASSERT_NE(blas, AccelerationStructure::InvalidHandle);
+    TopLevelAS tlas(*m_device);
+    TlasInstance inst{glm::mat4(1.0F), accel.GetDeviceAddress(blas), 0, 0xFF};
+    ASSERT_TRUE(tlas.Build({inst}));
+
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
+    m_renderLoop->SetRtShadowInputs(tlas.GetHandle(),
+                                    glm::normalize(glm::vec3(-1, -2, -1)), view);
+    EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
+
+    ASSERT_TRUE(m_renderLoop->BeginFrame());
+    EXPECT_TRUE(m_renderLoop->EndFrame());
+    m_renderLoop->WaitIdle();
+}
+
+// Flipping Hybrid RT → Rasterised must release the RT resources (visibility
+// image, descriptors, pipeline) so the classical frame pays no RT cost —
+// mirrors the Stage-9 "BLAS/TLAS lifecycle gated on mode" ground rule.
+TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
+    EXPECT_EQ(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
 }
 

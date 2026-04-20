@@ -27,6 +27,7 @@ class DepthLinearizePipeline;
 class DepthMipPipeline;
 class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
+class RtShadowPass;
 
 class RenderLoop {
 public:
@@ -62,6 +63,17 @@ public:
     // separable blur smooths away the hemisphere-sample noise. Sampled by
     // the tonemap fragment shader and multiplied into the HDR colour.
     static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
+
+    /// Stage 9 — render-mode selector. Classical rasterised stays the
+    /// default on every launch; Hybrid RT is opt-in and gated on the
+    /// device's `VK_KHR_ray_tracing_pipeline` capability (see
+    /// `Device::HasRayTracing()`). On non-RT devices, setting the mode to
+    /// `HybridRt` is accepted as state but the per-frame RT dispatch
+    /// short-circuits — the classical frame still cycles unchanged.
+    enum class RenderMode : uint8_t {
+        Rasterised = 0,
+        HybridRt = 1,
+    };
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir);
@@ -167,6 +179,33 @@ public:
     /// `Swapchain::Recreate(...)` on a resize. The render pass handles are
     /// preserved (format/samples unchanged) so pipelines stay valid.
     void RecreateForSwapchain();
+
+    /// Stage 9.4.b — select render mode. Flipping to `HybridRt` lazy-builds
+    /// the `RtShadowPass` at the current swapchain extent (no-op when the
+    /// device advertises no RT — `HybridRt` still reports via
+    /// `GetRenderMode` so the UI state is honest, but the per-frame
+    /// dispatch is skipped). Flipping back to `Rasterised` tears the RT
+    /// resources down so the classical frame pays zero RT cost.
+    void SetRenderMode(RenderMode mode);
+    [[nodiscard]] RenderMode GetRenderMode() const { return m_renderMode; }
+
+    /// Stage 9.4.b — per-frame inputs for the RT sun-shadow pass. The caller
+    /// owns the BLAS/TLAS lifecycle (build + rebuild on scene edits) and
+    /// hands the TLAS handle in here each frame alongside the current sun
+    /// direction (world-space travel direction, matches
+    /// `DirectionalLight::direction`) and the camera view matrix used to
+    /// reconstruct world-space positions in the raygen. Pass
+    /// `VK_NULL_HANDLE` for the TLAS to temporarily skip the dispatch
+    /// without leaving Hybrid RT mode (e.g. between scene loads).
+    void SetRtShadowInputs(VkAccelerationStructureKHR tlas,
+                           const glm::vec3& sunDirWorld, const glm::mat4& view);
+
+    /// Sampled view of the RT shadow-pass visibility image (R8_UNORM,
+    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 will
+    /// wire this into the hybrid composite; before then it's observable
+    /// but not consumed. Returns `VK_NULL_HANDLE` when RT mode is off or
+    /// the device lacks RT support.
+    [[nodiscard]] VkImageView GetRtShadowVisibilityView() const;
 
 private:
     void CreateCommandPool();
@@ -439,6 +478,30 @@ private:
 
     PreMainPassCallback m_preMainPass;
     InPresentPassCallback m_inPresentPass;
+
+    // Stage 9.4.b — RT sun-shadow wire. The pass is only allocated while
+    // `m_renderMode == HybridRt` on an RT-capable device (guarded by
+    // `Device::HasRayTracing()`); otherwise it stays null and the per-frame
+    // dispatch path short-circuits. The depth sampler is a dedicated
+    // NEAREST/clamp sampler used exclusively for depth reads in the
+    // raygen — the depth-pyramid sampler uses LINEAR filtering which is
+    // the wrong semantics for this reconstruction.
+    //
+    // The BLAS/TLAS live outside this class (the caller extracts them
+    // from the scene); `m_rtTlas` is just the non-owning handle the
+    // dispatch binds into descriptor slot 0 each frame. `SetRtShadowInputs`
+    // clears the handle (pass `VK_NULL_HANDLE`) to temporarily skip the
+    // dispatch without leaving Hybrid RT mode — e.g. between scene loads.
+    RenderMode m_renderMode = RenderMode::Rasterised;
+    std::unique_ptr<RtShadowPass> m_rtShadowPass;
+    VkSampler m_rtDepthSampler = VK_NULL_HANDLE;
+    VkAccelerationStructureKHR m_rtTlas = VK_NULL_HANDLE;
+    glm::vec3 m_rtSunDir{0.0F, -1.0F, 0.0F};
+    glm::mat4 m_rtView{1.0F};
+
+    void BuildRtShadowPass();
+    void DestroyRtShadowPass();
+    void DispatchRtShadow(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer

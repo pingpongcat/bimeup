@@ -3,6 +3,7 @@
 #include <renderer/DepthLinearizePipeline.h>
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
+#include <renderer/RtShadowPass.h>
 #include <renderer/Shader.h>
 #include <renderer/SmaaLut.h>
 #include <renderer/SsaoBlurPipeline.h>
@@ -128,8 +129,17 @@ bool RenderLoop::EndFrame() {
     VkExtent2D extent = m_swapchain.GetExtent();
 
     // End the main (HDR) render pass. finalLayout on the HDR attachment
-    // transitions it to SHADER_READ_ONLY_OPTIMAL for the tonemap sampler.
+    // transitions it to SHADER_READ_ONLY_OPTIMAL for the tonemap sampler;
+    // the depth attachment also transitions to SHADER_READ_ONLY_OPTIMAL so
+    // subsequent compute/RT passes can sample it.
     vkCmdEndRenderPass(cmd);
+
+    // Stage 9.4.b — RT sun-shadow dispatch. Safe no-op unless Hybrid RT
+    // mode is active, the device advertises RT, the pass was built, and
+    // the caller has supplied a TLAS. Visibility is written and
+    // transitioned to SHADER_READ_ONLY_OPTIMAL but no downstream pass
+    // samples it yet — Stage 9.8 wires the hybrid composite.
+    DispatchRtShadow(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
     // tonemap pass. Dispatches linearize then three mip downsamples with
@@ -364,6 +374,99 @@ void RenderLoop::SetSsaoParams(float radius, float falloff, float intensity,
     m_ssaoShadowPower = shadowPower;
 }
 
+void RenderLoop::SetRenderMode(RenderMode mode) {
+    if (mode == m_renderMode) {
+        return;
+    }
+    m_renderMode = mode;
+
+    if (m_renderMode == RenderMode::HybridRt) {
+        // Lazy-build is guarded by `Device::HasRayTracing()` inside
+        // `BuildRtShadowPass`; on non-RT devices this is a no-op and the
+        // dispatch path short-circuits every frame.
+        BuildRtShadowPass();
+    } else {
+        // Wait for in-flight frames so it's safe to destroy the pipeline /
+        // visibility image without racing a pending trace.
+        WaitIdle();
+        DestroyRtShadowPass();
+        m_rtTlas = VK_NULL_HANDLE;
+    }
+}
+
+void RenderLoop::SetRtShadowInputs(VkAccelerationStructureKHR tlas,
+                                   const glm::vec3& sunDirWorld,
+                                   const glm::mat4& view) {
+    m_rtTlas = tlas;
+    m_rtSunDir = sunDirWorld;
+    m_rtView = view;
+}
+
+VkImageView RenderLoop::GetRtShadowVisibilityView() const {
+    return m_rtShadowPass ? m_rtShadowPass->GetVisibilityImageView() : VK_NULL_HANDLE;
+}
+
+void RenderLoop::BuildRtShadowPass() {
+    if (!m_device.HasRayTracing()) {
+        return;
+    }
+    if (!m_rtShadowPass) {
+        m_rtShadowPass = std::make_unique<RtShadowPass>(m_device);
+    }
+    if (m_rtDepthSampler == VK_NULL_HANDLE) {
+        // NEAREST/clamp so raygen depth reads return the exact fragment
+        // value without cross-pixel filtering (the depth-pyramid sampler
+        // uses LINEAR, which is the wrong semantics here).
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_NEAREST;
+        si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.minLod = 0.0F;
+        si.maxLod = 0.0F;
+        if (vkCreateSampler(m_device.GetDevice(), &si, nullptr, &m_rtDepthSampler) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("RenderLoop: failed to create RT depth sampler");
+        }
+    }
+    const VkExtent2D extent = m_swapchain.GetExtent();
+    if (!m_rtShadowPass->Build(extent.width, extent.height, m_shaderDir)) {
+        // RT build path can fail on devices that pass the capability probe
+        // but reject the pipeline (missing SPIR-V, SBT align mismatch). The
+        // classical path stays live — drop the pass and let the dispatch
+        // gate skip this frame.
+        m_rtShadowPass.reset();
+    }
+}
+
+void RenderLoop::DestroyRtShadowPass() {
+    m_rtShadowPass.reset();
+    if (m_rtDepthSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_device.GetDevice(), m_rtDepthSampler, nullptr);
+        m_rtDepthSampler = VK_NULL_HANDLE;
+    }
+}
+
+void RenderLoop::DispatchRtShadow(VkCommandBuffer cmd) {
+    if (m_renderMode != RenderMode::HybridRt) {
+        return;
+    }
+    if (!m_rtShadowPass || !m_rtShadowPass->IsValid()) {
+        return;
+    }
+    if (m_rtTlas == VK_NULL_HANDLE) {
+        return;
+    }
+    // Depth image is already in SHADER_READ_ONLY_OPTIMAL — the main render
+    // pass's finalLayout transition handled it. RtShadowPass::Dispatch
+    // owns the visibility-image layout transitions internally.
+    m_rtShadowPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+                             m_rtView, m_proj, m_rtSunDir);
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -380,6 +483,14 @@ void RenderLoop::RecreateForSwapchain() {
     ClearAoImagesToWhite();
     ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
+
+    // Stage 9.4.b — the RT visibility image matches the swapchain extent;
+    // rebuild on resize when RT mode is active. `BuildRtShadowPass`
+    // rebuilds via `RtShadowPass::Build` which tears down the old image
+    // before allocating the new one.
+    if (m_renderMode == RenderMode::HybridRt) {
+        BuildRtShadowPass();
+    }
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -1865,6 +1976,11 @@ void RenderLoop::Cleanup() {
     m_smaaEdgeFragShader.reset();
     m_smaaWeightsFragShader.reset();
     m_smaaBlendFragShader.reset();
+
+    // Stage 9.4.b — RT sun-shadow resources. The pass owns its own VMA
+    // allocations (visibility image) so `DestroyRtShadowPass` must run
+    // before the allocator shuts down with the rest of the renderer.
+    DestroyRtShadowPass();
 
     CleanupFrameResources();
     // RP.16.8 — depth-pyramid / SMAA / SSAO allocate VMA images via their
