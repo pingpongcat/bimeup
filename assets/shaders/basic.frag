@@ -44,6 +44,13 @@ layout(set = 0, binding = 3) uniform ClipPlanesUBO {
     ivec4 count;     // x = number of active planes
 } clipPlanes;
 
+// RP.18.4 — tinted sun attenuation written from the light's POV by the
+// transparent-shadow pass. Cleared to opaque white (= no attenuation); glass
+// writes `surfaceColor * (1 - alpha)` min-blended so overlapping panes keep
+// the darkest tap. Sampler border is opaque white so out-of-frustum reads
+// behave as "no glass".
+layout(set = 0, binding = 4) uniform sampler2D shadowTransmissionMap;
+
 vec3 lambertContribution(vec3 n, vec4 dirI, vec4 colE) {
     float enabled = colE.w;
     vec3 toLight = normalize(-dirI.xyz);
@@ -73,6 +80,27 @@ vec3 hemisphereAmbient(vec3 n) {
         return mix(lights.skyHorizon.rgb, lights.skyZenith.rgb, t);
     }
     return mix(lights.skyHorizon.rgb, lights.skyGround.rgb, -t);
+}
+
+// RP.18.4 — mirror of bimeup::renderer::ComputeTransmittedSun. Combines the
+// binary PCF visibility with the window-transmission sample so sunlight can
+// leak tinted through IfcWindow panes into shadowed areas.
+vec3 computeTransmittedSun(float visibility, vec3 sunColor, vec4 transmit) {
+    const float kClearThreshold = 0.999;
+    bool glassPresent = any(lessThan(transmit.rgb, vec3(kClearThreshold)));
+    vec3 multiplier = glassPresent ? transmit.rgb : vec3(visibility);
+    return sunColor * multiplier;
+}
+
+// Project world-space into the shadow-map UV used for both PCF and
+// transmission lookups. Out-of-frustum projections return uv = vec2(-1) so
+// callers know to skip / use a fallback.
+vec2 lightSpaceUv(vec3 worldPos) {
+    vec4 clip = lights.lightSpaceMatrix * vec4(worldPos, 1.0);
+    if (clip.w <= 0.0) return vec2(-1.0);
+    vec3 ndc = clip.xyz / clip.w;
+    if (ndc.z < 0.0 || ndc.z > 1.0) return vec2(-1.0);
+    return ndc.xy * 0.5 + 0.5;
 }
 
 // 3x3 PCF mirror of bimeup::renderer::ComputePcfShadow. Returns visibility in
@@ -132,7 +160,15 @@ void main() {
     vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);
     float shadowEnabled = lights.shadowParams.x;
     float visibility = mix(1.0, pcfShadow(fragWorldPos), shadowEnabled);
-    lit += key * visibility;
+    // RP.18.4 — sample the window-transmission map at the fragment's lightUV
+    // and route the sun through `computeTransmittedSun`. When shadows are
+    // disabled the bound image is a 1×1 placeholder whose texel content is
+    // undefined, so mix against opaque-white (= "no glass") gated by
+    // `shadowEnabled`. Out-of-frustum lightUVs rely on the sampler's
+    // opaque-white border.
+    vec2 lightUv = lightSpaceUv(fragWorldPos);
+    vec4 transmit = mix(vec4(1.0), texture(shadowTransmissionMap, lightUv), shadowEnabled);
+    lit += computeTransmittedSun(visibility, key, transmit);
 
     lit += lambertContribution(n, lights.fillDirectionIntensity, lights.fillColorEnabled);
     lit += lambertContribution(n, lights.rimDirectionIntensity, lights.rimColorEnabled);

@@ -225,16 +225,17 @@ int main(int argc, char* argv[]) {
                                                    shaderDir + "/edge_overlay.frag.spv");
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
-    //                 + clip planes UBO (fragment)
+    //                 + clip planes UBO (fragment) + shadow transmission sampler (fragment, RP.18.4)
     bimeup::renderer::DescriptorSetLayout dsLayout(device, {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
+        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
     });
     bimeup::renderer::DescriptorPool dsPool(device, 1, {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
     });
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
 
@@ -265,6 +266,14 @@ int main(int argc, char* argv[]) {
     // is always valid (Vulkan validation flags uninitialized COMBINED_IMAGE_SAMPLER reads).
     bimeup::renderer::ShadowMap placeholderShadow(device, 1U);
     descriptorSet.UpdateImage(2, placeholderShadow.GetImageView(), placeholderShadow.GetSampler(),
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // RP.18.4 — transmission sampler binding. Placeholder's transmission
+    // attachment is pre-transitioned to SHADER_READ_ONLY_OPTIMAL in the
+    // ShadowMap ctor and the (never-cleared) texel is (1,1,1,1) = "no glass"
+    // by default alloc-zero + the sampler border colour, so `basic.frag`
+    // reads as unattenuated sun before the first shadow pass.
+    descriptorSet.UpdateImage(4, placeholderShadow.GetTransmissionImageView(),
+                              placeholderShadow.GetTransmissionSampler(),
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // MeshBuffer for all geometry
@@ -1657,6 +1666,9 @@ int main(int argc, char* argv[]) {
                 shadowMapResolution = shadowSettings.mapResolution;
                 buildShadowPipeline();
                 descriptorSet.UpdateImage(2, shadowMap->GetImageView(), shadowMap->GetSampler(),
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                descriptorSet.UpdateImage(4, shadowMap->GetTransmissionImageView(),
+                                          shadowMap->GetTransmissionSampler(),
                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
         }

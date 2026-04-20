@@ -98,4 +98,21 @@ float ComputePcfShadow(const glm::mat4& lightSpaceMatrix,
                        float invMapResolution,
                        const std::function<float(glm::vec2)>& sampleDepth);
 
+// RP.18.4 — combine PCF shadow visibility with a sample from the window-
+// transmission shadow attachment. `transmit` is a texel from the R16G16B16A16
+// attachment populated by `ShadowTransmissionPipeline` (cleared to opaque
+// white = "no glass", min-blended tints `surfaceColor * (1 - alpha)` where
+// transparent geometry rasterised in the light pass).
+//
+// Semantics: when the transmission sample is saturated-white (no glass at this
+// lightUV) the result falls back to the classical binary PCF test
+// `sunColor * visibility`. When any channel is below the clear-white
+// threshold, glass is present and the result becomes `sunColor * transmit.rgb`
+// — tinting the fragment whether it was fully lit (floor directly under a
+// window) or opaque-shadowed (wall-shadowed fragment that happens to share a
+// lightUV with a glass pane). Mirrors `basic.frag`.
+glm::vec3 ComputeTransmittedSun(float visibility,
+                                const glm::vec3& sunColor,
+                                const glm::vec4& transmit);
+
 }  // namespace bimeup::renderer

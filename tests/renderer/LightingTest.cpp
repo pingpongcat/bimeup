@@ -11,6 +11,7 @@
 using bimeup::renderer::ComputeHemisphereAmbient;
 using bimeup::renderer::ComputeLambert;
 using bimeup::renderer::ComputePcfShadow;
+using bimeup::renderer::ComputeTransmittedSun;
 using bimeup::renderer::DirectionalLight;
 using bimeup::renderer::HemisphereAmbient;
 using bimeup::renderer::LightingUbo;
@@ -209,6 +210,54 @@ TEST(PcfShadowTest, BiasPreventsSelfShadowing) {
 
     float vis = ComputePcfShadow(ls, glm::vec3(0.0F), 0.01F, 1.0F / 1024.0F, stored);
     EXPECT_NEAR(vis, 1.0F, 1e-5F);
+}
+
+// --- ComputeTransmittedSun: raster approximation of sun through IfcWindow glass. ---
+
+TEST(TransmittedSunTest, FullVisibilityWhiteTransmitIsUnchangedSun) {
+    // No glass in the light path (transmission cleared to opaque white) + PCF
+    // says fully lit → the sun contribution is unattenuated.
+    const glm::vec3 sun(1.0F, 0.95F, 0.8F);
+    const glm::vec4 transmit(1.0F, 1.0F, 1.0F, 1.0F);
+    glm::vec3 out = ComputeTransmittedSun(1.0F, sun, transmit);
+    EXPECT_NEAR(out.r, sun.r, kEps);
+    EXPECT_NEAR(out.g, sun.g, kEps);
+    EXPECT_NEAR(out.b, sun.b, kEps);
+}
+
+TEST(TransmittedSunTest, ZeroVisibilityWhiteTransmitIsBlack) {
+    // Wall shadow with no glass at the lightUV — fragment should be fully dark.
+    // Cleared-white transmit must not leak light into opaque-wall shadow zones.
+    const glm::vec3 sun(1.0F, 0.95F, 0.8F);
+    const glm::vec4 transmit(1.0F, 1.0F, 1.0F, 1.0F);
+    glm::vec3 out = ComputeTransmittedSun(0.0F, sun, transmit);
+    EXPECT_NEAR(out.r, 0.0F, kEps);
+    EXPECT_NEAR(out.g, 0.0F, kEps);
+    EXPECT_NEAR(out.b, 0.0F, kEps);
+}
+
+TEST(TransmittedSunTest, ZeroVisibilityTintedTransmitIsSunTimesTint) {
+    // Window-shadowed: opaque shadow pass marks the fragment shadowed but a
+    // glass pane wrote a tint at the same lightUV. Result = sunColor × tint.
+    const glm::vec3 sun(1.0F, 1.0F, 1.0F);
+    const glm::vec4 tint(0.2F, 0.3F, 0.5F, 1.0F);  // blue-ish glass
+    glm::vec3 out = ComputeTransmittedSun(0.0F, sun, tint);
+    EXPECT_NEAR(out.r, sun.r * tint.r, kEps);
+    EXPECT_NEAR(out.g, sun.g * tint.g, kEps);
+    EXPECT_NEAR(out.b, sun.b * tint.b, kEps);
+}
+
+TEST(TransmittedSunTest, TintedTransmitFiltersFullyLitFragment) {
+    // Floor directly under a window: visibility = 1 (floor is its own opaque
+    // occluder), transmit = glass tint. The floor should read glass-tinted,
+    // not full-sun — otherwise the "sun through window tints the floor"
+    // intent of RP.18 is lost.
+    const glm::vec3 sun(1.0F, 1.0F, 1.0F);
+    const glm::vec4 tint(0.4F, 0.5F, 0.6F, 1.0F);
+    glm::vec3 out = ComputeTransmittedSun(1.0F, sun, tint);
+    EXPECT_NEAR(out.r, sun.r * tint.r, kEps);
+    EXPECT_NEAR(out.g, sun.g * tint.g, kEps);
+    EXPECT_NEAR(out.b, sun.b * tint.b, kEps);
 }
 
 }  // namespace
