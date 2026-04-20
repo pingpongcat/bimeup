@@ -11,6 +11,7 @@
 #include <ifc/IfcSiteLocation.h>
 #include <platform/Input.h>
 #include <platform/Window.h>
+#include <renderer/AccelerationStructure.h>
 #include <renderer/Buffer.h>
 #include <renderer/Camera.h>
 #include <renderer/ClipPlaneManager.h>
@@ -30,6 +31,7 @@
 #include <renderer/ShadowPass.h>
 #include <renderer/ShadowTransmissionPipeline.h>
 #include <renderer/Swapchain.h>
+#include <renderer/TopLevelAS.h>
 #include <renderer/ViewportNavigator.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
@@ -467,6 +469,47 @@ int main(int argc, char* argv[]) {
 
     LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
              sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
+
+    // Stage 9.8.d — BLAS-per-mesh + TLAS-per-node for Hybrid RT. Strict
+    // no-op on non-RT devices (both classes gate on `device.HasRayTracing`
+    // internally), so the classical raster frame pays zero RT cost. Built
+    // once here — dynamic rebuild on scene edits (visibility toggles,
+    // isolate) is deferred to Stage 9.10; for now hidden nodes still
+    // contribute RT shadows, which matches the visibility behaviour of
+    // the rasterised shadow map (also built from all nodes).
+    bimeup::renderer::AccelerationStructure rtBlas(device);
+    bimeup::renderer::TopLevelAS rtTlas(device);
+    if (device.HasRayTracing()) {
+        std::vector<bimeup::renderer::AccelerationStructure::BlasHandle> sceneMeshBlas(
+            sceneResult->meshes.size(),
+            bimeup::renderer::AccelerationStructure::InvalidHandle);
+        for (std::size_t i = 0; i < sceneResult->meshes.size(); ++i) {
+            auto md = bimeup::core::SceneUploader::ToMeshData(sceneResult->meshes[i]);
+            sceneMeshBlas[i] = rtBlas.BuildBlas(md);
+        }
+
+        std::vector<bimeup::renderer::TlasInstance> instances;
+        instances.reserve(nodeToSceneMeshIdx.size());
+        for (const auto& [nodeId, sceneMeshIdx] : nodeToSceneMeshIdx) {
+            auto h = sceneMeshBlas[sceneMeshIdx];
+            if (!rtBlas.IsValid(h)) continue;
+            const auto& node = sceneResult->scene.GetNode(nodeId);
+            bimeup::renderer::TlasInstance inst{};
+            inst.transform = node.transform;
+            inst.blasAddress = rtBlas.GetDeviceAddress(h);
+            inst.customIndex = node.expressId;
+            inst.mask = 0xFF;
+            // Stage 9.6.a — glass panes opt into FORCE_NO_OPAQUE so the
+            // shadow-ray any-hit shader can attenuate the sun through them.
+            if (sceneResult->meshes[sceneMeshIdx].IsTransparent()) {
+                inst.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+            }
+            instances.push_back(inst);
+        }
+        rtTlas.Build(instances);
+        LOG_INFO("RT: built {} BLAS + TLAS with {} instances",
+                 rtBlas.BlasCount(), rtTlas.InstanceCount());
+    }
 
     // Pipeline
     VkVertexInputBindingDescription binding{};
@@ -1109,6 +1152,11 @@ int main(int argc, char* argv[]) {
         rqs.sun.indoorLightsEnabled = true;
         rqs.sun.shadow.enabled = true;
         rqs.sun.shadow.mapResolution = 4096U;
+
+        // Stage 9.8.d — panel gates the "Hybrid RT" radio on this probe.
+        // Default mode stays Rasterised so every launch is bit-compatible
+        // with the pre-Stage-9 renderer regardless of GPU capability.
+        rqs.rayTracingAvailable = device.HasRayTracing();
     }
     auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
@@ -1664,14 +1712,17 @@ int main(int argc, char* argv[]) {
         // enabled-state changed.
         auto& sunScene = renderQualityPanel->MutableSettings().sun;
         auto& shadowSettings = sunScene.shadow;
+        // Stage 9.8.d — need `sunPos.dirWorld` past the block below so the
+        // RT shadow pass can be seeded with the same sun direction the
+        // lighting UBO bakes in.
+        bimeup::renderer::SunPosition sunPos = bimeup::renderer::ComputeSunDirection(
+            sunScene.julianDayUtc, sunScene.siteLocation.latitudeRad,
+            sunScene.siteLocation.longitudeRad, sunScene.trueNorthRad);
         {
             auto sceneBounds = ComputeSceneBounds(sceneResult->scene);
             if (sceneBounds.IsValid()) {
                 glm::vec3 size = sceneBounds.GetSize();
                 float radius = 0.5F * glm::length(size);
-                const auto sunPos = bimeup::renderer::ComputeSunDirection(
-                    sunScene.julianDayUtc, sunScene.siteLocation.latitudeRad,
-                    sunScene.siteLocation.longitudeRad, sunScene.trueNorthRad);
                 shadowSettings.lightSpaceMatrix = bimeup::renderer::ComputeLightSpaceMatrix(
                     sunPos.dirWorld, sceneBounds.GetCenter(), std::max(radius, 1.0F));
             }
@@ -1696,6 +1747,51 @@ int main(int argc, char* argv[]) {
         auto* lightMapped = static_cast<bimeup::renderer::LightingUbo*>(lightingBuffer.Map());
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
+
+        // Stage 9.8.d — render-mode sync + per-frame RT inputs. The panel
+        // selector is the only source of truth; main.cpp maps it onto
+        // `RenderLoop::RenderMode` and feeds the RT shadow / AO / indoor
+        // passes their per-frame state. `SetRenderMode` internally
+        // `WaitIdle`s and builds/tears-down RT resources, so we only call
+        // it when the mode actually changes.
+        {
+            const auto panelMode = renderQualityPanel->GetSettings().mode;
+            const auto desiredMode =
+                (panelMode == bimeup::ui::RenderMode::HybridRt &&
+                 device.HasRayTracing())
+                    ? bimeup::renderer::RenderLoop::RenderMode::HybridRt
+                    : bimeup::renderer::RenderLoop::RenderMode::Rasterised;
+            if (renderLoop.GetRenderMode() != desiredMode) {
+                renderLoop.SetRenderMode(desiredMode);
+            }
+            if (desiredMode == bimeup::renderer::RenderLoop::RenderMode::HybridRt) {
+                renderLoop.SetRtShadowInputs(rtTlas.GetHandle(), sunPos.dirWorld,
+                                             camera.GetViewMatrix());
+                renderLoop.SetRtAoInputs(1.0F);
+                // Indoor fill direction mirrors the `PackSunLighting`
+                // hardcoded overhead-fill (`normalize(vec3(0.2,-1,0.3))`)
+                // so the RT wall-occlusion pass and the raster lambert
+                // agree on what "the fill light" means geometrically.
+                const glm::vec3 fillDirWorld = glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F));
+                renderLoop.SetRtIndoorInputs(fillDirWorld,
+                                             sunScene.indoorLightsEnabled);
+                // Sun composite needs the RP.18 shadow-transmission view;
+                // fall back to the placeholder (opaque-white transmission)
+                // before the first real shadow build so the composite has
+                // valid bindings.
+                const VkImageView transmissionView = shadowMap
+                    ? shadowMap->GetTransmissionImageView()
+                    : placeholderShadow.GetTransmissionImageView();
+                const VkSampler transmissionSampler = shadowMap
+                    ? shadowMap->GetTransmissionSampler()
+                    : placeholderShadow.GetTransmissionSampler();
+                renderLoop.SetRtSunCompositeInputs(
+                    transmissionView, transmissionSampler,
+                    lightingBuffer.GetBuffer(), sizeof(bimeup::renderer::LightingUbo));
+                renderLoop.SetRtIndoorCompositeInputs(
+                    lightingBuffer.GetBuffer(), sizeof(bimeup::renderer::LightingUbo));
+            }
+        }
 
         // Push AxisSectionController slot state into the shared ClipPlaneManager
         // before we pack it for the shader — the controller's plane entries carry

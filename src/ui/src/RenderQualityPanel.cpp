@@ -58,6 +58,29 @@ void RenderQualityPanel::OnDraw() {
         return;
     }
 
+    // Stage 9.8.d — render-mode switch. HybridRt greyed out when the
+    // device probe says no; tooltip explains why. `PathTraced` is a
+    // 9.9 hook, always greyed out for now.
+    if (ImGui::CollapsingHeader("Mode")) {
+        auto& mode = m_settings.mode;
+        if (ImGui::RadioButton("Rasterised", mode == RenderMode::Rasterised)) {
+            mode = RenderMode::Rasterised;
+        }
+        ImGui::BeginDisabled(!m_settings.rayTracingAvailable);
+        if (ImGui::RadioButton("Hybrid RT", mode == RenderMode::HybridRt)) {
+            mode = RenderMode::HybridRt;
+        }
+        ImGui::EndDisabled();
+        if (!m_settings.rayTracingAvailable && ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("GPU lacks VK_KHR_ray_tracing_pipeline");
+        }
+        ImGui::BeginDisabled(true);
+        bool pt = mode == RenderMode::PathTraced;
+        ImGui::RadioButton("Path Traced", pt);
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Sun")) {
         auto& s = m_settings;
 

@@ -75,6 +75,18 @@ struct EdgeOverlaySettings {
     float width{1.0F};
 };
 
+// Stage 9.8.d — user-facing render-mode selector. Rasterised (default)
+// stays bit-compatible with the pre-Stage-9 classical renderer; HybridRt
+// routes sun + indoor-fill + AO through the RT composites (gated on
+// `Device::HasRayTracing()` — callers disable the radio when unavailable).
+// `PathTraced` is a 9.9 hook; the panel shows the option disabled for
+// now so the UI shape doesn't need to change when 9.9 lands.
+enum class RenderMode {
+    Rasterised,
+    HybridRt,
+    PathTraced,
+};
+
 struct RenderQualitySettings {
     // RP.16.4.b — three-point `lighting` replaced by sun-driven scene. The
     // panel's Sun widgets (site/date/time) are wired in RP.16.6; 16.7 loads
@@ -84,6 +96,16 @@ struct RenderQualitySettings {
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     SsaoSettings ssao{};              // RP.20 — XeGTAO tuning knobs
     EdgeOverlaySettings edges{};      // RP.21 — feature-edge overlay
+
+    // Stage 9.8.d — render-mode selector. Default `Rasterised` keeps the
+    // out-of-the-box experience bit-compatible with the pre-Stage-9 path.
+    RenderMode mode{RenderMode::Rasterised};
+
+    // Stage 9.8.d — set by main.cpp from `Device::HasRayTracing()` so the
+    // panel can grey out the Hybrid RT radio when the GPU doesn't advertise
+    // RT extensions. The panel does not know about `Device`; main flips
+    // this once at startup.
+    bool rayTracingAvailable{false};
 
     // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
     // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +

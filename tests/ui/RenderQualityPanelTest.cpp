@@ -139,6 +139,21 @@ TEST(RenderQualityPanelTest, SmaaQualityPresetsMapToIryokuSearchSteps) {
     EXPECT_EQ(bimeup::ui::MaxSearchStepsDiag(bimeup::ui::SmaaQuality::High), 8);
 }
 
+// Stage 9.8.d — render-mode selector pinned to Rasterised by default so
+// every launch is bit-compatible with the pre-Stage-9 classical renderer.
+// Hybrid RT becomes selectable once `rayTracingAvailable` is flipped by
+// main.cpp after the Device probe — the panel itself does not know about
+// the GPU, so the flag is the only coupling point.
+TEST(RenderQualityPanelTest, DefaultRenderModeIsRasterised) {
+    RenderQualityPanel panel;
+    EXPECT_EQ(panel.GetSettings().mode, bimeup::ui::RenderMode::Rasterised);
+}
+
+TEST(RenderQualityPanelTest, DefaultRayTracingAvailabilityIsFalse) {
+    RenderQualityPanel panel;
+    EXPECT_FALSE(panel.GetSettings().rayTracingAvailable);
+}
+
 TEST(RenderQualityPanelTest, MutableSettingsAllowsDateTimeEdits) {
     RenderQualityPanel panel;
     auto& s = panel.MutableSettings();
