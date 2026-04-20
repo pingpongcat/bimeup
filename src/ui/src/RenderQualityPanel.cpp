@@ -98,6 +98,19 @@ void RenderQualityPanel::OnDraw() {
         ImGui::SliderFloat("Shadow power", &ssao.shadowPower, 0.5F, 3.0F, "%.2f");
     }
 
+    if (ImGui::CollapsingHeader("Edges")) {
+        auto& edges = m_settings.edges;
+        ImGui::Checkbox("Enabled", &edges.enabled);
+        ImGui::BeginDisabled(!edges.enabled);
+        ImGui::ColorEdit3("Color", &edges.color.x);
+        ImGui::SliderFloat("Opacity", &edges.opacity, 0.0F, 1.0F, "%.2f");
+        // Width > 1.0 requires the device's `wideLines` feature; main.cpp
+        // clamps the pushed value to 1.0 when unavailable. Slider range
+        // stays [1, 4] so users see the intended max even on older GPUs.
+        ImGui::SliderFloat("Width (px)", &edges.width, 1.0F, 4.0F, "%.1f");
+        ImGui::EndDisabled();
+    }
+
     if (ImGui::CollapsingHeader("SMAA")) {
         auto& smaa = m_settings.smaa;
         ImGui::Checkbox("Enabled", &smaa.enabled);

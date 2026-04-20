@@ -33,8 +33,12 @@ struct PipelineConfig {
     bool smoothLines = false;
     // RP.17.7 — line width for line-topology pipelines. Values > 1.0 require
     // `VkPhysicalDeviceFeatures.wideLines` (see `Device::HasWideLines`);
-    // ignored by triangle-topology pipelines.
+    // ignored by triangle-topology pipelines. When `dynamicLineWidth` is
+    // true (RP.21 — line width exposed as a panel slider), this field is the
+    // initial value and callers must emit `vkCmdSetLineWidth(cmd, w)` after
+    // binding.
     float lineWidth = 1.0F;
+    bool dynamicLineWidth = false;
     bool alphaBlendEnable = false;
     // RP.10c — when true, attachment 0's blend state is configured as
     // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =

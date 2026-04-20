@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/vec3.hpp>
+
 #include <renderer/Lighting.h>
 #include <ui/Panel.h>
 
@@ -60,6 +62,19 @@ struct SsaoSettings {
     float shadowPower{1.5F};   // exponent on the final AO term
 };
 
+// RP.21 — feature-edge overlay runtime knobs. `enabled` defaults on (pre-
+// RP.21 defaulted off with a measurement-mode auto-enable hack — both
+// retired here). `color` + `opacity` feed `edge_overlay.frag`'s push
+// constant; `width` drives `vkCmdSetLineWidth` via the overlay pipeline's
+// `VK_DYNAMIC_STATE_LINE_WIDTH`. Width > 1.0 requires
+// `Device::HasWideLines()`; callers clamp to 1.0 on devices that lack it.
+struct EdgeOverlaySettings {
+    bool enabled{true};
+    glm::vec3 color{0.25F, 0.25F, 0.25F};
+    float opacity{0.55F};
+    float width{1.0F};
+};
+
 struct RenderQualitySettings {
     // RP.16.4.b — three-point `lighting` replaced by sun-driven scene. The
     // panel's Sun widgets (site/date/time) are wired in RP.16.6; 16.7 loads
@@ -68,6 +83,7 @@ struct RenderQualitySettings {
 
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     SsaoSettings ssao{};              // RP.20 — XeGTAO tuning knobs
+    EdgeOverlaySettings edges{};      // RP.21 — feature-edge overlay
 
     // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
     // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +

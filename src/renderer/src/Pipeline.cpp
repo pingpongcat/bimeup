@@ -4,6 +4,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <vector>
 
 namespace bimeup::renderer {
 
@@ -182,10 +183,13 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     colorBlending.pAttachments =
         config.colorAttachmentCount == 0 ? nullptr : blendAttachments.data();
 
-    std::array<VkDynamicState, 2> dynamicStates = {
+    std::vector<VkDynamicState> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
     };
+    if (config.dynamicLineWidth) {
+        dynamicStates.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+    }
 
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;

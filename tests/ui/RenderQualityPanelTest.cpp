@@ -94,6 +94,26 @@ TEST(RenderQualityPanelTest, DefaultSmaaQualityIsHigh) {
     EXPECT_EQ(panel.GetSettings().smaa.quality, bimeup::ui::SmaaQuality::High);
 }
 
+// RP.21 — edges default ON now that the overlay has per-setting knobs. The
+// pre-RP.21 default was off + a measurement-mode auto-enable hack; both are
+// retired. Colour/opacity/width defaults match the old hardcoded `kEdgeColor`
+// literal so the out-of-the-box look is unchanged except that edges now show
+// immediately at startup.
+TEST(RenderQualityPanelTest, DefaultEdgesEnabled) {
+    RenderQualityPanel panel;
+    EXPECT_TRUE(panel.GetSettings().edges.enabled);
+}
+
+TEST(RenderQualityPanelTest, DefaultEdgeStyleMatchesPreRp21Literal) {
+    RenderQualityPanel panel;
+    const auto& edges = panel.GetSettings().edges;
+    EXPECT_FLOAT_EQ(edges.color.r, 0.25F);
+    EXPECT_FLOAT_EQ(edges.color.g, 0.25F);
+    EXPECT_FLOAT_EQ(edges.color.b, 0.25F);
+    EXPECT_FLOAT_EQ(edges.opacity, 0.55F);
+    EXPECT_FLOAT_EQ(edges.width, 1.0F);
+}
+
 // RP.20 — XeGTAO knobs pin the architectural defaults chosen at RP.12d /
 // RP.12e. Shifting any of these changes every rendered frame; locking them
 // here means a future slider tweak has to announce itself via a failing test.

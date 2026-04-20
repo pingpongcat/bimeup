@@ -55,6 +55,11 @@ EdgeOverlayPipeline::EdgeOverlayPipeline(const Device& device,
     config.alphaBlendEnable = true;
     config.smoothLines = smoothLines;
     config.lineWidth = lineWidth;
+    // RP.21 — width is a panel slider; caller emits `vkCmdSetLineWidth` after
+    // `Bind()` so we don't rebuild the pipeline when the user drags. Initial
+    // `lineWidth` above is what the pipeline starts with before the first
+    // SetLineWidth call.
+    config.dynamicLineWidth = true;
     config.colorAttachmentCount = colorAttachmentCount;
     config.disableSecondaryColorWrites = disableSecondaryColorWrites;
     config.vertexBindings = {binding};

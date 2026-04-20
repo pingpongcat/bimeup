@@ -580,14 +580,11 @@ int main(int argc, char* argv[]) {
             /*lineWidth=*/device.HasWideLines() ? 2.0F : 1.0F);
     };
     buildEdgeOverlayPipeline();
-    // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"
-    // checkbox and `W` keyboard shortcut mutate `edgesEnabled`. Off by
-    // default; Measure-mode auto-enables unless the user has touched the
-    // toggle, tracked by `edgesUserOverride` below.
-    bool edgesEnabled = false;
-    bool edgesUserOverride = false;
-    bool edgesAutoFromMeasure = false;
-    const glm::vec4 kEdgeColor{0.25F, 0.25F, 0.25F, 0.55F};
+    // RP.21 — edge-overlay enable/colour/opacity/width live on the render-
+    // quality panel (`panel.edges`). Toolbar "Edges" checkbox and `W`
+    // keyboard shortcut mutate `panel.MutableSettings().edges.enabled`; the
+    // panel is the single source of truth. No more measurement-mode auto-
+    // enable hack — edges ship default-on.
 
     // Shadow pipeline — depth-only, no color attachments, light-space × model push constant.
     VkPushConstantRange shadowPushRange{};
@@ -980,6 +977,12 @@ int main(int argc, char* argv[]) {
 
     bool fitToViewRequested = false;
 
+    // RP.21 — forward-declared so the input-key lambda below can flip
+    // `panel.edges.enabled` on W. The actual panel object is constructed a
+    // few blocks down; the raw pointer is assigned once and outlives every
+    // lambda registered against it.
+    bimeup::ui::RenderQualityPanel* renderQualityPanel = nullptr;
+
     input.OnKey([&](bimeup::platform::Key key, bool pressed) {
         if (key == bimeup::platform::Key::Escape && pressed) {
             if (firstPersonActive) {
@@ -995,10 +998,9 @@ int main(int argc, char* argv[]) {
             return;
         }
         if (key == bimeup::platform::Key::W && pressed) {
-            edgesEnabled = !edgesEnabled;
-            edgesUserOverride = true;
-            edgesAutoFromMeasure = false;
-            LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
+            bool& on = renderQualityPanel->MutableSettings().edges.enabled;
+            on = !on;
+            LOG_INFO("Edges: {}", on ? "on" : "off");
         }
         if (key == bimeup::platform::Key::Numpad5 && pressed) {
             camera.ToggleProjection();
@@ -1073,7 +1075,7 @@ int main(int argc, char* argv[]) {
     auto* propertyPanel = propertyOwned.get();
     auto* overlay = overlayOwned.get();
     auto* measurementsPanel = measurementsOwned.get();
-    auto* renderQualityPanel = renderQualityOwned.get();
+    renderQualityPanel = renderQualityOwned.get();
 
     // Application-level default rendering settings: system local date/time
     // as the sun position, artificial interior lights on, shadows on at
@@ -1141,7 +1143,7 @@ int main(int argc, char* argv[]) {
     }
 
     hierarchyPanel->SetEventBus(&eventBus);
-    toolbar->SetEdgesEnabled(edgesEnabled);
+    toolbar->SetEdgesEnabled(renderQualityPanel->GetSettings().edges.enabled);
 
     hierarchyPanel->SetRoot(&hierarchy->GetRoot());
 
@@ -1236,10 +1238,8 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(firstPersonExitOwned));
 
     toolbar->SetOnEdgesChanged([&](bool enabled) {
-        edgesEnabled = enabled;
-        edgesUserOverride = true;
-        edgesAutoFromMeasure = false;
-        LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
+        renderQualityPanel->MutableSettings().edges.enabled = enabled;
+        LOG_INFO("Edges: {}", enabled ? "on" : "off");
     });
     toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
     toolbar->SetOnFrameSelected([&] {
@@ -1266,18 +1266,9 @@ int main(int argc, char* argv[]) {
         measureTool.Cancel();  // drop in-progress; keep saved history
         measureSnapPoint.reset();
         measureSnapIsVertex = false;
-        // Auto-enable edges while in Measure mode so users see snap
-        // candidates clearly — unless they've manually set the toggle
-        // (edgesUserOverride), in which case respect their choice.
-        if (active) {
-            if (!edgesUserOverride && !edgesEnabled) {
-                edgesEnabled = true;
-                edgesAutoFromMeasure = true;
-            }
-        } else if (edgesAutoFromMeasure) {
-            edgesEnabled = false;
-            edgesAutoFromMeasure = false;
-        }
+        // RP.21 — measurement-mode auto-enable retired; edges ship
+        // default-on, so the snap-candidate-visibility problem this block
+        // worked around no longer exists.
         LOG_INFO("Measure mode: {}", active ? "on" : "off");
     });
     toolbar->SetOnMeasurementsVisibilityChanged([&](bool visible) {
@@ -1532,7 +1523,7 @@ int main(int argc, char* argv[]) {
             overlay->SetSnapCandidate(measureModeActive ? measureSnapPoint : std::nullopt,
                                       measureSnapIsVertex);
         }
-        toolbar->SetEdgesEnabled(edgesEnabled);
+        toolbar->SetEdgesEnabled(renderQualityPanel->GetSettings().edges.enabled);
         {
             // Reflect whether any measurement is currently visible. An empty
             // list counts as "visible" (default-on) so the checkbox stays
@@ -1798,7 +1789,16 @@ int main(int argc, char* argv[]) {
                 sectionEdgeGeometry.Rebuild(sceneResult->scene, sceneResult->meshes,
                                             clipPlaneManager);
                 if (!sectionEdgeGeometry.IsEmpty()) {
+                    // RP.21 — route section outlines through the same panel
+                    // settings as the feature-edge overlay. Width clamps to
+                    // 1.0 on devices without `wideLines`; Vulkan rejects any
+                    // other value otherwise.
+                    const auto& edgeSettings = renderQualityPanel->GetSettings().edges;
+                    const float edgeWidth =
+                        device.HasWideLines() ? edgeSettings.width : 1.0F;
+                    const glm::vec4 edgeColor(edgeSettings.color, edgeSettings.opacity);
                     edgeOverlayPipeline->Bind(cmd);
+                    vkCmdSetLineWidth(cmd, edgeWidth);
                     descriptorSet.Bind(cmd, edgeOverlayPipeline->GetLayout());
                     const glm::mat4 identity(1.0F);
                     vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
@@ -1806,7 +1806,7 @@ int main(int argc, char* argv[]) {
                                        sizeof(glm::mat4), &identity);
                     vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
                                        VK_SHADER_STAGE_FRAGMENT_BIT, 64,
-                                       sizeof(glm::vec4), &kEdgeColor);
+                                       sizeof(glm::vec4), &edgeColor);
                     VkBuffer vb = sectionEdgeGeometry.GetVertexBuffer();
                     VkDeviceSize offset = 0;
                     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
@@ -1815,18 +1815,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // RP.17.4 — feature-edge overlay. Drawn after opaque + section caps and
-        // before the transparent pass so crisp silhouettes sit on top of solid
-        // surfaces but never in front of alpha-blended glass. Skipped in
-        // section-only mode (no opaque surface to overlay) and when the user
-        // toggles edges off.
-        if (edgesEnabled && !sectionOnly && meshBuffer.HasEdges()) {
+        // RP.17.4 / RP.21 — feature-edge overlay. Drawn after opaque + section
+        // caps and before the transparent pass so crisp silhouettes sit on
+        // top of solid surfaces but never in front of alpha-blended glass.
+        // Skipped in section-only mode (no opaque surface to overlay) and
+        // when the user toggles edges off via the panel / toolbar / `W` key.
+        const auto& edgeSettings = renderQualityPanel->GetSettings().edges;
+        if (edgeSettings.enabled && !sectionOnly && meshBuffer.HasEdges()) {
+            const float edgeWidth =
+                device.HasWideLines() ? edgeSettings.width : 1.0F;
+            const glm::vec4 edgeColor(edgeSettings.color, edgeSettings.opacity);
             edgeOverlayPipeline->Bind(cmd);
+            vkCmdSetLineWidth(cmd, edgeWidth);
             descriptorSet.Bind(cmd, edgeOverlayPipeline->GetLayout());
             meshBuffer.BindEdges(cmd);
             vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
                                VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(glm::vec4),
-                               &kEdgeColor);
+                               &edgeColor);
             for (const auto& [handle, transform] : drawCalls) {
                 vkCmdPushConstants(cmd, edgeOverlayPipeline->GetLayout(),
                                    VK_SHADER_STAGE_VERTEX_BIT, 0,

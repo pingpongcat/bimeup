@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage RP — Render Polish (reopened 2026-04-20 for RP.18.6 + RP.18.7 + RP.19)
-## Current Task: RP.20 XeGTAO panel knobs + RP.21 edge overlay always-on + settings — next. RP.17.6 edge-snap still deferred; Stage 9 starts after those close.
+## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
+## Current Task: 9.1 RT-capability probe + BLAS per mesh — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -247,7 +247,9 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
 
 - [x] RP.20 XeGTAO panel knobs — `SsaoSettings { radius, falloff, intensity, shadowPower }` with architectural defaults (0.35 m / 0.6 / 0.5 / 1.5) wired through `RenderLoop::SetSsaoParams` into `ssao_xegtao.comp`'s push constants. Panel gains an "Ambient occlusion" header with four sliders. Defaults pinned in `RenderQualityPanelTest`.
 
-- [ ] RP.21 Edge overlay settings + always-on default — `EdgeOverlaySettings { enabled=true, color, opacity, width }` replaces the hardcoded `kEdgeColor` literal + `edgesAutoFromMeasure` hack in `main.cpp`. Line-width slider requires `VK_DYNAMIC_STATE_LINE_WIDTH` (gated on `Device::HasWideLines()`). Toolbar + `W` keyboard shortcut still mutate `SmaaSettings::enabled`. The measurement-mode auto-enable path is retired — edges default on regardless of tool.
+- [x] RP.21 Edge overlay settings + always-on default — `EdgeOverlaySettings { enabled=true, color, opacity, width }` replaces the hardcoded `kEdgeColor` + `edgesAutoFromMeasure` hack in `main.cpp`. `VK_DYNAMIC_STATE_LINE_WIDTH` added to `EdgeOverlayPipeline`; `vkCmdSetLineWidth` emitted per draw (clamped to 1.0 on devices without `wideLines`). Measurement-mode auto-enable retired. Panel gains an "Edges" header with checkbox + color picker + opacity + width sliders; toolbar + `W` key + panel all share the same source of truth. Defaults pinned in `RenderQualityPanelTest`.
+
+Stage gate at end of Stage RP: full `ctest -j$(nproc) --output-on-failure` all passing ✓ (2026-04-20).
 
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.
