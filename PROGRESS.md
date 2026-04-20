@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
-## Current Task: 9.4 RT sun shadows (additive alongside shadow-map path) — next session. RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
+## Current Task: 9.4 RT sun shadows (additive alongside shadow-map path) — next session. Proposed split: **9.4.a** `shadow.{rgen,rmiss}` + `renderer::RtShadowPass` (visibility R8 image + descriptor set + RT pipeline via 9.3 + `Dispatch(cmd, tlas, depthView, view, proj, sunDir)`; unit test GTEST_SKIP on non-RT); **9.4.b** RenderLoop wire (BLAS/TLAS lifecycle gated on Hybrid RT mode + per-frame dispatch; visibility stays un-composited until 9.8). RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
