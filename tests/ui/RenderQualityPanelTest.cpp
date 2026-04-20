@@ -78,6 +78,35 @@ TEST(RenderQualityPanelTest, DefaultWindowTransmissionOn) {
     EXPECT_TRUE(panel.GetSettings().sun.shadow.windowTransmission);
 }
 
+// RP.19 — SMAA tuning knobs. Threshold controls the edge-detection gate in
+// `smaa_edge.frag`; 0.1 matches the iryoku/smaa reference "balanced" value and
+// is what RenderLoop pushed as a hardcoded literal pre-RP.19. Quality preset
+// drives `smaa_weights.frag`'s max-search-steps: HIGH = iryoku's HIGH preset
+// (16 / 8), which is what shipped before RP.19 — default stays HIGH so the
+// out-of-the-box image is bit-compatible.
+TEST(RenderQualityPanelTest, DefaultSmaaThresholdIsPointOne) {
+    RenderQualityPanel panel;
+    EXPECT_FLOAT_EQ(panel.GetSettings().smaa.threshold, 0.1F);
+}
+
+TEST(RenderQualityPanelTest, DefaultSmaaQualityIsHigh) {
+    RenderQualityPanel panel;
+    EXPECT_EQ(panel.GetSettings().smaa.quality, bimeup::ui::SmaaQuality::High);
+}
+
+TEST(RenderQualityPanelTest, SmaaQualityPresetsMapToIryokuSearchSteps) {
+    // LOW = iryoku LOW (4/2), MEDIUM = iryoku MEDIUM (8/4), HIGH = iryoku HIGH
+    // (16/8). These numbers feed `smaa_weights.frag`'s push constants; pinning
+    // them here means a future "let's try 12/6" tweak has to announce itself
+    // via a failing test rather than silently shifting the default render.
+    EXPECT_EQ(bimeup::ui::MaxSearchSteps(bimeup::ui::SmaaQuality::Low), 4);
+    EXPECT_EQ(bimeup::ui::MaxSearchSteps(bimeup::ui::SmaaQuality::Medium), 8);
+    EXPECT_EQ(bimeup::ui::MaxSearchSteps(bimeup::ui::SmaaQuality::High), 16);
+    EXPECT_EQ(bimeup::ui::MaxSearchStepsDiag(bimeup::ui::SmaaQuality::Low), 2);
+    EXPECT_EQ(bimeup::ui::MaxSearchStepsDiag(bimeup::ui::SmaaQuality::Medium), 4);
+    EXPECT_EQ(bimeup::ui::MaxSearchStepsDiag(bimeup::ui::SmaaQuality::High), 8);
+}
+
 TEST(RenderQualityPanelTest, MutableSettingsAllowsDateTimeEdits) {
     RenderQualityPanel panel;
     auto& s = panel.MutableSettings();

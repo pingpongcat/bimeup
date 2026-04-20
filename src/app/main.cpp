@@ -1626,7 +1626,9 @@ int main(int argc, char* argv[]) {
         // weights can't leak into the output.
         {
             const auto& smaaSettings = renderQualityPanel->GetSettings().smaa;
-            renderLoop.SetSmaaParams(smaaSettings.enabled);
+            renderLoop.SetSmaaParams(smaaSettings.enabled, smaaSettings.threshold,
+                                     bimeup::ui::MaxSearchSteps(smaaSettings.quality),
+                                     bimeup::ui::MaxSearchStepsDiag(smaaSettings.quality));
         }
 
         // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR

@@ -20,22 +20,26 @@ class Shader;
 /// pass (RP.11b.4).
 ///
 /// `smaa_weights.frag` is a port of `SMAABlendingWeightCalculationPS` in
-/// `external/smaa/SMAA.hlsl` — HIGH preset (MAX_SEARCH_STEPS=16,
-/// MAX_SEARCH_STEPS_DIAG=8, CORNER_ROUNDING=25). Diagonal + corner detection
-/// are enabled; both matter in BIM scenes for staircase artefacts on 45°
-/// edges (stairs, roofs) and T-junctions at wall intersections.
+/// `external/smaa/SMAA.hlsl`. RP.19 exposed the iryoku LOW/MEDIUM/HIGH preset
+/// knobs via push-constant ints (`maxSearchSteps`, `maxSearchStepsDiag`) —
+/// previously hard-coded to the HIGH preset (16 / 8). Diagonal + corner
+/// detection are always on; both matter in BIM scenes for staircase artefacts
+/// on 45° edges (stairs, roofs) and T-junctions at wall intersections.
 class SmaaWeightsPipeline {
 public:
     // Push-constant block mirrors the `push_constant` block in
     // `smaa_weights.frag`. Layout order puts `subsampleIndices` first so
     // the vec4 sits on its natural 16-byte boundary under std430 push-
-    // constant alignment; `rcpFrame` follows at offset 16. Total 24 bytes.
+    // constant alignment; `rcpFrame` follows at offset 16; the RP.19 quality
+    // ints pack at 24 + 28. Total 32 bytes.
     //
     // `subsampleIndices` is always (0,0,0,0) for SMAA 1x — kept in the
     // contract so this shader can be reused verbatim if SMAA T2x ever lands.
     struct PushConstants {
         glm::vec4 subsampleIndices;  // @ 0
         glm::vec2 rcpFrame;          // @ 16 — (1/width, 1/height)
+        int maxSearchSteps;          // @ 24 — iryoku preset: LOW=4, MED=8, HIGH=16
+        int maxSearchStepsDiag;      // @ 28 — iryoku preset: LOW=2, MED=4, HIGH=8
     };
 
     SmaaWeightsPipeline(const Device& device,

@@ -23,20 +23,23 @@ layout(set = 0, binding = 2) uniform sampler2D searchTex;
 layout(push_constant) uniform Push {
     // `subsampleIndices` first so the vec4 sits on its natural 16-byte
     // boundary (std430 push-constant alignment); `rcpFrame` follows at
-    // offset 16. Total 24 bytes — matches the Vulkan push-constant size
-    // asserted by the CPU contract tests.
+    // offset 16; RP.19 quality ints pack at 24 / 28. Total 32 bytes — the
+    // CPU contract tests pin this layout.
     //
     // `subsampleIndices` is always (0,0,0,0) for SMAA 1x; kept in the
     // contract so this shader can be reused verbatim if SMAA T2x ever lands.
-    vec4 subsampleIndices;  // @ 0
-    vec2 rcpFrame;          // @ 16 — (1/width, 1/height)
+    // `maxSearchSteps` / `maxSearchStepsDiag` were `const int` in the shader
+    // until RP.19 promoted them to runtime knobs so the panel can offer the
+    // iryoku LOW/MEDIUM/HIGH presets without per-preset pipeline variants.
+    vec4 subsampleIndices;     // @ 0
+    vec2 rcpFrame;             // @ 16 — (1/width, 1/height)
+    int maxSearchSteps;        // @ 24 — LOW=4, MED=8, HIGH=16
+    int maxSearchStepsDiag;    // @ 28 — LOW=2, MED=4, HIGH=8
 } pc;
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outWeights;
 
-const int   SMAA_MAX_SEARCH_STEPS        = 16;
-const int   SMAA_MAX_SEARCH_STEPS_DIAG   = 8;
 const float SMAA_CORNER_ROUNDING_NORM    = 0.25;
 const float SMAA_AREATEX_MAX_DISTANCE    = 16.0;
 const float SMAA_AREATEX_MAX_DISTANCE_DIAG = 20.0;
@@ -61,7 +64,7 @@ vec4 DecodeDiagBilinearAccess4(vec4 e) {
 vec2 SearchDiag1(vec2 texcoord, vec2 dir, out vec2 e) {
     vec4 coord = vec4(texcoord, -1.0, 1.0);
     vec3 t = vec3(pc.rcpFrame, 1.0);
-    while (coord.z < float(SMAA_MAX_SEARCH_STEPS_DIAG - 1) && coord.w > 0.9) {
+    while (coord.z < float(pc.maxSearchStepsDiag - 1) && coord.w > 0.9) {
         coord.xyz = t * vec3(dir, 1.0) + coord.xyz;
         e = textureLod(edgesTex, coord.xy, 0.0).rg;
         coord.w = dot(e, vec2(0.5));
@@ -73,7 +76,7 @@ vec2 SearchDiag2(vec2 texcoord, vec2 dir, out vec2 e) {
     vec4 coord = vec4(texcoord, -1.0, 1.0);
     coord.x += 0.25 * pc.rcpFrame.x;
     vec3 t = vec3(pc.rcpFrame, 1.0);
-    while (coord.z < float(SMAA_MAX_SEARCH_STEPS_DIAG - 1) && coord.w > 0.9) {
+    while (coord.z < float(pc.maxSearchStepsDiag - 1) && coord.w > 0.9) {
         coord.xyz = t * vec3(dir, 1.0) + coord.xyz;
         e = textureLod(edgesTex, coord.xy, 0.0).rg;
         e = DecodeDiagBilinearAccess2(e);
@@ -245,7 +248,7 @@ void main() {
     vec4 offset0 = vec4(-0.25, -0.125,  1.25, -0.125) * pc.rcpFrame.xyxy + texcoord.xyxy;
     vec4 offset1 = vec4(-0.125, -0.25, -0.125,  1.25) * pc.rcpFrame.xyxy + texcoord.xyxy;
     vec4 offset2 = vec4(-2.0, 2.0, -2.0, 2.0) * vec4(pc.rcpFrame.xx, pc.rcpFrame.yy) *
-                       float(SMAA_MAX_SEARCH_STEPS) +
+                       float(pc.maxSearchSteps) +
                    vec4(offset0.xz, offset1.yw);
 
     vec4 weights = vec4(0.0);

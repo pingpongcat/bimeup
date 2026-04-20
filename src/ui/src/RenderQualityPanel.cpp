@@ -93,6 +93,25 @@ void RenderQualityPanel::OnDraw() {
     if (ImGui::CollapsingHeader("SMAA")) {
         auto& smaa = m_settings.smaa;
         ImGui::Checkbox("Enabled", &smaa.enabled);
+        ImGui::BeginDisabled(!smaa.enabled);
+        ImGui::SliderFloat("Threshold", &smaa.threshold, 0.05F, 0.2F, "%.3f");
+        // RP.19 — quality selects iryoku's LOW/MEDIUM/HIGH max-search-steps
+        // preset. HIGH (16/8) is the pre-RP.19 default; LOW/MEDIUM trade edge
+        // travel for fill rate on long thin aliased runs.
+        static constexpr std::array<const char*, 3> kLabels{"Low", "Medium", "High"};
+        static constexpr std::array<SmaaQuality, 3> kValues{
+            SmaaQuality::Low, SmaaQuality::Medium, SmaaQuality::High};
+        ImGui::TextUnformatted("Quality");
+        ImGui::SameLine();
+        for (std::size_t i = 0; i < kValues.size(); ++i) {
+            if (ImGui::RadioButton(kLabels[i], smaa.quality == kValues[i])) {
+                smaa.quality = kValues[i];
+            }
+            if (i + 1 < kValues.size()) {
+                ImGui::SameLine();
+            }
+        }
+        ImGui::EndDisabled();
     }
 
     if (ImGui::CollapsingHeader("Shadows")) {

@@ -155,15 +155,19 @@ TEST_F(SmaaWeightsPipelineTest, DestructorCleansUp) {
     }
 }
 
-TEST(SmaaWeightsPipelinePushConstants, SizeIsTwentyFourBytes) {
-    // vec4 subsampleIndices (16) + vec2 rcpFrame (8) = 24 bytes. vec4 leads
-    // so the 16-byte alignment under std430 is satisfied naturally, no pad.
-    EXPECT_EQ(sizeof(SmaaWeightsPipeline::PushConstants), 24U);
+TEST(SmaaWeightsPipelinePushConstants, SizeIsThirtyTwoBytes) {
+    // RP.19 — grew from 24 B (vec4 + vec2) to 32 B with the two quality-
+    // preset ints (`maxSearchSteps`, `maxSearchStepsDiag`) that replaced the
+    // shader-side `const int SMAA_MAX_SEARCH_STEPS[_DIAG]`. vec4 still leads
+    // at offset 0, vec2 at 16; ints pack at 24 / 28 with no trailing pad.
+    EXPECT_EQ(sizeof(SmaaWeightsPipeline::PushConstants), 32U);
 }
 
 TEST(SmaaWeightsPipelinePushConstants, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(SmaaWeightsPipeline::PushConstants, subsampleIndices), 0U);
     EXPECT_EQ(offsetof(SmaaWeightsPipeline::PushConstants, rcpFrame), 16U);
+    EXPECT_EQ(offsetof(SmaaWeightsPipeline::PushConstants, maxSearchSteps), 24U);
+    EXPECT_EQ(offsetof(SmaaWeightsPipeline::PushConstants, maxSearchStepsDiag), 28U);
 }
 
 // Walks the SPIR-V OpDecorate stream and asserts sampled images are bound

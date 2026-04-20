@@ -133,13 +133,17 @@ public:
     /// been updated. Defaults are (identity, 0.1, 10000).
     void SetProjection(const glm::mat4& proj, float nearZ, float farZ);
 
-    /// RP.11c — SMAA 1x post-process enable. The blend draw is the only
-    /// path from the LDR intermediate to the swapchain, so it runs every
-    /// frame; when `enabled` is false the edge + weights passes are
-    /// skipped and the blend shader's push-constant gate short-circuits
-    /// to a passthrough via `smaa_blend.frag`'s early-return branch —
-    /// 3 draws → 1 draw and stale weights can't influence the output.
-    void SetSmaaParams(bool enabled);
+    /// RP.11c / RP.19 — SMAA 1x post-process settings. The blend draw is the
+    /// only path from the LDR intermediate to the swapchain, so it runs every
+    /// frame; when `enabled` is false the edge + weights passes are skipped
+    /// and the blend shader's push-constant gate short-circuits to a
+    /// passthrough via `smaa_blend.frag`'s early-return branch — 3 draws →
+    /// 1 draw and stale weights can't influence the output. `threshold` is
+    /// the luma gate in `smaa_edge.frag`; `maxSearchSteps` +
+    /// `maxSearchStepsDiag` drive `smaa_weights.frag`'s iryoku LOW/MED/HIGH
+    /// search budget (previously hardcoded at HIGH = 16 / 8).
+    void SetSmaaParams(bool enabled, float threshold, int maxSearchSteps,
+                       int maxSearchStepsDiag);
 
     /// Pre-ACES exposure multiplier applied to the composited HDR colour
     /// inside `tonemap.frag`. Default (from the push-constant ctor) is 1.0
@@ -404,6 +408,12 @@ private:
     VmaAllocation m_smaaSearchAllocation = VK_NULL_HANDLE;
 
     bool m_smaaEnabled = true;
+    // RP.19 — knobs pushed into `smaa_edge.frag` + `smaa_weights.frag` each
+    // frame. Defaults mirror the pre-RP.19 hardcoded values so a panel that
+    // never touches the sliders produces bit-compatible output.
+    float m_smaaThreshold = 0.1F;
+    int m_smaaMaxSearchSteps = 16;
+    int m_smaaMaxSearchStepsDiag = 8;
 
     // RP.13b — tonemap push-constant state fed into `tonemap.frag` each
     // frame. Now only holds `exposure`; `SetExposure` writes it and the

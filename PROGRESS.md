@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP — Render Polish (reopened 2026-04-20 for RP.18.6 + RP.18.7 + RP.19)
-## Current Task: RP.19 SMAA tuning panel — next session. RP.17.6 edge-snap still deferred; Stage 9 starts after RP.19 closes.
+## Current Task: RP.20 XeGTAO panel knobs + RP.21 edge overlay always-on + settings — next. RP.17.6 edge-snap still deferred; Stage 9 starts after those close.
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -243,7 +243,7 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.18.6 Neutralise glass transmission tint (push `vec3(1 - alpha)` instead of `surfaceColor.rgb * (1 - alpha)`; architectural glass is near-neutral in transmission, blue was bleeding onto sunlit floors).
   - [x] RP.18.7 Gate glass tint on light-space depth (store nearest-glass Z in `transmit.a` + `sunColor * visibility * (glassAhead ? tint : 1)`; walls between a window and an unrelated room now correctly block the tint).
 
-- [ ] RP.19 SMAA tuning knobs in `RenderQualityPanel`. Today the panel only exposes `enabled`. Wire threshold (edge-detection, ~0.05–0.2) + quality preset (LOW/MEDIUM/HIGH affecting max-search-steps) through `SmaaSettings` → `SmaaEdgePipeline`/`SmaaWeightsPipeline` push constants → panel sliders. Pin defaults in a `RenderQualityPanelTest` case.
+- [x] RP.19 SMAA tuning knobs in `RenderQualityPanel` — threshold slider (0.05–0.2) + LOW/MEDIUM/HIGH quality radio wired through `SmaaSettings` → `SmaaEdgePipeline`/`SmaaWeightsPipeline` push constants. `smaa_weights.frag`'s `SMAA_MAX_SEARCH_STEPS[_DIAG]` promoted from const to push-constant ints. Defaults pinned in `RenderQualityPanelTest`.
 
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.

@@ -330,7 +330,7 @@ TEST_F(RenderLoopTest, SmaaAppliedDuringFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetSmaaParams(/*enabled=*/true);
+    m_renderLoop->SetSmaaParams(/*enabled=*/true, 0.1F, 16, 8);
     // Full frame under Vulkan validation with SMAA enabled — exercises the
     // 3-pass chain (edge → weights → blend), the shared LUT bindings in
     // `smaa_weights.frag` (AreaTex + SearchTex), and the descriptor
@@ -344,7 +344,7 @@ TEST_F(RenderLoopTest, SmaaDisabledStillCyclesFrame) {
     m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
     glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
     m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetSmaaParams(/*enabled=*/false);
+    m_renderLoop->SetSmaaParams(/*enabled=*/false, 0.1F, 16, 8);
     // Disabled path — edge + weights passes are skipped but the blend pass
     // still runs in the present pass as a passthrough (push-constant
     // `enabled` flag short-circuits before the weights sample in

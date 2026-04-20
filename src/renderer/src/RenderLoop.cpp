@@ -344,8 +344,12 @@ void RenderLoop::SetProjection(const glm::mat4& proj, float nearZ, float farZ) {
     m_farZ = farZ;
 }
 
-void RenderLoop::SetSmaaParams(bool enabled) {
+void RenderLoop::SetSmaaParams(bool enabled, float threshold, int maxSearchSteps,
+                               int maxSearchStepsDiag) {
     m_smaaEnabled = enabled;
+    m_smaaThreshold = threshold;
+    m_smaaMaxSearchSteps = maxSearchSteps;
+    m_smaaMaxSearchStepsDiag = maxSearchStepsDiag;
 }
 
 void RenderLoop::SetExposure(float exposure) {
@@ -1731,7 +1735,7 @@ void RenderLoop::RunSmaaEdgeAndWeights(VkCommandBuffer cmd) {
     SmaaEdgePipeline::PushConstants edgePush{};
     edgePush.rcpFrame = glm::vec2(1.0F / static_cast<float>(extent.width),
                                   1.0F / static_cast<float>(extent.height));
-    edgePush.threshold = 0.1F;
+    edgePush.threshold = m_smaaThreshold;
     edgePush.localContrastFactor = 2.0F;
     runPass(m_smaaEdgesFramebuffers[i], m_smaaEdgeDescriptorSets[i],
             m_smaaEdgePipeline->GetPipeline(), m_smaaEdgePipeline->GetLayout(), &edgePush,
@@ -1740,6 +1744,8 @@ void RenderLoop::RunSmaaEdgeAndWeights(VkCommandBuffer cmd) {
     SmaaWeightsPipeline::PushConstants weightsPush{};
     weightsPush.subsampleIndices = glm::vec4(0.0F);
     weightsPush.rcpFrame = edgePush.rcpFrame;
+    weightsPush.maxSearchSteps = m_smaaMaxSearchSteps;
+    weightsPush.maxSearchStepsDiag = m_smaaMaxSearchStepsDiag;
     runPass(m_smaaWeightsFramebuffers[i], m_smaaWeightsDescriptorSets[i],
             m_smaaWeightsPipeline->GetPipeline(), m_smaaWeightsPipeline->GetLayout(),
             &weightsPush, sizeof(weightsPush));
