@@ -211,19 +211,6 @@ TEST_F(PipelineTest, CreateWithVertexInput) {
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
 }
 
-TEST_F(PipelineTest, CreateWithWireframeMode) {
-    Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
-    Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());
-
-    PipelineConfig config{};
-    config.renderPass = m_renderPass;
-    config.polygonMode = VK_POLYGON_MODE_LINE;
-
-    m_pipeline = std::make_unique<Pipeline>(*m_device, vertShader, fragShader, config);
-
-    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
-}
-
 TEST_F(PipelineTest, NullRenderPassThrows) {
     Shader vertShader(*m_device, ShaderStage::Vertex, MakeMinimalVertexSpirv());
     Shader fragShader(*m_device, ShaderStage::Fragment, MakeMinimalFragmentSpirv());

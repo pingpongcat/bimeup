@@ -157,7 +157,6 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     }
 
     VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.fillModeNonSolid = VK_TRUE;  // wireframe render mode
     // Required because MRT-targeted pipelines (transparent, section-fill,
     // disk-marker) use different blend states per attachment — colour
     // attachment[0] blends, secondary normal/stencil attachments don't —

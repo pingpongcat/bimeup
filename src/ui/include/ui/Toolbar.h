@@ -1,6 +1,5 @@
 #pragma once
 
-#include <renderer/RenderMode.h>
 #include <ui/Panel.h>
 
 #include <functional>
@@ -10,7 +9,7 @@ namespace bimeup::ui {
 class Toolbar : public Panel {
 public:
     using OpenFileCallback = std::function<void()>;
-    using RenderModeCallback = std::function<void(renderer::RenderMode)>;
+    using EdgesCallback = std::function<void(bool enabled)>;
     using FitToViewCallback = std::function<void()>;
     using FrameSelectedCallback = std::function<void()>;
     using MeasureModeCallback = std::function<void(bool active)>;
@@ -23,15 +22,15 @@ public:
     void OnDraw() override;
 
     void SetOnOpenFile(OpenFileCallback callback);
-    void SetOnRenderModeChanged(RenderModeCallback callback);
+    void SetOnEdgesChanged(EdgesCallback callback);
     void SetOnFitToView(FitToViewCallback callback);
     void SetOnFrameSelected(FrameSelectedCallback callback);
     void SetOnMeasureModeChanged(MeasureModeCallback callback);
     void SetOnPointOfViewChanged(PointOfViewCallback callback);
     void SetOnMeasurementsVisibilityChanged(MeasurementsVisibleCallback callback);
 
-    [[nodiscard]] renderer::RenderMode GetRenderMode() const;
-    void SetRenderMode(renderer::RenderMode mode);
+    [[nodiscard]] bool AreEdgesEnabled() const { return m_edgesEnabled; }
+    void SetEdgesEnabled(bool enabled) { m_edgesEnabled = enabled; }
 
     [[nodiscard]] bool IsMeasureModeActive() const { return m_measureModeActive; }
     [[nodiscard]] bool IsPointOfViewActive() const { return m_pointOfViewActive; }
@@ -39,7 +38,7 @@ public:
     void SetMeasurementsVisible(bool visible) { m_measurementsVisible = visible; }
 
     void TriggerOpenFile();
-    void TriggerRenderMode(renderer::RenderMode mode);
+    void TriggerEdges(bool enabled);
     void TriggerFitToView();
     void TriggerFrameSelected();
     void TriggerMeasureMode(bool active);
@@ -47,12 +46,12 @@ public:
     void TriggerMeasurementsVisible(bool visible);
 
 private:
-    renderer::RenderMode m_renderMode = renderer::RenderMode::Shaded;
+    bool m_edgesEnabled = true;
     bool m_measureModeActive = false;
     bool m_pointOfViewActive = false;
     bool m_measurementsVisible = true;
     OpenFileCallback m_onOpenFile;
-    RenderModeCallback m_onRenderModeChanged;
+    EdgesCallback m_onEdgesChanged;
     FitToViewCallback m_onFitToView;
     FrameSelectedCallback m_onFrameSelected;
     MeasureModeCallback m_onMeasureModeChanged;

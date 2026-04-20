@@ -12,8 +12,8 @@ void Toolbar::SetOnOpenFile(OpenFileCallback callback) {
     m_onOpenFile = std::move(callback);
 }
 
-void Toolbar::SetOnRenderModeChanged(RenderModeCallback callback) {
-    m_onRenderModeChanged = std::move(callback);
+void Toolbar::SetOnEdgesChanged(EdgesCallback callback) {
+    m_onEdgesChanged = std::move(callback);
 }
 
 void Toolbar::SetOnFitToView(FitToViewCallback callback) {
@@ -37,27 +37,19 @@ void Toolbar::SetOnMeasurementsVisibilityChanged(
     m_onMeasurementsVisibilityChanged = std::move(callback);
 }
 
-renderer::RenderMode Toolbar::GetRenderMode() const {
-    return m_renderMode;
-}
-
-void Toolbar::SetRenderMode(renderer::RenderMode mode) {
-    m_renderMode = mode;
-}
-
 void Toolbar::TriggerOpenFile() {
     if (m_onOpenFile) {
         m_onOpenFile();
     }
 }
 
-void Toolbar::TriggerRenderMode(renderer::RenderMode mode) {
-    if (mode == m_renderMode) {
+void Toolbar::TriggerEdges(bool enabled) {
+    if (enabled == m_edgesEnabled) {
         return;
     }
-    m_renderMode = mode;
-    if (m_onRenderModeChanged) {
-        m_onRenderModeChanged(mode);
+    m_edgesEnabled = enabled;
+    if (m_onEdgesChanged) {
+        m_onEdgesChanged(enabled);
     }
 }
 
@@ -122,14 +114,11 @@ void Toolbar::OnDraw() {
         ImGui::Separator();
         ImGui::SameLine();
 
-        const bool shaded = m_renderMode == renderer::RenderMode::Shaded;
-        if (ImGui::RadioButton("Shaded", shaded)) {
-            TriggerRenderMode(renderer::RenderMode::Shaded);
-        }
+        ImGui::TextUnformatted("Shaded");
         ImGui::SameLine();
-        const bool wireframe = m_renderMode == renderer::RenderMode::Wireframe;
-        if (ImGui::RadioButton("Wireframe", wireframe)) {
-            TriggerRenderMode(renderer::RenderMode::Wireframe);
+        bool edges = m_edgesEnabled;
+        if (ImGui::Checkbox("Edges", &edges)) {
+            TriggerEdges(edges);
         }
 
         ImGui::SameLine();

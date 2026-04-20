@@ -11,7 +11,6 @@ add_executable(renderer_tests
     BasicShaderTest.cpp
     CubeRenderTest.cpp
     MeshBufferTest.cpp
-    RenderModeTest.cpp
     HighlightTest.cpp
     LightingTest.cpp
     ShadowPassTest.cpp
@@ -53,7 +52,7 @@ set(_renderer_test_env
 # tests show up in `ctest -R`. Suite list mirrors `BIMEUP_RENDERER_CPU_FIXTURES`
 # below in negated form so any new GPU suite is automatically picked up there.
 set(_renderer_cpu_filter
-    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:RenderModeTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
+    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
 
 include(GoogleTest)
 
@@ -82,7 +81,6 @@ set(_renderer_gpu_fixtures
     BasicShaderTest
     CubeRenderTest
     MeshBufferTest
-    RenderModePipelineTest
     ShadowMapTest
     SectionFillPipelineTest
     EdgeOverlayPipelineTest

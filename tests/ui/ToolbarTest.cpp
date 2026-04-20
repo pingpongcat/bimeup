@@ -1,11 +1,9 @@
 #include <gtest/gtest.h>
 
-#include <renderer/RenderMode.h>
 #include <ui/Toolbar.h>
 
 namespace {
 
-using bimeup::renderer::RenderMode;
 using bimeup::ui::Toolbar;
 
 TEST(ToolbarTest, HasPanelName) {
@@ -13,15 +11,24 @@ TEST(ToolbarTest, HasPanelName) {
     EXPECT_STREQ(toolbar.GetName(), "Toolbar");
 }
 
-TEST(ToolbarTest, DefaultRenderModeIsShaded) {
+TEST(ToolbarTest, EdgesDefaultsOn) {
     Toolbar toolbar;
-    EXPECT_EQ(toolbar.GetRenderMode(), RenderMode::Shaded);
+    EXPECT_TRUE(toolbar.AreEdgesEnabled());
 }
 
-TEST(ToolbarTest, SetRenderModeUpdatesState) {
+TEST(ToolbarTest, SetEdgesEnabledUpdatesState) {
     Toolbar toolbar;
-    toolbar.SetRenderMode(RenderMode::Wireframe);
-    EXPECT_EQ(toolbar.GetRenderMode(), RenderMode::Wireframe);
+    toolbar.SetEdgesEnabled(false);
+    EXPECT_FALSE(toolbar.AreEdgesEnabled());
+}
+
+TEST(ToolbarTest, SetEdgesEnabledDoesNotFireCallback) {
+    Toolbar toolbar;
+    int calls = 0;
+    toolbar.SetOnEdgesChanged([&](bool) { ++calls; });
+    toolbar.SetEdgesEnabled(false);  // external sync — no callback
+    EXPECT_FALSE(toolbar.AreEdgesEnabled());
+    EXPECT_EQ(calls, 0);
 }
 
 TEST(ToolbarTest, TriggerOpenFileInvokesCallback) {
@@ -39,27 +46,32 @@ TEST(ToolbarTest, TriggerOpenFileNoCallbackIsNoop) {
     SUCCEED();
 }
 
-TEST(ToolbarTest, TriggerRenderModeUpdatesStateAndInvokesCallback) {
+TEST(ToolbarTest, TriggerEdgesUpdatesStateAndInvokesCallback) {
     Toolbar toolbar;
-    RenderMode received = RenderMode::Shaded;
     int calls = 0;
-    toolbar.SetOnRenderModeChanged([&](RenderMode mode) {
-        received = mode;
+    bool received = true;
+    toolbar.SetOnEdgesChanged([&](bool enabled) {
+        received = enabled;
         ++calls;
     });
 
-    toolbar.TriggerRenderMode(RenderMode::Wireframe);
-    EXPECT_EQ(toolbar.GetRenderMode(), RenderMode::Wireframe);
-    EXPECT_EQ(received, RenderMode::Wireframe);
+    toolbar.TriggerEdges(false);
+    EXPECT_FALSE(toolbar.AreEdgesEnabled());
+    EXPECT_FALSE(received);
     EXPECT_EQ(calls, 1);
+
+    toolbar.TriggerEdges(true);
+    EXPECT_TRUE(toolbar.AreEdgesEnabled());
+    EXPECT_TRUE(received);
+    EXPECT_EQ(calls, 2);
 }
 
-TEST(ToolbarTest, TriggerRenderModeWithSameModeDoesNotFireCallback) {
+TEST(ToolbarTest, TriggerEdgesWithSameStateDoesNotFireCallback) {
     Toolbar toolbar;
     int calls = 0;
-    toolbar.SetOnRenderModeChanged([&](RenderMode) { ++calls; });
+    toolbar.SetOnEdgesChanged([&](bool) { ++calls; });
 
-    toolbar.TriggerRenderMode(RenderMode::Shaded);  // same as default
+    toolbar.TriggerEdges(true);  // same as default
     EXPECT_EQ(calls, 0);
 }
 

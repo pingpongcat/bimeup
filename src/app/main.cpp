@@ -25,7 +25,6 @@
 #include <renderer/SunPosition.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
-#include <renderer/RenderMode.h>
 #include <renderer/SectionFillPipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/ShadowPass.h>
@@ -491,29 +490,21 @@ int main(int argc, char* argv[]) {
     // therefore have `colorAttachmentCount = 3`. `basic.frag` writes all
     // three outputs (colour, oct-packed normal, transparency bit — 0 for
     // opaque, 4 for transparent), so `disableSecondaryColorWrites` is OFF
-    // for the shaded/wireframe/transparent pipelines. Overlay pipelines
-    // (section-fill, disk-marker) still mask attachments 1 and 2 so they
-    // don't stomp the normal + stencil clear values.
+    // for the shaded/transparent pipelines. Overlay pipelines (section-fill,
+    // disk-marker) still mask attachments 1 and 2 so they don't stomp the
+    // normal + stencil clear values.
     auto buildPipelines = [&](std::unique_ptr<bimeup::renderer::Pipeline>& shaded,
-                              std::unique_ptr<bimeup::renderer::Pipeline>& wire,
                               std::unique_ptr<bimeup::renderer::Pipeline>& transparent) {
         pipelineConfig.renderPass = renderLoop.GetRenderPass();
         pipelineConfig.colorAttachmentCount = 3;
         pipelineConfig.disableSecondaryColorWrites = false;
-        pipelineConfig.polygonMode =
-            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
+        pipelineConfig.polygonMode = VK_POLYGON_MODE_FILL;
         pipelineConfig.alphaBlendEnable = false;
         pipelineConfig.depthWriteEnable = true;
         shaded = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
                                                               pipelineConfig);
-        pipelineConfig.polygonMode =
-            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Wireframe);
-        wire = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
-                                                            pipelineConfig);
         // Transparent pass: alpha blend on, depth test on, depth write off.
         // Drawn after opaque so blended fragments composite against the opaque layer.
-        pipelineConfig.polygonMode =
-            bimeup::renderer::GetPolygonMode(bimeup::renderer::RenderMode::Shaded);
         pipelineConfig.alphaBlendEnable = true;
         pipelineConfig.depthWriteEnable = false;
         transparent = std::make_unique<bimeup::renderer::Pipeline>(device, vertShader, fragShader,
@@ -523,9 +514,8 @@ int main(int argc, char* argv[]) {
     };
 
     std::unique_ptr<bimeup::renderer::Pipeline> shadedPipeline;
-    std::unique_ptr<bimeup::renderer::Pipeline> wireframePipeline;
     std::unique_ptr<bimeup::renderer::Pipeline> transparentPipeline;
-    buildPipelines(shadedPipeline, wireframePipeline, transparentPipeline);
+    buildPipelines(shadedPipeline, transparentPipeline);
 
     // Section-fill pipeline draws pre-triangulated cap geometry over the scene.
     // Reuses the main descriptor set layout — only binding 0 (camera UBO) is
@@ -569,8 +559,8 @@ int main(int argc, char* argv[]) {
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true);
     };
     buildEdgeOverlayPipeline();
-    // Edge-overlay runtime state — toggle + colour/alpha. Toolbar control and
-    // keyboard shortcut land in RP.17.5; for now, default on.
+    // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"
+    // checkbox and `W` keyboard shortcut mutate `edgesEnabled`.
     bool edgesEnabled = true;
     const glm::vec4 kEdgeColor{0.05F, 0.05F, 0.05F, 0.8F};
 
@@ -595,8 +585,6 @@ int main(int argc, char* argv[]) {
         shadowPipeline = std::make_unique<bimeup::renderer::Pipeline>(
             device, shadowVertShader, shadowFragShader, cfg);
     };
-
-    auto renderMode = bimeup::renderer::RenderMode::Shaded;
 
     // Camera — set orbit target and distance based on scene bounds
     bimeup::renderer::Camera camera;
@@ -952,17 +940,14 @@ int main(int argc, char* argv[]) {
             }
             return;
         }
-        // While walking, swallow every other key so W doesn't flip wireframe,
+        // While walking, swallow every other key so W doesn't toggle edges,
         // Home doesn't yank the camera, etc. Movement is polled separately.
         if (firstPersonActive) {
             return;
         }
         if (key == bimeup::platform::Key::W && pressed) {
-            renderMode = (renderMode == bimeup::renderer::RenderMode::Shaded)
-                             ? bimeup::renderer::RenderMode::Wireframe
-                             : bimeup::renderer::RenderMode::Shaded;
-            LOG_INFO("Render mode: {}",
-                     renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
+            edgesEnabled = !edgesEnabled;
+            LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
         }
         if (key == bimeup::platform::Key::Numpad5 && pressed) {
             camera.ToggleProjection();
@@ -1079,7 +1064,7 @@ int main(int argc, char* argv[]) {
     }
 
     hierarchyPanel->SetEventBus(&eventBus);
-    toolbar->SetRenderMode(renderMode);
+    toolbar->SetEdgesEnabled(edgesEnabled);
 
     hierarchyPanel->SetRoot(&hierarchy->GetRoot());
 
@@ -1173,10 +1158,9 @@ int main(int argc, char* argv[]) {
     uiManager.AddPanel(std::move(typeVisibilityOwned));
     uiManager.AddPanel(std::move(firstPersonExitOwned));
 
-    toolbar->SetOnRenderModeChanged([&](bimeup::renderer::RenderMode mode) {
-        renderMode = mode;
-        LOG_INFO("Render mode: {}",
-                 renderMode == bimeup::renderer::RenderMode::Shaded ? "Shaded" : "Wireframe");
+    toolbar->SetOnEdgesChanged([&](bool enabled) {
+        edgesEnabled = enabled;
+        LOG_INFO("Edges: {}", edgesEnabled ? "on" : "off");
     });
     toolbar->SetOnFitToView([&] { fitToViewRequested = true; });
     toolbar->SetOnFrameSelected([&] {
@@ -1393,7 +1377,7 @@ int main(int argc, char* argv[]) {
             overlay->SetSnapCandidate(measureModeActive ? measureSnapPoint : std::nullopt,
                                       measureSnapIsVertex);
         }
-        toolbar->SetRenderMode(renderMode);
+        toolbar->SetEdgesEnabled(edgesEnabled);
         {
             // Reflect whether any measurement is currently visible. An empty
             // list counts as "visible" (default-on) so the checkbox stays
@@ -1581,19 +1565,16 @@ int main(int argc, char* argv[]) {
         scissor.extent = extent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        const bool shaded = renderMode == bimeup::renderer::RenderMode::Shaded;
-        // SectionOnly mode: only the section-fill caps render; shaded +
+        // SectionOnly mode: only the section-fill caps render; opaque +
         // transparent scene passes are skipped entirely.
         const bool sectionOnly = axisSectionController.AnySectionOnly();
-        auto& opaquePipeline = shaded ? *shadedPipeline : *wireframePipeline;
         if (!sectionOnly) {
-            opaquePipeline.Bind(cmd);
-            descriptorSet.Bind(cmd, opaquePipeline.GetLayout());
+            shadedPipeline->Bind(cmd);
+            descriptorSet.Bind(cmd, shadedPipeline->GetLayout());
             meshBuffer.Bind(cmd);
         }
 
-        // Pass 1: opaque. In wireframe mode, everything goes through the wire
-        // pipeline (line rasterization has no meaningful alpha bucket).
+        // Pass 1: opaque. Transparent handles defer to the transparent pass.
         auto needsTransparentPass = [&](bimeup::renderer::MeshHandle h) {
             if (h < sceneResult->meshes.size() &&
                 sceneResult->meshes[h].IsTransparent()) return true;
@@ -1601,13 +1582,13 @@ int main(int argc, char* argv[]) {
         };
         if (!sectionOnly) {
             for (const auto& [handle, transform] : drawCalls) {
-                if (shaded && needsTransparentPass(handle)) {
+                if (needsTransparentPass(handle)) {
                     continue;
                 }
-                vkCmdPushConstants(cmd, opaquePipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                vkCmdPushConstants(cmd, shadedPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
                 uint32_t transparentBit = 0U;
-                vkCmdPushConstants(cmd, opaquePipeline.GetLayout(),
+                vkCmdPushConstants(cmd, shadedPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(transparentBit),
                                    &transparentBit);
                 meshBuffer.Draw(cmd, handle);
@@ -1676,10 +1657,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Pass 2: transparent (shaded mode only). Depth-test on, write off — so
-        // blended fragments respect opaque depth but don't occlude each other.
-        // No back-to-front sort yet; acceptable for glass panes that rarely overlap.
-        if (shaded && !sectionOnly) {
+        // Pass 2: transparent. Depth-test on, write off — so blended fragments
+        // respect opaque depth but don't occlude each other. No back-to-front
+        // sort yet; acceptable for glass panes that rarely overlap.
+        if (!sectionOnly) {
             transparentPipeline->Bind(cmd);
             descriptorSet.Bind(cmd, transparentPipeline->GetLayout());
             meshBuffer.Bind(cmd);

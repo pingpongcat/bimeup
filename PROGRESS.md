@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage RP — Render Polish (reopened for RP.17)
-## Current Task: RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup
+## Current Stage: Stage 9 — Ray Tracing
+## Current Task: 9.1 Acceleration structures (BLAS)
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -223,10 +223,10 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
   - [x] RP.17.2 `SceneMesh` line buffer + `SceneBuilder` wires extractor per source mesh
   - [x] RP.17.3 `renderer::EdgeOverlayPipeline` (line topology, depth ≤, polygon-offset, alpha)
   - [x] RP.17.4 `edge_overlay.{vert,frag}` + RenderLoop draw-pass wiring
-  - [ ] RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup
+  - [x] RP.17.5 Toolbar "Edges" toggle replaces current "Wireframe" radio + main.cpp cleanup
   - [ ] RP.17.6 (Optional) feed extracted edges into `scene::Snap` as edge-snap source
   - Ordering: 17.1 → 17.2 → 17.3 → 17.4 → 17.5 → (optional 17.6) → stage gate
-  - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure`
+  - Stage gate at end of RP.17: full `ctest -j$(nproc) --output-on-failure` 558/558 ✓ (2026-04-20)
 
 ## Stage 9 — Ray Tracing
 - [ ] 9.1 Acceleration structures (BLAS)
