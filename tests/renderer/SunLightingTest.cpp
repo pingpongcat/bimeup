@@ -180,21 +180,85 @@ TEST(SunLightingTest, TrueNorthRotatesKeyDirection) {
     EXPECT_GT(dxz, 0.1F);
 }
 
-TEST(SunLightingTest, IndoorToggleDoesNotAffectKeyInPhase16_4_a) {
-    // RP.16.5 will mutate the fill slot + ambient when indoor is enabled.
-    // At 16.4.a the key (sun) slot must remain identical either way — pin it.
-    auto off = MakeGreenwichNoonScene();
+TEST(SunLightingTest, IndoorPresetOffKeepsFillZero) {
+    auto scene = MakeGreenwichNoonScene();
+    scene.indoorLightsEnabled = false;
+    const LightingUbo ubo = PackSunLighting(scene);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.x, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.y, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.z, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.w, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillColorEnabled.r, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillColorEnabled.g, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillColorEnabled.b, 0.0F, kEps);
+    EXPECT_NEAR(ubo.fillColorEnabled.w, 0.0F, kEps);
+}
+
+TEST(SunLightingTest, IndoorPresetOnFillIsOverheadSoftWhite) {
+    auto scene = MakeGreenwichNoonScene();
+    scene.indoorLightsEnabled = true;
+    const LightingUbo ubo = PackSunLighting(scene);
+
+    // Direction: normalised (0.2, -1, 0.3) — mostly downward with a slight
+    // forward/side tilt so interior ceilings/floors get a consistent read.
+    const glm::vec3 expectedDir = glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F));
+    EXPECT_NEAR(ubo.fillDirectionIntensity.x, expectedDir.x, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.y, expectedDir.y, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.z, expectedDir.z, kEps);
+    EXPECT_NEAR(ubo.fillDirectionIntensity.w, 0.5F, kEps);  // intensity
+
+    // Warm soft white: blue channel is the smallest.
+    EXPECT_GT(ubo.fillColorEnabled.r, 0.9F);
+    EXPECT_GT(ubo.fillColorEnabled.g, 0.9F);
+    EXPECT_LT(ubo.fillColorEnabled.b, ubo.fillColorEnabled.g);
+    EXPECT_LT(ubo.fillColorEnabled.b, ubo.fillColorEnabled.r);
+    EXPECT_NEAR(ubo.fillColorEnabled.w, 1.0F, kEps);
+}
+
+TEST(SunLightingTest, IndoorPresetScalesAmbientTriple) {
+    const auto off = MakeGreenwichNoonScene();
     auto on = off;
     on.indoorLightsEnabled = true;
 
     const LightingUbo a = PackSunLighting(off);
     const LightingUbo b = PackSunLighting(on);
-    EXPECT_NEAR(a.keyDirectionIntensity.x, b.keyDirectionIntensity.x, kEps);
-    EXPECT_NEAR(a.keyDirectionIntensity.y, b.keyDirectionIntensity.y, kEps);
-    EXPECT_NEAR(a.keyDirectionIntensity.z, b.keyDirectionIntensity.z, kEps);
-    EXPECT_NEAR(a.keyColorEnabled.r, b.keyColorEnabled.r, kEps);
-    EXPECT_NEAR(a.keyColorEnabled.g, b.keyColorEnabled.g, kEps);
-    EXPECT_NEAR(a.keyColorEnabled.b, b.keyColorEnabled.b, kEps);
+
+    EXPECT_NEAR(b.skyZenith.r, a.skyZenith.r * 0.7F, kEps);
+    EXPECT_NEAR(b.skyZenith.g, a.skyZenith.g * 0.7F, kEps);
+    EXPECT_NEAR(b.skyZenith.b, a.skyZenith.b * 0.7F, kEps);
+    EXPECT_NEAR(b.skyHorizon.r, a.skyHorizon.r * 0.9F, kEps);
+    EXPECT_NEAR(b.skyHorizon.g, a.skyHorizon.g * 0.9F, kEps);
+    EXPECT_NEAR(b.skyHorizon.b, a.skyHorizon.b * 0.9F, kEps);
+    EXPECT_NEAR(b.skyGround.r, a.skyGround.r * 1.2F, kEps);
+    EXPECT_NEAR(b.skyGround.g, a.skyGround.g * 1.2F, kEps);
+    EXPECT_NEAR(b.skyGround.b, a.skyGround.b * 1.2F, kEps);
+}
+
+TEST(SunLightingTest, IndoorPresetLeavesKeyShadowAndRimBitIdentical) {
+    auto off = MakeGreenwichNoonScene();
+    off.shadow.enabled = true;
+    off.shadow.bias = 0.02F;
+    off.shadow.pcfRadius = 1.25F;
+    off.shadow.mapResolution = 2048U;
+    off.shadow.lightSpaceMatrix = glm::mat4(2.0F);
+
+    auto on = off;
+    on.indoorLightsEnabled = true;
+
+    const LightingUbo a = PackSunLighting(off);
+    const LightingUbo b = PackSunLighting(on);
+
+    EXPECT_EQ(0, std::memcmp(&a.keyDirectionIntensity, &b.keyDirectionIntensity,
+                             sizeof(a.keyDirectionIntensity)));
+    EXPECT_EQ(0, std::memcmp(&a.keyColorEnabled, &b.keyColorEnabled,
+                             sizeof(a.keyColorEnabled)));
+    EXPECT_EQ(0, std::memcmp(&a.rimDirectionIntensity, &b.rimDirectionIntensity,
+                             sizeof(a.rimDirectionIntensity)));
+    EXPECT_EQ(0, std::memcmp(&a.rimColorEnabled, &b.rimColorEnabled,
+                             sizeof(a.rimColorEnabled)));
+    EXPECT_EQ(0, std::memcmp(&a.shadowParams, &b.shadowParams, sizeof(a.shadowParams)));
+    EXPECT_EQ(0, std::memcmp(&a.lightSpaceMatrix, &b.lightSpaceMatrix,
+                             sizeof(a.lightSpaceMatrix)));
 }
 
 }  // namespace

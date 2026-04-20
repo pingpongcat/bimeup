@@ -20,16 +20,32 @@ LightingUbo PackSunLighting(const SunLightingScene& scene) {
     LightingUbo ubo{};
     ubo.keyDirectionIntensity = glm::vec4(sun.dirWorld, 1.0F);
     ubo.keyColorEnabled = glm::vec4(sky.sunColor, 1.0F);
-    // Fill and rim slots zero-filled. RP.16.5 populates fill when the indoor
-    // preset is on; rim is retired in the sun-driven model.
-    ubo.fillDirectionIntensity = glm::vec4(0.0F);
-    ubo.fillColorEnabled = glm::vec4(0.0F);
+    // Rim is retired in the sun-driven model.
     ubo.rimDirectionIntensity = glm::vec4(0.0F);
     ubo.rimColorEnabled = glm::vec4(0.0F);
 
-    ubo.skyZenith = glm::vec4(sky.zenith, 0.0F);
-    ubo.skyHorizon = glm::vec4(sky.horizon, 0.0F);
-    ubo.skyGround = glm::vec4(sky.ground, 0.0F);
+    glm::vec3 zenith = sky.zenith;
+    glm::vec3 horizon = sky.horizon;
+    glm::vec3 ground = sky.ground;
+
+    if (scene.indoorLightsEnabled) {
+        const glm::vec3 indoorDir = glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F));
+        const glm::vec3 indoorColor(1.0F, 0.95F, 0.85F);  // warm soft white
+        ubo.fillDirectionIntensity = glm::vec4(indoorDir, 0.5F);
+        ubo.fillColorEnabled = glm::vec4(indoorColor, 1.0F);
+        // Approximate bounce light from interior surfaces: sky drops a notch,
+        // horizon trims slightly, ground lifts (floor bounce dominates indoors).
+        zenith *= 0.7F;
+        horizon *= 0.9F;
+        ground *= 1.2F;
+    } else {
+        ubo.fillDirectionIntensity = glm::vec4(0.0F);
+        ubo.fillColorEnabled = glm::vec4(0.0F);
+    }
+
+    ubo.skyZenith = glm::vec4(zenith, 0.0F);
+    ubo.skyHorizon = glm::vec4(horizon, 0.0F);
+    ubo.skyGround = glm::vec4(ground, 0.0F);
 
     ubo.lightSpaceMatrix = scene.shadow.lightSpaceMatrix;
     const float invRes = scene.shadow.mapResolution > 0
