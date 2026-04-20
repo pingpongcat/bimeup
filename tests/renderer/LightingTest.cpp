@@ -14,26 +14,10 @@ using bimeup::renderer::ComputePcfShadow;
 using bimeup::renderer::DirectionalLight;
 using bimeup::renderer::HemisphereAmbient;
 using bimeup::renderer::LightingUbo;
-using bimeup::renderer::MakeDefaultLighting;
-using bimeup::renderer::PackLighting;
-using bimeup::renderer::ShadowSettings;
 
 namespace {
 
 constexpr float kEps = 1e-4F;
-
-TEST(LightingTest, DefaultKeyFillRimEnabled) {
-    auto lighting = MakeDefaultLighting();
-    EXPECT_TRUE(lighting.key.enabled);
-    EXPECT_TRUE(lighting.fill.enabled);
-    EXPECT_TRUE(lighting.rim.enabled);
-}
-
-TEST(LightingTest, DefaultKeyIsBrightestLight) {
-    auto lighting = MakeDefaultLighting();
-    EXPECT_GT(lighting.key.intensity, lighting.fill.intensity);
-    EXPECT_GT(lighting.key.intensity, lighting.rim.intensity);
-}
 
 TEST(LightingTest, LambertHeadOnLightIsFullIntensity) {
     DirectionalLight light{};
@@ -112,58 +96,6 @@ TEST(LightingTest, PackedUboMatchesStd140Size) {
     EXPECT_EQ(sizeof(LightingUbo), 224U);
 }
 
-TEST(LightingTest, PackLightingPreservesDirectionAndIntensity) {
-    auto scene = MakeDefaultLighting();
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.keyDirectionIntensity.x, scene.key.direction.x, kEps);
-    EXPECT_NEAR(ubo.keyDirectionIntensity.y, scene.key.direction.y, kEps);
-    EXPECT_NEAR(ubo.keyDirectionIntensity.z, scene.key.direction.z, kEps);
-    EXPECT_NEAR(ubo.keyDirectionIntensity.w, scene.key.intensity, kEps);
-}
-
-TEST(LightingTest, PackLightingEncodesEnabledFlagInColorW) {
-    auto scene = MakeDefaultLighting();
-    scene.fill.enabled = false;
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.fillColorEnabled.w, 0.0F, kEps);
-    EXPECT_NEAR(ubo.keyColorEnabled.w, 1.0F, kEps);
-}
-
-TEST(LightingTest, PackLightingEncodesShadowParams) {
-    auto scene = MakeDefaultLighting();
-    scene.shadow.enabled = true;
-    scene.shadow.bias = 0.01F;
-    scene.shadow.pcfRadius = 1.5F;
-    scene.shadow.mapResolution = 2048U;
-
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.shadowParams.x, 1.0F, kEps);
-    EXPECT_NEAR(ubo.shadowParams.y, 0.01F, kEps);
-    EXPECT_NEAR(ubo.shadowParams.z, 1.5F, kEps);
-    EXPECT_NEAR(ubo.shadowParams.w, 1.0F / 2048.0F, kEps);
-}
-
-TEST(LightingTest, PackLightingDefaultShadowsDisabled) {
-    auto scene = MakeDefaultLighting();
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.shadowParams.x, 0.0F, kEps);
-}
-
-TEST(LightingTest, PackLightingPreservesLightSpaceMatrix) {
-    auto scene = MakeDefaultLighting();
-    scene.shadow.lightSpaceMatrix = glm::mat4(2.0F);  // scale-2 identity-ish
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.lightSpaceMatrix[0][0], 2.0F, kEps);
-    EXPECT_NEAR(ubo.lightSpaceMatrix[1][1], 2.0F, kEps);
-    EXPECT_NEAR(ubo.lightSpaceMatrix[2][2], 2.0F, kEps);
-    EXPECT_NEAR(ubo.lightSpaceMatrix[3][3], 2.0F, kEps);
-}
-
 // --- ComputeHemisphereAmbient: cardinal-normal sanity + lerp behaviour. -------
 
 TEST(HemisphereAmbientTest, ZenithWhenNormalPointsUp) {
@@ -218,25 +150,6 @@ TEST(HemisphereAmbientTest, NormalizesInput) {
     EXPECT_NEAR(a1.r, a2.r, kEps);
     EXPECT_NEAR(a1.g, a2.g, kEps);
     EXPECT_NEAR(a1.b, a2.b, kEps);
-}
-
-TEST(LightingTest, PackLightingEncodesSkyColors) {
-    auto scene = MakeDefaultLighting();
-    scene.sky.zenith = glm::vec3(0.1F, 0.2F, 0.3F);
-    scene.sky.horizon = glm::vec3(0.4F, 0.5F, 0.6F);
-    scene.sky.ground = glm::vec3(0.7F, 0.8F, 0.9F);
-
-    auto ubo = PackLighting(scene);
-
-    EXPECT_NEAR(ubo.skyZenith.r, 0.1F, kEps);
-    EXPECT_NEAR(ubo.skyZenith.g, 0.2F, kEps);
-    EXPECT_NEAR(ubo.skyZenith.b, 0.3F, kEps);
-    EXPECT_NEAR(ubo.skyHorizon.r, 0.4F, kEps);
-    EXPECT_NEAR(ubo.skyHorizon.g, 0.5F, kEps);
-    EXPECT_NEAR(ubo.skyHorizon.b, 0.6F, kEps);
-    EXPECT_NEAR(ubo.skyGround.r, 0.7F, kEps);
-    EXPECT_NEAR(ubo.skyGround.g, 0.8F, kEps);
-    EXPECT_NEAR(ubo.skyGround.b, 0.9F, kEps);
 }
 
 // --- ComputePcfShadow: 3x3 PCF visibility [0,1]. 1=lit, 0=fully in shadow. -----

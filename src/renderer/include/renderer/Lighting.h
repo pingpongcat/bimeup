@@ -30,14 +30,6 @@ struct HemisphereAmbient {
     glm::vec3 ground{0.25F, 0.22F, 0.20F};
 };
 
-struct LightingScene {
-    DirectionalLight key;
-    DirectionalLight fill;
-    DirectionalLight rim;
-    HemisphereAmbient sky{};
-    ShadowSettings shadow{};
-};
-
 // std140-packed UBO that mirrors the GLSL LightingUBO.
 // Layout: each DirectionalLight → (vec4 directionIntensity, vec4 colorEnabled),
 // then vec4 skyZenith, vec4 skyHorizon, vec4 skyGround, mat4 lightSpaceMatrix,
@@ -58,9 +50,6 @@ struct LightingUbo {
 
 static_assert(sizeof(LightingUbo) == 224, "LightingUbo must match std140 layout");
 
-LightingScene MakeDefaultLighting();
-LightingUbo PackLighting(const LightingScene& scene);
-
 // Renderer-local mirror of geographic site info (intentionally not tied to the
 // `ifc` module). Lat/lon are geodetic radians; longitude is positive east.
 struct SunSite {
@@ -69,7 +58,7 @@ struct SunSite {
     double elevationM{0.0};
 };
 
-// Sun-driven replacement for `LightingScene`. One directional sun in the key
+// Scene-level lighting parameters (RP.16.4). One directional sun in the key
 // slot (direction + colour from `ComputeSunDirection` + `ComputeSkyColor`);
 // fill/rim slots zeroed (filled by the indoor preset in RP.16.5); hemisphere
 // ambient derived from sun elevation. `exposure` is scene metadata routed to

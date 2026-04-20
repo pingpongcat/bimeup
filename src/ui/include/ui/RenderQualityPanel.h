@@ -17,14 +17,10 @@ struct SmaaSettings {
 };
 
 struct RenderQualitySettings {
-    renderer::LightingScene lighting{renderer::MakeDefaultLighting()};
-
-    // Pre-ACES linear multiplier on composited HDR in `tonemap.frag`. The
-    // three-point lighting sum (ambient ~0.6 + key ~1.0 + fill ~0.45 + rim
-    // ~0.35) can push bright surfaces to ~2.5 in HDR space, which ACES
-    // tonemaps to near-white. 0.6 brings the mid-grey through the knee and
-    // leaves headroom for direct light without blowing out.
-    float exposure{0.6F};
+    // RP.16.4.b — three-point `lighting` replaced by sun-driven scene. The
+    // panel's Sun widgets (site/date/time) are wired in RP.16.6; 16.7 loads
+    // real site data on model load. `sun.exposure` feeds the tonemap pass.
+    renderer::SunLightingScene sun{};
 
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
 };

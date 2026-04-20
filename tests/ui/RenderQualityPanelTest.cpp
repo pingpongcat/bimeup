@@ -25,24 +25,21 @@ TEST(RenderQualityPanelTest, HasPanelName) {
     EXPECT_STREQ(panel.GetName(), "Render Quality");
 }
 
-TEST(RenderQualityPanelTest, DefaultSettingsEnableAllLights) {
-    RenderQualityPanel panel;
-    const auto& settings = panel.GetSettings();
-    EXPECT_TRUE(settings.lighting.key.enabled);
-    EXPECT_TRUE(settings.lighting.fill.enabled);
-    EXPECT_TRUE(settings.lighting.rim.enabled);
-}
+// RP.16.4.b — three-point-shaped asserts retired. Full Sun-widget coverage
+// lands in the RP.16.6 panel rewrite; these guard the minimum surface that
+// 16.4.b ships (sun scene exists on settings; shadows off by default;
+// mutable access works).
 
 TEST(RenderQualityPanelTest, DefaultSettingsHaveShadowsOff) {
     RenderQualityPanel panel;
     const auto& s = panel.GetSettings();
-    EXPECT_FALSE(s.lighting.shadow.enabled);
+    EXPECT_FALSE(s.sun.shadow.enabled);
 }
 
 TEST(RenderQualityPanelTest, MutableSettingsAllowsExternalUpdate) {
     RenderQualityPanel panel;
-    panel.MutableSettings().lighting.key.intensity = 3.5F;
-    EXPECT_FLOAT_EQ(panel.GetSettings().lighting.key.intensity, 3.5F);
+    panel.MutableSettings().sun.indoorLightsEnabled = true;
+    EXPECT_TRUE(panel.GetSettings().sun.indoorLightsEnabled);
 }
 
 TEST(RenderQualityPanelTest, DefaultPanelIsVisible) {

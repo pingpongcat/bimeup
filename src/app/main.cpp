@@ -20,6 +20,7 @@
 #include <renderer/DiskMarkerPipeline.h>
 #include <renderer/FirstPersonController.h>
 #include <renderer/Lighting.h>
+#include <renderer/SunPosition.h>
 #include <renderer/Pipeline.h>
 #include <renderer/RenderLoop.h>
 #include <renderer/RenderMode.h>
@@ -228,8 +229,8 @@ int main(int argc, char* argv[]) {
                                        sizeof(CameraUBO), &ubo);
     descriptorSet.UpdateBuffer(0, uboBuffer);
 
-    bimeup::renderer::LightingUbo lightingUbo = bimeup::renderer::PackLighting(
-        bimeup::renderer::MakeDefaultLighting());
+    bimeup::renderer::LightingUbo lightingUbo =
+        bimeup::renderer::PackSunLighting(bimeup::renderer::SunLightingScene{});
     bimeup::renderer::Buffer lightingBuffer(device, bimeup::renderer::BufferType::Uniform,
                                             sizeof(bimeup::renderer::LightingUbo), &lightingUbo);
     descriptorSet.UpdateBuffer(1, lightingBuffer);
@@ -1217,7 +1218,7 @@ int main(int argc, char* argv[]) {
     // into `shadowMap`; the main pass then samples it via sampler2DShadow.
     renderLoop.SetPreMainPassCallback([&](VkCommandBuffer cmd) {
         if (!shadowMap || !shadowPipeline ||
-            !renderQualityPanel->GetSettings().lighting.shadow.enabled) {
+            !renderQualityPanel->GetSettings().sun.shadow.enabled) {
             return;
         }
 
@@ -1250,7 +1251,7 @@ int main(int argc, char* argv[]) {
         meshBuffer.Bind(cmd);
 
         const glm::mat4& ls =
-            renderQualityPanel->GetSettings().lighting.shadow.lightSpaceMatrix;
+            renderQualityPanel->GetSettings().sun.shadow.lightSpaceMatrix;
         for (const auto& [handle, transform] : drawCalls) {
             glm::mat4 lightSpaceModel = ls * transform;
             vkCmdPushConstants(cmd, shadowPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
@@ -1446,21 +1447,24 @@ int main(int argc, char* argv[]) {
 
         // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR
         // space, so the tonemap needs a multiplier to keep direct-lit
-        // surfaces off the ACES curve shoulder. Panel default is 0.6.
-        renderLoop.SetExposure(renderQualityPanel->GetSettings().exposure);
+        // surfaces off the ACES curve shoulder.
+        renderLoop.SetExposure(renderQualityPanel->GetSettings().sun.exposure);
 
         // Resolve shadow settings: compute light-space matrix from current scene
-        // bounds + key light direction, and (re)build the shadow map if resolution
-        // or enabled-state changed.
-        auto& shadowSettings = renderQualityPanel->MutableSettings().lighting.shadow;
+        // bounds + sun direction, and (re)build the shadow map if resolution or
+        // enabled-state changed.
+        auto& sunScene = renderQualityPanel->MutableSettings().sun;
+        auto& shadowSettings = sunScene.shadow;
         {
             auto sceneBounds = ComputeSceneBounds(sceneResult->scene);
             if (sceneBounds.IsValid()) {
                 glm::vec3 size = sceneBounds.GetSize();
                 float radius = 0.5F * glm::length(size);
+                const auto sunPos = bimeup::renderer::ComputeSunDirection(
+                    sunScene.julianDayUtc, sunScene.siteLocation.latitudeRad,
+                    sunScene.siteLocation.longitudeRad, sunScene.trueNorthRad);
                 shadowSettings.lightSpaceMatrix = bimeup::renderer::ComputeLightSpaceMatrix(
-                    renderQualityPanel->GetSettings().lighting.key.direction,
-                    sceneBounds.GetCenter(), std::max(radius, 1.0F));
+                    sunPos.dirWorld, sceneBounds.GetCenter(), std::max(radius, 1.0F));
             }
 
             if (shadowSettings.enabled &&
@@ -1476,7 +1480,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Update lighting UBO from the Render Quality panel.
-        lightingUbo = bimeup::renderer::PackLighting(renderQualityPanel->GetSettings().lighting);
+        lightingUbo = bimeup::renderer::PackSunLighting(renderQualityPanel->GetSettings().sun);
         auto* lightMapped = static_cast<bimeup::renderer::LightingUbo*>(lightingBuffer.Map());
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
