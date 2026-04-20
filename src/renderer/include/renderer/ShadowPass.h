@@ -32,8 +32,18 @@ class Device;
 ///
 /// The render pass clears depth on load, stores it, and transitions the image to
 /// SHADER_READ_ONLY_OPTIMAL so the main pass can sample it in the same frame.
+///
+/// RP.18.1 — The render pass also carries a second attachment at the same
+/// resolution: an `R16G16B16A16_SFLOAT` colour target cleared to opaque white
+/// each frame. RP.18.2's `ShadowTransmissionPipeline` writes tinted attenuation
+/// into it for transparent geometry (min-blended across overlapping panes); the
+/// main pass then multiplies the sampled tint into the sun term to let sunlight
+/// pass through `IfcWindow` glass. Opaque shadow draws leave it untouched
+/// (`colorWriteMask = 0` in their pipeline).
 class ShadowMap {
 public:
+    static constexpr VkFormat kTransmissionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
     ShadowMap(const Device& device, uint32_t resolution);
     ~ShadowMap();
 
@@ -50,6 +60,11 @@ public:
     [[nodiscard]] VkFormat GetFormat() const { return m_format; }
     [[nodiscard]] uint32_t GetResolution() const { return m_resolution; }
 
+    [[nodiscard]] VkImage GetTransmissionImage() const { return m_transmissionImage; }
+    [[nodiscard]] VkImageView GetTransmissionImageView() const { return m_transmissionImageView; }
+    [[nodiscard]] VkSampler GetTransmissionSampler() const { return m_transmissionSampler; }
+    [[nodiscard]] static VkFormat GetTransmissionFormat() { return kTransmissionFormat; }
+
 private:
     const Device& m_device;
     uint32_t m_resolution = 0;
@@ -58,6 +73,10 @@ private:
     VmaAllocation m_allocation = VK_NULL_HANDLE;
     VkImageView m_imageView = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
+    VkImage m_transmissionImage = VK_NULL_HANDLE;
+    VmaAllocation m_transmissionAllocation = VK_NULL_HANDLE;
+    VkImageView m_transmissionImageView = VK_NULL_HANDLE;
+    VkSampler m_transmissionSampler = VK_NULL_HANDLE;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
 };

@@ -50,6 +50,12 @@ struct PipelineConfig {
     // marker, transparent) bound to the MRT main pass that doesn't populate the
     // normal G-buffer. Ignored when colorAttachmentCount <= 1.
     bool disableSecondaryColorWrites = false;
+    // RP.18.1 — when true, attachment 0 has `colorWriteMask = 0` and blending
+    // is forced off. Used by the opaque shadow-depth pipeline which must stay
+    // compatible with the shadow render pass now that it carries a
+    // transmission colour attachment, but still leaves the cleared-white
+    // transmission texels untouched.
+    bool disablePrimaryColorWrite = false;
     std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts;

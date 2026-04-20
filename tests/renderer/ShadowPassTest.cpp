@@ -129,6 +129,14 @@ TEST_F(ShadowMapTest, UsesDepthFormat) {
         << "Unexpected shadow map format: " << fmt;
 }
 
+TEST_F(ShadowMapTest, ExposesTransmissionAttachment) {
+    m_map = std::make_unique<ShadowMap>(*m_device, 1024U);
+
+    EXPECT_NE(m_map->GetTransmissionImageView(), VK_NULL_HANDLE);
+    EXPECT_NE(m_map->GetTransmissionSampler(), VK_NULL_HANDLE);
+    EXPECT_EQ(m_map->GetTransmissionFormat(), VK_FORMAT_R16G16B16A16_SFLOAT);
+}
+
 TEST_F(ShadowMapTest, DestructorCleansUp) {
     {
         ShadowMap map(*m_device, 512U);

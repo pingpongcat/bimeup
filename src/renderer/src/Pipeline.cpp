@@ -130,7 +130,9 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
         config.colorAttachmentCount);
     for (uint32_t i = 0; i < config.colorAttachmentCount; ++i) {
         auto& b = blendAttachments[i];
-        const bool suppress = (i > 0) && config.disableSecondaryColorWrites;
+        const bool suppress = (i == 0)
+                                  ? config.disablePrimaryColorWrite
+                                  : config.disableSecondaryColorWrites;
         b.colorWriteMask = suppress ? 0U : kFullWriteMask;
         // Blending is only meaningful for the colour attachment[0]. The MRT
         // main pass binds attachment[1] = R16G16_SNORM normal G-buffer and

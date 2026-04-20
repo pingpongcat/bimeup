@@ -128,7 +128,65 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
         throw std::runtime_error("Failed to create shadow map sampler");
     }
 
-    VkAttachmentDescription depthAttachment{};
+    // RP.18.1 — transmission attachment: tinted light attenuation for windows.
+    // Colour attachment + sampled-image usage; cleared to opaque white each
+    // frame (= "no attenuation") and read by basic.frag via a regular sampler.
+    VkImageCreateInfo transmissionImageInfo{};
+    transmissionImageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    transmissionImageInfo.imageType = VK_IMAGE_TYPE_2D;
+    transmissionImageInfo.format = kTransmissionFormat;
+    transmissionImageInfo.extent = {resolution, resolution, 1};
+    transmissionImageInfo.mipLevels = 1;
+    transmissionImageInfo.arrayLayers = 1;
+    transmissionImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    transmissionImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    transmissionImageInfo.usage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    transmissionImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    transmissionImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vmaCreateImage(m_device.GetAllocator(), &transmissionImageInfo, &allocInfo,
+                       &m_transmissionImage, &m_transmissionAllocation,
+                       nullptr) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate shadow transmission image");
+    }
+
+    VkImageViewCreateInfo transmissionViewInfo{};
+    transmissionViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    transmissionViewInfo.image = m_transmissionImage;
+    transmissionViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    transmissionViewInfo.format = kTransmissionFormat;
+    transmissionViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    transmissionViewInfo.subresourceRange.baseMipLevel = 0;
+    transmissionViewInfo.subresourceRange.levelCount = 1;
+    transmissionViewInfo.subresourceRange.baseArrayLayer = 0;
+    transmissionViewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(m_device.GetDevice(), &transmissionViewInfo, nullptr,
+                          &m_transmissionImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow transmission image view");
+    }
+
+    // Standard linear sampler (not comparison) — basic.frag reads the RGBA tint
+    // directly and multiplies into the sun term. Border = opaque white so
+    // samples outside the shadow frustum read as "no attenuation".
+    VkSamplerCreateInfo transmissionSamplerInfo{};
+    transmissionSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    transmissionSamplerInfo.magFilter = VK_FILTER_LINEAR;
+    transmissionSamplerInfo.minFilter = VK_FILTER_LINEAR;
+    transmissionSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    transmissionSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    transmissionSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    transmissionSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    transmissionSamplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    transmissionSamplerInfo.compareEnable = VK_FALSE;
+    transmissionSamplerInfo.maxLod = 1.0F;
+    if (vkCreateSampler(m_device.GetDevice(), &transmissionSamplerInfo, nullptr,
+                        &m_transmissionSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow transmission sampler");
+    }
+
+    std::array<VkAttachmentDescription, 2> attachments{};
+    VkAttachmentDescription& depthAttachment = attachments[0];
     depthAttachment.format = m_format;
     depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -138,36 +196,55 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+    VkAttachmentDescription& transmissionAttachment = attachments[1];
+    transmissionAttachment.format = kTransmissionFormat;
+    transmissionAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    transmissionAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    transmissionAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    transmissionAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    transmissionAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    transmissionAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    transmissionAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
     VkAttachmentReference depthRef{};
     depthRef.attachment = 0;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentReference transmissionRef{};
+    transmissionRef.attachment = 1;
+    transmissionRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 0;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &transmissionRef;
     subpass.pDepthStencilAttachment = &depthRef;
 
     std::array<VkSubpassDependency, 2> deps{};
     deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     deps[0].dstSubpass = 0;
     deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
     deps[1].srcSubpass = 0;
     deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = 1;
-    rpInfo.pAttachments = &depthAttachment;
+    rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    rpInfo.pAttachments = attachments.data();
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
     rpInfo.dependencyCount = static_cast<uint32_t>(deps.size());
@@ -177,11 +254,12 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
         throw std::runtime_error("Failed to create shadow map render pass");
     }
 
+    std::array<VkImageView, 2> fbAttachments = {m_imageView, m_transmissionImageView};
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbInfo.renderPass = m_renderPass;
-    fbInfo.attachmentCount = 1;
-    fbInfo.pAttachments = &m_imageView;
+    fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
     fbInfo.width = resolution;
     fbInfo.height = resolution;
     fbInfo.layers = 1;
@@ -221,23 +299,29 @@ ShadowMap::ShadowMap(const Device& device, uint32_t resolution)
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &begin);
 
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = m_image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = 0;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    std::array<VkImageMemoryBarrier, 2> barriers{};
+    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[0].image = m_image;
+    barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barriers[0].subresourceRange.baseMipLevel = 0;
+    barriers[0].subresourceRange.levelCount = 1;
+    barriers[0].subresourceRange.baseArrayLayer = 0;
+    barriers[0].subresourceRange.layerCount = 1;
+    barriers[0].srcAccessMask = 0;
+    barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    barriers[1] = barriers[0];
+    barriers[1].image = m_transmissionImage;
+    barriers[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &barrier);
+                         nullptr, static_cast<uint32_t>(barriers.size()),
+                         barriers.data());
 
     vkEndCommandBuffer(cmd);
 
@@ -258,6 +342,16 @@ ShadowMap::~ShadowMap() {
     }
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(dev, m_renderPass, nullptr);
+    }
+    if (m_transmissionSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(dev, m_transmissionSampler, nullptr);
+    }
+    if (m_transmissionImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev, m_transmissionImageView, nullptr);
+    }
+    if (m_transmissionImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_device.GetAllocator(), m_transmissionImage,
+                        m_transmissionAllocation);
     }
     if (m_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(dev, m_sampler, nullptr);

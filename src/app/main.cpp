@@ -585,7 +585,12 @@ int main(int argc, char* argv[]) {
         cfg.depthTestEnable = true;
         cfg.depthWriteEnable = true;
         cfg.cullMode = VK_CULL_MODE_FRONT_BIT;  // reduce self-shadow acne on front faces
-        cfg.colorAttachmentCount = 0;
+        // RP.18.1 — shadow render pass now carries a transmission colour
+        // attachment alongside depth. Opaque shadow draws stay depth-only by
+        // declaring the attachment with writeMask = 0 (preserves the cleared
+        // white that the transmission pipeline min-blends into).
+        cfg.colorAttachmentCount = 1;
+        cfg.disablePrimaryColorWrite = true;
         shadowPipeline = std::make_unique<bimeup::renderer::Pipeline>(
             device, shadowVertShader, shadowFragShader, cfg);
     };
@@ -1255,8 +1260,12 @@ int main(int argc, char* argv[]) {
             return;
         }
 
-        VkClearValue clear{};
-        clear.depthStencil = {1.0F, 0};
+        // RP.18.1 — two attachments: depth (cleared to 1.0) + transmission colour
+        // (cleared to opaque white = "no attenuation"). Transmission is populated
+        // by RP.18.2's transmission pipeline and read by basic.frag in RP.18.4.
+        std::array<VkClearValue, 2> clears{};
+        clears[0].depthStencil = {1.0F, 0};
+        clears[1].color = {{1.0F, 1.0F, 1.0F, 1.0F}};
 
         VkRenderPassBeginInfo rpInfo{};
         rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1264,8 +1273,8 @@ int main(int argc, char* argv[]) {
         rpInfo.framebuffer = shadowMap->GetFramebuffer();
         rpInfo.renderArea.offset = {0, 0};
         rpInfo.renderArea.extent = {shadowMap->GetResolution(), shadowMap->GetResolution()};
-        rpInfo.clearValueCount = 1;
-        rpInfo.pClearValues = &clear;
+        rpInfo.clearValueCount = static_cast<uint32_t>(clears.size());
+        rpInfo.pClearValues = clears.data();
 
         vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
