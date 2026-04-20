@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage RP (re-opened for RP.16) — Render Polish
-## Current Task: RP.16.3 IfcSite location extraction (`ifc/IfcSiteLocation`)
+## Current Task: RP.16.4 SunLightingScene + PackSunLighting (retire three-point)
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
@@ -207,7 +207,7 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
 - [ ] RP.16 Site-driven sun lighting — retire three-point for a single physically-plausible sun driven by `(date, time, site lat/long, TrueNorth)`; sky ambient derived from sun elevation; artificial-indoor-lights preset toggle. RT-friendly (sun = future RT shadow ray, `SkyColor` LUT = future miss-shader sample). LightingUbo shape preserved (sun→key, indoor fill→fill, rim zeroed). Plan: `docs/plan/stage_RP_render_polish.md` → "RP.16".
   - [x] RP.16.1 Solar-position math (`renderer/SunPosition.{h,cpp}`, NOAA-simplified)
   - [x] RP.16.2 Sky colour from elevation (`renderer/SkyColor.{h,cpp}`, 5-key LUT)
-  - [ ] RP.16.3 IfcSite location extraction (`ifc/IfcSiteLocation.{h,cpp}` — RefLat/Lon DMS, RefElevation, TrueNorth)
+  - [x] RP.16.3 IfcSite location extraction (`ifc/IfcSiteLocation.{h,cpp}` — RefLat/Lon DMS, RefElevation, TrueNorth)
   - [ ] RP.16.4 `SunLightingScene` + `PackSunLighting` (retire `LightingScene`/`MakeDefaultLighting`). **Flagged for sub-split at kickoff** (16.4.a new API + tests, 16.4.b old-API removal).
   - [ ] RP.16.5 Artificial-indoor preset (overhead fill + ambient boost)
   - [ ] RP.16.6 `RenderQualityPanel` rewrite (Sun header; retire three-point + sky-colour)
