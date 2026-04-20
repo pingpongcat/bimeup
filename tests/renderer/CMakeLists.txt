@@ -46,6 +46,7 @@ add_executable(renderer_tests
     RtShadowPassTest.cpp
     RtAoPassTest.cpp
     RtIndoorPassTest.cpp
+    RtSunCompositePipelineTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")
@@ -59,7 +60,7 @@ set(_renderer_test_env
 # tests show up in `ctest -R`. Suite list mirrors `BIMEUP_RENDERER_CPU_FIXTURES`
 # below in negated form so any new GPU suite is automatically picked up there.
 set(_renderer_cpu_filter
-    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
+    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:RtSunCompositePipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
 
 include(GoogleTest)
 
@@ -107,6 +108,7 @@ set(_renderer_gpu_fixtures
     RtShadowPassTest
     RtAoPassTest
     RtIndoorPassTest
+    RtSunCompositePipelineTest
 )
 
 foreach(_fixture IN LISTS _renderer_gpu_fixtures)

@@ -1,0 +1,130 @@
+#version 450
+
+// Stage 9.8.b.2 — Hybrid-RT sun composite. Mirrors the `useRtSunPath == 0`
+// sun block in `basic.frag` (lambert key + shadow visibility + RP.18 glass
+// transmission), but sources visibility from the `RtShadowPass` image
+// instead of a PCF shadow-map tap, and writes the result additively into
+// the HDR target. Runs only in Hybrid-RT mode; `basic.frag` already
+// skipped the sun term when `useRtSunPath == 1`, so this pass recovers it
+// exactly once without double-counting.
+//
+// Depth + view-space normal are the main-pass G-buffer. Depth reconstructs
+// world position via `invViewProj`; the normal is oct-packed R16G16_SNORM
+// and is lifted back to world space by `invView` so the Lambert dot
+// product runs in the same space as the lighting UBO's world-space sun
+// direction and the `lightSpaceMatrix` used for the RP.18 transmission
+// sample.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(set = 0, binding = 1) uniform sampler2D normalTex;
+layout(set = 0, binding = 2) uniform sampler2D rtVisibilityTex;
+layout(set = 0, binding = 3) uniform sampler2D shadowTransmissionMap;
+
+layout(set = 0, binding = 4) uniform LightingUBO {
+    vec4 keyDirectionIntensity;
+    vec4 keyColorEnabled;
+    vec4 fillDirectionIntensity;
+    vec4 fillColorEnabled;
+    vec4 rimDirectionIntensity;
+    vec4 rimColorEnabled;
+    vec4 skyZenith;
+    vec4 skyHorizon;
+    vec4 skyGround;
+    mat4 lightSpaceMatrix;
+    vec4 shadowParams;  // x=enabled, y=bias, z=pcfRadius, w=1/resolution
+} lights;
+
+layout(set = 0, binding = 5, rgba16f) uniform image2D hdrImage;
+
+layout(push_constant) uniform PushConstants {
+    mat4 invViewProj;
+    mat4 invView;
+    uvec2 extent;
+    uint pad0;
+    uint pad1;
+} pc;
+
+// Inverse of `OctPackNormal` (Cigolle et al. JCGT 2014 signed encoding).
+// CPU mirror lives in `renderer::OctUnpackNormal`.
+vec3 octUnpackNormal(vec2 e) {
+    vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
+
+// Mirror of `renderer::ComputeTransmittedSun` — tint applies only when the
+// sampled glass is strictly in front of the shading fragment in light space.
+vec3 computeTransmittedSun(float visibility, float fragLightZ, float bias,
+                           vec3 sunColor, vec4 transmit) {
+    bool glassAhead = transmit.a < fragLightZ - bias;
+    vec3 tint = glassAhead ? transmit.rgb : vec3(1.0);
+    return sunColor * (visibility * tint);
+}
+
+void main() {
+    uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= pc.extent.x || px.y >= pc.extent.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(px) + 0.5) / vec2(pc.extent);
+    float depth = texture(depthTex, uv).r;
+    // Background (no geometry) — leave HDR untouched so the sky stays as
+    // rasterised. RP.16 writes the hemisphere ambient into the clear
+    // colour, which is the desired sun-side lighting for the sky.
+    if (depth >= 1.0) {
+        return;
+    }
+
+    // Reconstruct world-space position from the non-linear depth buffer.
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 world4 = pc.invViewProj * ndc;
+    vec3 worldPos = world4.xyz / world4.w;
+
+    // View-space normal from the oct-packed R16G16_SNORM G-buffer, lifted
+    // back to world space (translation ignored via w=0).
+    vec2 packed = texture(normalTex, uv).xy;
+    vec3 nView = octUnpackNormal(packed);
+    vec3 nWorld = normalize((pc.invView * vec4(nView, 0.0)).xyz);
+
+    // Lambert key term. Sun direction is the DirectionalLight travel
+    // direction (points away from the sun); invert so `toLight` points
+    // toward the sun.
+    float keyEnabled = lights.keyColorEnabled.w;
+    vec3 toLight = normalize(-lights.keyDirectionIntensity.xyz);
+    float ndotl = max(dot(nWorld, toLight), 0.0);
+    vec3 sunColor = lights.keyColorEnabled.rgb *
+                    (lights.keyDirectionIntensity.w * keyEnabled);
+    vec3 key = sunColor * ndotl;
+
+    // RT visibility — screen-space sample into the `RtShadowPass` R8_UNORM
+    // image. 1 = fully lit, 0 = fully occluded.
+    float visibility = texture(rtVisibilityTex, uv).r;
+
+    // RP.18 transmission tint. Gated on shadowParams.x so that when shadows
+    // are disabled globally, the transmission map (which stays cleared
+    // white) can't fight with the RT visibility path. When shadows are on,
+    // the transmission sample matches the basic.frag raster path exactly.
+    vec4 lightClip = lights.lightSpaceMatrix * vec4(worldPos, 1.0);
+    float fragLightZ = 0.0;
+    vec4 transmit = vec4(1.0);
+    float shadowEnabled = lights.shadowParams.x;
+    if (lightClip.w > 0.0) {
+        vec3 lightNdc = lightClip.xyz / lightClip.w;
+        vec2 lightUv = lightNdc.xy * 0.5 + 0.5;
+        fragLightZ = lightNdc.z;
+        vec4 sampled = texture(shadowTransmissionMap, lightUv);
+        transmit = mix(vec4(1.0), sampled, shadowEnabled);
+    }
+
+    float bias = lights.shadowParams.y;
+    vec3 sunContribution = computeTransmittedSun(visibility, fragLightZ, bias, key, transmit);
+
+    ivec2 coord = ivec2(px);
+    vec4 hdr = imageLoad(hdrImage, coord);
+    imageStore(hdrImage, coord, vec4(hdr.rgb + sunContribution, hdr.a));
+}
