@@ -90,6 +90,14 @@ void RenderQualityPanel::OnDraw() {
         ImGui::SliderFloat("Exposure", &m_settings.sun.exposure, 0.1F, 2.0F, "%.2f");
     }
 
+    if (ImGui::CollapsingHeader("Ambient occlusion")) {
+        auto& ssao = m_settings.ssao;
+        ImGui::SliderFloat("Radius (m)", &ssao.radius, 0.05F, 2.0F, "%.2f");
+        ImGui::SliderFloat("Falloff", &ssao.falloff, 0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("Intensity", &ssao.intensity, 0.0F, 2.0F, "%.2f");
+        ImGui::SliderFloat("Shadow power", &ssao.shadowPower, 0.5F, 3.0F, "%.2f");
+    }
+
     if (ImGui::CollapsingHeader("SMAA")) {
         auto& smaa = m_settings.smaa;
         ImGui::Checkbox("Enabled", &smaa.enabled);

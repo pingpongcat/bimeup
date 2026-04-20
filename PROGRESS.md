@@ -245,6 +245,10 @@ Closed 2026-04-19 (RP.13b), reopened for RP.14; closed 2026-04-19 (RP.14.2), reo
 
 - [x] RP.19 SMAA tuning knobs in `RenderQualityPanel` — threshold slider (0.05–0.2) + LOW/MEDIUM/HIGH quality radio wired through `SmaaSettings` → `SmaaEdgePipeline`/`SmaaWeightsPipeline` push constants. `smaa_weights.frag`'s `SMAA_MAX_SEARCH_STEPS[_DIAG]` promoted from const to push-constant ints. Defaults pinned in `RenderQualityPanelTest`.
 
+- [x] RP.20 XeGTAO panel knobs — `SsaoSettings { radius, falloff, intensity, shadowPower }` with architectural defaults (0.35 m / 0.6 / 0.5 / 1.5) wired through `RenderLoop::SetSsaoParams` into `ssao_xegtao.comp`'s push constants. Panel gains an "Ambient occlusion" header with four sliders. Defaults pinned in `RenderQualityPanelTest`.
+
+- [ ] RP.21 Edge overlay settings + always-on default — `EdgeOverlaySettings { enabled=true, color, opacity, width }` replaces the hardcoded `kEdgeColor` literal + `edgesAutoFromMeasure` hack in `main.cpp`. Line-width slider requires `VK_DYNAMIC_STATE_LINE_WIDTH` (gated on `Device::HasWideLines()`). Toolbar + `W` keyboard shortcut still mutate `SmaaSettings::enabled`. The measurement-mode auto-enable path is retired — edges default on regardless of tool.
+
 ## Stage 9 — Ray Tracing (additive, opt-in render mode)
 Goal: add an RT light-transport render mode *alongside* the classical renderer. **Nothing is removed or replaced** — XeGTAO, shadow maps, SMAA, edge overlay all stay live. Classical rasterised is the default on every launch; Hybrid RT and Path Traced are opt-in modes selected in `RenderQualityPanel`, both gated on `VK_KHR_ray_tracing_pipeline` (not guaranteed on all GPUs). Sun direction / site / date-hour / indoor preset continue to come from `SunLightingScene` — single authoritative lighting model shared across all modes.
 - [ ] 9.1 RT-capability probe + BLAS per mesh (`AccelerationStructure`)

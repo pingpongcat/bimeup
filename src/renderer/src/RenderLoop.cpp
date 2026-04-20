@@ -356,6 +356,14 @@ void RenderLoop::SetExposure(float exposure) {
     m_exposurePush.exposure = exposure;
 }
 
+void RenderLoop::SetSsaoParams(float radius, float falloff, float intensity,
+                               float shadowPower) {
+    m_ssaoRadius = radius;
+    m_ssaoFalloff = falloff;
+    m_ssaoIntensity = intensity;
+    m_ssaoShadowPower = shadowPower;
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -2793,7 +2801,8 @@ void RenderLoop::RunSsao(VkCommandBuffer cmd) {
     // at which distant horizon taps begin fading toward the tangent-plane
     // (cos=0); 0.6 gives full horizon inside 60 % of the radius and a smooth
     // falloff over the outer 40 %.
-    SsaoXeGtaoPipeline::PushConstants mainPush{0.35F, 0.6F, 0.5F, 1.5F};
+    SsaoXeGtaoPipeline::PushConstants mainPush{m_ssaoRadius, m_ssaoFalloff,
+                                                m_ssaoIntensity, m_ssaoShadowPower};
     vkCmdPushConstants(cmd, m_ssaoPipeline->GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(mainPush), &mainPush);
     vkCmdDispatch(cmd, (m_aoExtent.width + 7) / 8, (m_aoExtent.height + 7) / 8, 1);

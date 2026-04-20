@@ -48,6 +48,18 @@ struct SmaaSettings {
     SmaaQuality quality{SmaaQuality::High};
 };
 
+// RP.20 — XeGTAO runtime knobs. Defaults mirror the pre-RP.20 hardcoded
+// literals in `RenderLoop::RunXeGtao` (chosen at RP.12d for architectural
+// scenes: contact-AO at 35 cm, 60 % full-horizon falloff, balanced
+// intensity + shadowPower). `falloff` replaces the Chapman `bias` field
+// retired at RP.12e.
+struct SsaoSettings {
+    float radius{0.35F};       // view-space sample radius (metres)
+    float falloff{0.6F};       // horizon tap falloff ratio [0, 1]
+    float intensity{0.5F};     // darkening multiplier; 0 = off, 1 = reference
+    float shadowPower{1.5F};   // exponent on the final AO term
+};
+
 struct RenderQualitySettings {
     // RP.16.4.b — three-point `lighting` replaced by sun-driven scene. The
     // panel's Sun widgets (site/date/time) are wired in RP.16.6; 16.7 loads
@@ -55,6 +67,7 @@ struct RenderQualitySettings {
     renderer::SunLightingScene sun{};
 
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
+    SsaoSettings ssao{};              // RP.20 — XeGTAO tuning knobs
 
     // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
     // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +

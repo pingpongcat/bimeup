@@ -145,6 +145,12 @@ public:
     void SetSmaaParams(bool enabled, float threshold, int maxSearchSteps,
                        int maxSearchStepsDiag);
 
+    /// RP.20 — XeGTAO knobs fed into `ssao_xegtao.comp`'s push constants
+    /// each frame. Defaults mirror the pre-RP.20 hardcoded values in
+    /// `RunXeGtao`; a panel that never touches these sliders produces
+    /// bit-compatible output.
+    void SetSsaoParams(float radius, float falloff, float intensity, float shadowPower);
+
     /// Pre-ACES exposure multiplier applied to the composited HDR colour
     /// inside `tonemap.frag`. Default (from the push-constant ctor) is 1.0
     /// — identity. The panel seeds a scene-appropriate value so the three-
@@ -414,6 +420,12 @@ private:
     float m_smaaThreshold = 0.1F;
     int m_smaaMaxSearchSteps = 16;
     int m_smaaMaxSearchStepsDiag = 8;
+    // RP.20 — XeGTAO push-constant knobs; defaults mirror the pre-RP.20
+    // literals in `RunXeGtao`.
+    float m_ssaoRadius = 0.35F;
+    float m_ssaoFalloff = 0.6F;
+    float m_ssaoIntensity = 0.5F;
+    float m_ssaoShadowPower = 1.5F;
 
     // RP.13b — tonemap push-constant state fed into `tonemap.frag` each
     // frame. Now only holds `exposure`; `SetExposure` writes it and the

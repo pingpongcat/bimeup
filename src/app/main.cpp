@@ -1631,6 +1631,16 @@ int main(int argc, char* argv[]) {
                                      bimeup::ui::MaxSearchStepsDiag(smaaSettings.quality));
         }
 
+        // RP.20 — XeGTAO knobs from the panel. Same per-frame-pull pattern as
+        // SMAA above; stored in RenderLoop and read when the compute pass
+        // runs. No extra draws — just swaps the push-constant literal for
+        // the panel-driven values.
+        {
+            const auto& ssao = renderQualityPanel->GetSettings().ssao;
+            renderLoop.SetSsaoParams(ssao.radius, ssao.falloff, ssao.intensity,
+                                     ssao.shadowPower);
+        }
+
         // Pre-ACES exposure — scene lighting routinely sums > 1 in HDR
         // space, so the tonemap needs a multiplier to keep direct-lit
         // surfaces off the ACES curve shoulder.

@@ -94,6 +94,18 @@ TEST(RenderQualityPanelTest, DefaultSmaaQualityIsHigh) {
     EXPECT_EQ(panel.GetSettings().smaa.quality, bimeup::ui::SmaaQuality::High);
 }
 
+// RP.20 — XeGTAO knobs pin the architectural defaults chosen at RP.12d /
+// RP.12e. Shifting any of these changes every rendered frame; locking them
+// here means a future slider tweak has to announce itself via a failing test.
+TEST(RenderQualityPanelTest, DefaultSsaoParamsAreArchitectural) {
+    RenderQualityPanel panel;
+    const auto& ssao = panel.GetSettings().ssao;
+    EXPECT_FLOAT_EQ(ssao.radius, 0.35F);
+    EXPECT_FLOAT_EQ(ssao.falloff, 0.6F);
+    EXPECT_FLOAT_EQ(ssao.intensity, 0.5F);
+    EXPECT_FLOAT_EQ(ssao.shadowPower, 1.5F);
+}
+
 TEST(RenderQualityPanelTest, SmaaQualityPresetsMapToIryokuSearchSteps) {
     // LOW = iryoku LOW (4/2), MEDIUM = iryoku MEDIUM (8/4), HIGH = iryoku HIGH
     // (16/8). These numbers feed `smaa_weights.frag`'s push constants; pinning
