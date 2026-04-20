@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage RP — Render Polish (reopened for RP.17.8)
-## Current Task: RP.17 stage gate (optional RP.17.6 edge-snap deferred)
+## Current Stage: Stage 9 — Ray Tracing
+## Current Task: 9.1 Acceleration structures (BLAS) — optional RP.17.6 edge-snap deferred
 
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
