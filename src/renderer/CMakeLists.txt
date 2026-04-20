@@ -43,6 +43,7 @@ add_library(bimeup_renderer STATIC
     src/TopLevelAS.cpp
     src/RayTracingPipeline.cpp
     src/RtShadowPass.cpp
+    src/RtAoPass.cpp
 )
 
 target_include_directories(bimeup_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
