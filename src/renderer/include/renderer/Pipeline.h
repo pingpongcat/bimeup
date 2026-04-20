@@ -31,6 +31,10 @@ struct PipelineConfig {
     // created with `VK_EXT_line_rasterization` + `smoothLines` enabled (see
     // `Device::HasSmoothLines`); ignored when topology isn't a line type.
     bool smoothLines = false;
+    // RP.17.7 — line width for line-topology pipelines. Values > 1.0 require
+    // `VkPhysicalDeviceFeatures.wideLines` (see `Device::HasWideLines`);
+    // ignored by triangle-topology pipelines.
+    float lineWidth = 1.0F;
     bool alphaBlendEnable = false;
     // RP.10c — when true, attachment 0's blend state is configured as
     // srcColorBlendFactor = ONE, dstColorBlendFactor = ONE, colorBlendOp =

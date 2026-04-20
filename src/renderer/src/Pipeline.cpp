@@ -88,7 +88,7 @@ void Pipeline::CreatePipeline(const Shader& vertexShader, const Shader& fragment
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = config.polygonMode;
-    rasterizer.lineWidth = 1.0F;
+    rasterizer.lineWidth = config.lineWidth;
     rasterizer.cullMode = config.cullMode;
     rasterizer.frontFace = config.frontFace;
     rasterizer.depthBiasEnable = config.depthBiasEnable ? VK_TRUE : VK_FALSE;

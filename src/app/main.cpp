@@ -557,7 +557,8 @@ int main(int argc, char* argv[]) {
             device, edgeOverlayVertShader, edgeOverlayFragShader,
             renderLoop.GetRenderPass(), dsLayout.GetLayout(),
             /*colorAttachmentCount=*/3, /*disableSecondaryColorWrites=*/true,
-            /*smoothLines=*/device.HasSmoothLines());
+            /*smoothLines=*/device.HasSmoothLines(),
+            /*lineWidth=*/device.HasWideLines() ? 1.5F : 1.0F);
     };
     buildEdgeOverlayPipeline();
     // Edge-overlay runtime state — toggle + colour/alpha. Toolbar "Edges"

@@ -15,7 +15,8 @@ EdgeOverlayPipeline::EdgeOverlayPipeline(const Device& device,
                                          VkDescriptorSetLayout cameraLayout,
                                          uint32_t colorAttachmentCount,
                                          bool disableSecondaryColorWrites,
-                                         bool smoothLines) {
+                                         bool smoothLines,
+                                         float lineWidth) {
     // Vertex buffer is shared with the basic/opaque pipeline — same stride, same
     // layout — but only the position attribute is consumed here.
     VkVertexInputBindingDescription binding{};
@@ -53,6 +54,7 @@ EdgeOverlayPipeline::EdgeOverlayPipeline(const Device& device,
     config.depthBiasSlopeFactor = -1.0F;
     config.alphaBlendEnable = true;
     config.smoothLines = smoothLines;
+    config.lineWidth = lineWidth;
     config.colorAttachmentCount = colorAttachmentCount;
     config.disableSecondaryColorWrites = disableSecondaryColorWrites;
     config.vertexBindings = {binding};

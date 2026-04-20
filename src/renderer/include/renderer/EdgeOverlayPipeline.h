@@ -27,7 +27,8 @@ public:
                         VkDescriptorSetLayout cameraLayout,
                         uint32_t colorAttachmentCount = 1,
                         bool disableSecondaryColorWrites = false,
-                        bool smoothLines = false);
+                        bool smoothLines = false,
+                        float lineWidth = 1.0F);
     ~EdgeOverlayPipeline();
 
     EdgeOverlayPipeline(const EdgeOverlayPipeline&) = delete;

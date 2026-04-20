@@ -164,6 +164,11 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     // attachment[0] blends, secondary normal/stencil attachments don't —
     // and the spec requires this feature for non-uniform blend state.
     deviceFeatures.independentBlend = VK_TRUE;
+    // RP.17.7 — enable wideLines so the edge overlay can draw at >1 px for
+    // better readability; guarded by the physical-device probe.
+    if (m_hasWideLines) {
+        deviceFeatures.wideLines = VK_TRUE;
+    }
 
     std::vector<const char*> enabledExtensions;
     if (enableSwapchain) {
@@ -237,6 +242,12 @@ int Device::RateDevice(VkPhysicalDevice device) {
 }
 
 void Device::ProbeLineRasterization() {
+    // Probe the core `wideLines` feature up-front — independent of the
+    // line-rasterization extension below, but queried here for locality.
+    VkPhysicalDeviceFeatures baseFeatures{};
+    vkGetPhysicalDeviceFeatures(m_physicalDevice, &baseFeatures);
+    m_hasWideLines = (baseFeatures.wideLines == VK_TRUE);
+
     // Query device extensions for `VK_EXT_line_rasterization`; if present,
     // chain the feature query to see if `smoothLines` is supported. Both
     // must be true to enable coverage-based line AA on the edge overlay.

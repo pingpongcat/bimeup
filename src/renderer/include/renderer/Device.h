@@ -31,6 +31,11 @@ public:
     /// Bresenham path silently.
     [[nodiscard]] bool HasSmoothLines() const { return m_hasSmoothLines; }
 
+    /// RP.17.7 — true when `VkPhysicalDeviceFeatures.wideLines` is exposed.
+    /// Required to pick a `VkPipelineRasterizationStateCreateInfo.lineWidth`
+    /// greater than 1.0. Falls back silently to 1-px lines otherwise.
+    [[nodiscard]] bool HasWideLines() const { return m_hasWideLines; }
+
 private:
     void CreateAllocator(VkInstance instance);
     void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
@@ -49,6 +54,7 @@ private:
     uint32_t m_presentQueueFamily = 0;
     bool m_hasPresentQueue = false;
     bool m_hasSmoothLines = false;
+    bool m_hasWideLines = false;
     VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 
