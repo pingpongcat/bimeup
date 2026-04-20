@@ -75,10 +75,15 @@ protected:
         s_context = std::make_unique<VulkanContext>(true);
         s_device = std::make_unique<Device>(s_context->GetInstance());
         s_renderPass = CreateColorDepthRenderPass(s_device->GetDevice());
-        s_cameraLayout = std::make_unique<DescriptorSetLayout>(
+        // RP.17.8.a — the overlay fragment now samples the clip-planes UBO at
+        // binding 3 to discard fragments behind any active axis plane, so the
+        // descriptor set layout handed to the pipeline must declare that binding
+        // alongside the camera UBO at binding 0.
+        s_dsLayout = std::make_unique<DescriptorSetLayout>(
             *s_device,
             std::vector<LayoutBinding>{
-                {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT}});
+                {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
+                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
@@ -90,7 +95,7 @@ protected:
     static void TearDownTestSuite() {
         s_vert.reset();
         s_frag.reset();
-        s_cameraLayout.reset();
+        s_dsLayout.reset();
         if (s_renderPass != VK_NULL_HANDLE) {
             vkDestroyRenderPass(s_device->GetDevice(), s_renderPass, nullptr);
             s_renderPass = VK_NULL_HANDLE;
@@ -102,7 +107,7 @@ protected:
     void SetUp() override {
         m_device = s_device.get();
         m_renderPass = s_renderPass;
-        m_cameraLayout = s_cameraLayout.get();
+        m_dsLayout = s_dsLayout.get();
         m_vert = s_vert.get();
         m_frag = s_frag.get();
     }
@@ -110,7 +115,7 @@ protected:
 
     Device* m_device = nullptr;
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    DescriptorSetLayout* m_cameraLayout = nullptr;
+    DescriptorSetLayout* m_dsLayout = nullptr;
     Shader* m_vert = nullptr;
     Shader* m_frag = nullptr;
     std::unique_ptr<EdgeOverlayPipeline> m_pipeline;
@@ -118,7 +123,7 @@ protected:
     static std::unique_ptr<VulkanContext> s_context;
     static std::unique_ptr<Device> s_device;
     static VkRenderPass s_renderPass;
-    static std::unique_ptr<DescriptorSetLayout> s_cameraLayout;
+    static std::unique_ptr<DescriptorSetLayout> s_dsLayout;
     static std::unique_ptr<Shader> s_vert;
     static std::unique_ptr<Shader> s_frag;
 };
@@ -126,7 +131,7 @@ protected:
 std::unique_ptr<VulkanContext> EdgeOverlayPipelineTest::s_context;
 std::unique_ptr<Device> EdgeOverlayPipelineTest::s_device;
 VkRenderPass EdgeOverlayPipelineTest::s_renderPass = VK_NULL_HANDLE;
-std::unique_ptr<DescriptorSetLayout> EdgeOverlayPipelineTest::s_cameraLayout;
+std::unique_ptr<DescriptorSetLayout> EdgeOverlayPipelineTest::s_dsLayout;
 std::unique_ptr<Shader> EdgeOverlayPipelineTest::s_vert;
 std::unique_ptr<Shader> EdgeOverlayPipelineTest::s_frag;
 
@@ -139,7 +144,7 @@ TEST_F(EdgeOverlayPipelineTest, EdgeOverlayShadersCompiledToSpirv) {
 TEST_F(EdgeOverlayPipelineTest, ConstructsWithValidHandles) {
     m_pipeline = std::make_unique<EdgeOverlayPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_cameraLayout->GetLayout());
+        m_dsLayout->GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
@@ -152,9 +157,29 @@ TEST_F(EdgeOverlayPipelineTest, ConstructsForMrtMainPass) {
     // intact when this pipeline is bound inside the main pass.
     m_pipeline = std::make_unique<EdgeOverlayPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_cameraLayout->GetLayout(),
+        m_dsLayout->GetLayout(),
         /*colorAttachmentCount=*/1,
         /*disableSecondaryColorWrites=*/true);
+
+    EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
+    EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
+}
+
+TEST_F(EdgeOverlayPipelineTest, ConstructsWithClipPlaneLayout) {
+    // RP.17.8.a — asserts the pipeline accepts a descriptor set layout that
+    // declares binding 3 (ClipPlanesUBO) in addition to the camera UBO at
+    // binding 0. The overlay fragment shader samples that UBO to discard
+    // fragments behind any active axis clip plane; a layout missing binding 3
+    // would fail SPIR-V reflection during pipeline creation.
+    DescriptorSetLayout layoutWithClipPlanes(
+        *m_device,
+        std::vector<LayoutBinding>{
+            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
+            {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+
+    m_pipeline = std::make_unique<EdgeOverlayPipeline>(
+        *m_device, *m_vert, *m_frag, m_renderPass,
+        layoutWithClipPlanes.GetLayout());
 
     EXPECT_NE(m_pipeline->GetPipeline(), VK_NULL_HANDLE);
     EXPECT_NE(m_pipeline->GetLayout(), VK_NULL_HANDLE);
@@ -167,7 +192,7 @@ TEST_F(EdgeOverlayPipelineTest, ConstructsWithSmoothLinesWhenSupported) {
     }
     m_pipeline = std::make_unique<EdgeOverlayPipeline>(
         *m_device, *m_vert, *m_frag, m_renderPass,
-        m_cameraLayout->GetLayout(),
+        m_dsLayout->GetLayout(),
         /*colorAttachmentCount=*/1,
         /*disableSecondaryColorWrites=*/false,
         /*smoothLines=*/true);
@@ -179,7 +204,7 @@ TEST_F(EdgeOverlayPipelineTest, ConstructsWithSmoothLinesWhenSupported) {
 TEST_F(EdgeOverlayPipelineTest, DestructorCleansUp) {
     {
         EdgeOverlayPipeline pipeline(*m_device, *m_vert, *m_frag, m_renderPass,
-                                     m_cameraLayout->GetLayout());
+                                     m_dsLayout->GetLayout());
         EXPECT_NE(pipeline.GetPipeline(), VK_NULL_HANDLE);
     }
     // Validation layers would catch leaked pipeline/layout
