@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 #include <renderer/AccelerationStructure.h>
+#include <renderer/Buffer.h>
 #include <renderer/Device.h>
+#include <renderer/Lighting.h>
 #include <renderer/MeshBuffer.h>
 #include <renderer/RenderLoop.h>
+#include <renderer/ShadowPass.h>
 #include <renderer/Swapchain.h>
 #include <renderer/TopLevelAS.h>
 #include <renderer/VulkanContext.h>
@@ -15,9 +18,13 @@
 #include <GLFW/glfw3.h>
 
 using bimeup::renderer::AccelerationStructure;
+using bimeup::renderer::Buffer;
+using bimeup::renderer::BufferType;
 using bimeup::renderer::Device;
+using bimeup::renderer::LightingUbo;
 using bimeup::renderer::MeshData;
 using bimeup::renderer::RenderLoop;
+using bimeup::renderer::ShadowMap;
 using bimeup::renderer::Swapchain;
 using bimeup::renderer::TlasInstance;
 using bimeup::renderer::TopLevelAS;
@@ -437,9 +444,24 @@ TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
     // EndFrame below.
     m_renderLoop->SetRtIndoorInputs(glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F)),
                                     /*enabled=*/true);
+    // Stage 9.8.b.3 — sun composite needs the RP.18 shadow-transmission
+    // attachment + the LightingUBO buffer. A ShadowMap is the natural
+    // producer of both handles in a live viewer; construct a small one
+    // here purely to hand valid Vulkan handles to the composite descriptor
+    // writes. A zeroed LightingUbo is fine — the composite samples it, and
+    // validation layers don't care about the math producing a black frame.
+    ShadowMap shadowMap(*m_device, /*resolution=*/256U);
+    LightingUbo lightingUbo{};
+    Buffer lightingBuffer(*m_device, BufferType::Uniform, sizeof(LightingUbo),
+                          &lightingUbo);
+    m_renderLoop->SetRtSunCompositeInputs(shadowMap.GetTransmissionImageView(),
+                                          shadowMap.GetTransmissionSampler(),
+                                          lightingBuffer.GetBuffer(),
+                                          sizeof(LightingUbo));
     EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
     EXPECT_NE(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
     EXPECT_NE(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
+    EXPECT_TRUE(m_renderLoop->IsRtSunCompositeBuilt());
 
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
@@ -456,6 +478,7 @@ TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
     EXPECT_EQ(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
     EXPECT_EQ(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
     EXPECT_EQ(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
+    EXPECT_FALSE(m_renderLoop->IsRtSunCompositeBuilt());
 }
 
 // Stage 9.8.a — tonemap AO source must follow mode + capability. Default is

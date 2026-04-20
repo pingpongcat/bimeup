@@ -6,6 +6,7 @@
 #include <renderer/RtAoPass.h>
 #include <renderer/RtIndoorPass.h>
 #include <renderer/RtShadowPass.h>
+#include <renderer/RtSunCompositePipeline.h>
 #include <renderer/Shader.h>
 #include <renderer/SmaaLut.h>
 #include <renderer/SsaoBlurPipeline.h>
@@ -159,6 +160,16 @@ bool RenderLoop::EndFrame() {
     // skipped — the cheap directional fill in `basic.frag` +
     // `Lighting.cpp` remains the sole fill source.
     DispatchRtIndoor(cmd);
+
+    // Stage 9.8.b.3 — RT sun composite. Transitions the per-swap HDR
+    // image to GENERAL, additively writes `keyColor * NdotL *
+    // transmittedTint * rtVisibility` into it, then transitions back to
+    // SHADER_READ_ONLY_OPTIMAL for the tonemap sampler. Safe no-op unless
+    // HybridRt is active, the pipeline + descriptors are built, the
+    // caller has supplied transmission + LightingUBO handles, and the
+    // shadow dispatch above actually wrote visibility (`m_rtTlas` non-null
+    // + shadow pass valid).
+    DispatchRtSunComposite(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
     // tonemap pass. Dispatches linearize then three mip downsamples with
@@ -410,10 +421,17 @@ void RenderLoop::SetRenderMode(RenderMode mode) {
         BuildRtShadowPass();
         BuildRtAoPass();
         BuildRtIndoorPass();
+        // Stage 9.8.b.3 — sun composite consumes the RT shadow-visibility
+        // view (owned by `m_rtShadowPass`), so it must build AFTER the
+        // shadow pass. Build unconditionally on HybridRt; the per-frame
+        // dispatch gate skips until the caller wires up the transmission
+        // + LightingUBO handles via `SetRtSunCompositeInputs`.
+        BuildRtSunComposite();
     } else {
         // Wait for in-flight frames so it's safe to destroy the pipelines /
         // storage images without racing a pending trace.
         WaitIdle();
+        DestroyRtSunComposite();
         DestroyRtShadowPass();
         DestroyRtAoPass();
         DestroyRtIndoorPass();
@@ -651,6 +669,283 @@ void RenderLoop::DispatchRtIndoor(VkCommandBuffer cmd) {
                              m_rtView, m_proj, m_rtIndoorDir);
 }
 
+void RenderLoop::SetRtSunCompositeInputs(VkImageView shadowTransmissionView,
+                                         VkSampler shadowTransmissionSampler,
+                                         VkBuffer lightingUbo,
+                                         VkDeviceSize lightingUboSize) {
+    m_rtSunTransmissionView = shadowTransmissionView;
+    m_rtSunTransmissionSampler = shadowTransmissionSampler;
+    m_rtSunLightingUbo = lightingUbo;
+    m_rtSunLightingUboSize = lightingUboSize;
+    // If the pipeline is already built (Hybrid RT active), refresh
+    // descriptor bindings so the next dispatch picks up the new handles.
+    // Before the pipeline exists, the cache is just retained — the later
+    // `BuildRtSunComposite` call on `SetRenderMode(HybridRt)` runs
+    // `UpdateRtSunCompositeDescriptors` once the sets are allocated.
+    UpdateRtSunCompositeDescriptors();
+}
+
+void RenderLoop::BuildRtSunComposite() {
+    if (!m_device.HasRayTracing()) {
+        return;
+    }
+    if (m_rtSunCompositePipeline) {
+        return;
+    }
+    VkDevice dev = m_device.GetDevice();
+
+    // Descriptor set layout — six bindings matching `rt_sun_composite.comp`:
+    //   0-3: CIS (depth / normal / rt visibility / shadow transmission)
+    //   4: LightingUBO (uniform buffer)
+    //   5: HDR storage image (additive RW)
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorCount = 1;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    bindings[4].binding = 4;
+    bindings[4].descriptorCount = 1;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[5].binding = 5;
+    bindings[5].descriptorCount = 1;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr,
+                                    &m_rtSunCompositeSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtSunComposite descriptor-set layout failed");
+    }
+
+    // One descriptor set per swap image — HDR + normal views differ per swap.
+    const uint32_t imageCount = m_swapchain.GetImageCount();
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 4U * imageCount;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = imageCount;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[2].descriptorCount = imageCount;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = imageCount;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    if (vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+                               &m_rtSunCompositeDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtSunComposite descriptor pool failed");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_rtSunCompositeSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_rtSunCompositeDescriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+    m_rtSunCompositeDescriptorSets.assign(imageCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(dev, &allocInfo,
+                                 m_rtSunCompositeDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("RenderLoop: RtSunComposite descriptor-set alloc failed");
+    }
+
+    // Shader + pipeline. The shader is loaded here (rather than in the ctor
+    // alongside the tonemap shaders) so non-RT devices never touch the SPIR-V
+    // — matches the rule that RT code stays behind the capability probe.
+    m_rtSunCompositeShader = std::make_unique<Shader>(
+        m_device, ShaderStage::Compute, m_shaderDir + "/rt_sun_composite.comp.spv");
+    m_rtSunCompositePipeline = std::make_unique<RtSunCompositePipeline>(
+        m_device, *m_rtSunCompositeShader, m_rtSunCompositeSetLayout);
+
+    // Initial descriptor update picks up whatever handles the caller has
+    // already wired via `SetRtSunCompositeInputs`; if the transmission +
+    // UBO handles are still null the update is a no-op and the per-frame
+    // dispatch gate keeps the pass off until they land.
+    UpdateRtSunCompositeDescriptors();
+}
+
+void RenderLoop::DestroyRtSunComposite() {
+    m_rtSunCompositePipeline.reset();
+    m_rtSunCompositeShader.reset();
+    if (m_rtSunCompositeDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device.GetDevice(), m_rtSunCompositeDescriptorPool, nullptr);
+        m_rtSunCompositeDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_rtSunCompositeDescriptorSets.clear();
+    if (m_rtSunCompositeSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device.GetDevice(), m_rtSunCompositeSetLayout, nullptr);
+        m_rtSunCompositeSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+void RenderLoop::UpdateRtSunCompositeDescriptors() {
+    if (!m_rtSunCompositePipeline) {
+        return;
+    }
+    if (m_rtSunCompositeDescriptorSets.empty()) {
+        return;
+    }
+    // Skip until all inputs are live. The RT shadow pass must be built
+    // (it owns binding 2's visibility view), and the caller must have
+    // wired the transmission map + LightingUBO. If any is missing the
+    // dispatch gate already short-circuits; leaving descriptor bindings
+    // uninitialised here is fine because dispatch never fires.
+    if (!m_rtShadowPass || !m_rtShadowPass->IsValid()) {
+        return;
+    }
+    if (m_rtSunTransmissionView == VK_NULL_HANDLE ||
+        m_rtSunTransmissionSampler == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_rtSunLightingUbo == VK_NULL_HANDLE || m_rtSunLightingUboSize == 0) {
+        return;
+    }
+    if (m_rtDepthSampler == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const uint32_t imageCount = static_cast<uint32_t>(m_rtSunCompositeDescriptorSets.size());
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = m_depthImageView;
+        depthInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_normalImageViews[i];
+        normalInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorImageInfo visibilityInfo{};
+        visibilityInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        visibilityInfo.imageView = m_rtShadowPass->GetVisibilityImageView();
+        visibilityInfo.sampler = m_rtDepthSampler;
+
+        VkDescriptorImageInfo transmissionInfo{};
+        transmissionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        transmissionInfo.imageView = m_rtSunTransmissionView;
+        transmissionInfo.sampler = m_rtSunTransmissionSampler;
+
+        VkDescriptorBufferInfo uboInfo{};
+        uboInfo.buffer = m_rtSunLightingUbo;
+        uboInfo.offset = 0;
+        uboInfo.range = m_rtSunLightingUboSize;
+
+        VkDescriptorImageInfo hdrInfo{};
+        hdrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        hdrInfo.imageView = m_hdrImageViews[i];
+
+        std::array<VkWriteDescriptorSet, 6> writes{};
+        for (uint32_t b = 0; b < writes.size(); ++b) {
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet = m_rtSunCompositeDescriptorSets[i];
+            writes[b].dstBinding = b;
+            writes[b].descriptorCount = 1;
+        }
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &depthInfo;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &normalInfo;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].pImageInfo = &visibilityInfo;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].pImageInfo = &transmissionInfo;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[4].pBufferInfo = &uboInfo;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[5].pImageInfo = &hdrInfo;
+
+        vkUpdateDescriptorSets(m_device.GetDevice(),
+                               static_cast<uint32_t>(writes.size()), writes.data(),
+                               0, nullptr);
+    }
+}
+
+void RenderLoop::DispatchRtSunComposite(VkCommandBuffer cmd) {
+    if (m_renderMode != RenderMode::HybridRt) {
+        return;
+    }
+    if (!m_rtSunCompositePipeline) {
+        return;
+    }
+    if (!m_rtShadowPass || !m_rtShadowPass->IsValid()) {
+        return;
+    }
+    if (m_rtTlas == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_rtSunTransmissionView == VK_NULL_HANDLE ||
+        m_rtSunLightingUbo == VK_NULL_HANDLE) {
+        return;
+    }
+    if (m_currentImageIndex >= m_rtSunCompositeDescriptorSets.size()) {
+        return;
+    }
+
+    const VkExtent2D extent = m_swapchain.GetExtent();
+
+    // HDR is in SHADER_READ_ONLY_OPTIMAL after the main render pass's
+    // finalLayout transition; compute needs GENERAL to read+write via
+    // imageLoad/imageStore. Source-stage is COLOR_ATTACHMENT_OUTPUT so the
+    // render pass's writes are fully visible before the compute read.
+    VkImageMemoryBarrier toGeneral{};
+    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGeneral.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toGeneral.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.image = m_hdrImages[m_currentImageIndex];
+    toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toGeneral.subresourceRange.levelCount = 1;
+    toGeneral.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toGeneral);
+
+    m_rtSunCompositePipeline->Bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            m_rtSunCompositePipeline->GetLayout(), 0, 1,
+                            &m_rtSunCompositeDescriptorSets[m_currentImageIndex], 0,
+                            nullptr);
+
+    RtSunCompositePipeline::PushConstants pc{};
+    pc.invViewProj = glm::inverse(m_proj * m_rtView);
+    pc.invView = glm::inverse(m_rtView);
+    pc.extent = glm::uvec2(extent.width, extent.height);
+    vkCmdPushConstants(cmd, m_rtSunCompositePipeline->GetLayout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+    constexpr uint32_t kTileSize = 8;
+    vkCmdDispatch(cmd, (extent.width + kTileSize - 1) / kTileSize,
+                  (extent.height + kTileSize - 1) / kTileSize, 1);
+
+    // Transition back to SHADER_READ_ONLY_OPTIMAL so the tonemap fragment
+    // can sample the composited HDR image.
+    VkImageMemoryBarrier toRead{};
+    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.image = m_hdrImages[m_currentImageIndex];
+    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toRead.subresourceRange.levelCount = 1;
+    toRead.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &toRead);
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -676,6 +971,13 @@ void RenderLoop::RecreateForSwapchain() {
         BuildRtShadowPass();
         BuildRtAoPass();
         BuildRtIndoorPass();
+        // Stage 9.8.b.3 — composite descriptor sets point at per-swap HDR +
+        // normal views which were just re-created, and at the freshly
+        // rebuilt RT shadow-visibility view. Full rebuild is simpler than
+        // a targeted descriptor refresh and matches the lifecycle of the
+        // other RT passes.
+        DestroyRtSunComposite();
+        BuildRtSunComposite();
     }
     // Stage 9.8.a — rebinding the tonemap's RT AO sampler to the freshly
     // created RT AO view. Safe no-op in raster mode (shouldUseRtAo ==
@@ -913,7 +1215,12 @@ void RenderLoop::CreateHdrResources() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;  // single-sample resolve target
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // Stage 9.8.b.3 — STORAGE_BIT lets the Hybrid-RT sun composite
+        // (`rt_sun_composite.comp`) additively write the sun term back into
+        // the per-swap HDR image. Raster mode never runs the compute so the
+        // extra flag is free on the classical path.
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_STORAGE_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         VmaAllocationCreateInfo allocInfo{};
@@ -2202,7 +2509,12 @@ void RenderLoop::Cleanup() {
     // Stage 9.4.b / 9.5.b / 9.7.b — RT pass resources. Each pass owns
     // its own VMA allocations (visibility / AO / indoor image) so the
     // teardown must run before the allocator shuts down with the rest
-    // of the renderer.
+    // of the renderer. Stage 9.8.b.3 — sun composite doesn't own VMA
+    // images, but its descriptor pool + pipeline layout need destroying
+    // before the logical device is torn down. Drop it first so the
+    // per-swap descriptor sets release cleanly before the underlying
+    // views go away in `CleanupFrameResources` below.
+    DestroyRtSunComposite();
     DestroyRtShadowPass();
     DestroyRtAoPass();
     DestroyRtIndoorPass();

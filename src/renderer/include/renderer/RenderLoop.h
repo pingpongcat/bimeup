@@ -30,6 +30,7 @@ class SsaoBlurPipeline;
 class RtShadowPass;
 class RtAoPass;
 class RtIndoorPass;
+class RtSunCompositePipeline;
 
 class RenderLoop {
 public:
@@ -253,6 +254,32 @@ public:
     /// lacks RT support, or the caller has `enabled = false` and the
     /// pass never built.
     [[nodiscard]] VkImageView GetRtIndoorVisibilityView() const;
+
+    /// Stage 9.8.b.3 — caller-owned inputs for the Hybrid-RT sun composite:
+    /// the RP.18 shadow-transmission attachment (view + sampler, owned by
+    /// `ShadowMap`) and the scene's `LightingUbo` buffer. The pass samples
+    /// these alongside the main-pass depth + normal G-buffers and the RT
+    /// shadow-visibility image to re-apply the sun term additively into the
+    /// HDR target (see `rt_sun_composite.comp`).
+    ///
+    /// Wiring is lazy: calling this while the render mode is `Rasterised`
+    /// simply caches the handles so a subsequent `SetRenderMode(HybridRt)`
+    /// update picks them up. Passing `VK_NULL_HANDLE` for the view or
+    /// buffer clears the cache; the per-frame dispatch gate then skips
+    /// until the caller re-supplies valid handles.
+    void SetRtSunCompositeInputs(VkImageView shadowTransmissionView,
+                                 VkSampler shadowTransmissionSampler,
+                                 VkBuffer lightingUbo,
+                                 VkDeviceSize lightingUboSize);
+
+    /// Stage 9.8.b.3 — true when the Hybrid-RT sun composite pipeline +
+    /// descriptors are allocated (i.e. Hybrid RT mode is active on an RT-
+    /// capable device and the composite build succeeded). Mirrors
+    /// `IsRtAoSourcedInTonemap` for the sun routing. Observable from tests
+    /// that flip render mode to verify resources come and go in lockstep.
+    [[nodiscard]] bool IsRtSunCompositeBuilt() const {
+        return m_rtSunCompositePipeline != nullptr;
+    }
 
 private:
     void CreateCommandPool();
@@ -593,6 +620,33 @@ private:
     void BuildRtIndoorPass();
     void DestroyRtIndoorPass();
     void DispatchRtIndoor(VkCommandBuffer cmd);
+
+    // Stage 9.8.b.3 — RT sun composite wire. The compute pipeline + its
+    // descriptor pool / per-swap descriptor sets are allocated on the flip
+    // to `HybridRt` (guarded by `Device::HasRayTracing()`) and torn down
+    // on the flip back to `Rasterised`. Pipeline layout doesn't depend on
+    // swap extent, but the descriptor pool + sets do (HDR / normal views
+    // are per-swap-image), so resizing goes through a full rebuild like
+    // the other RT passes.
+    //
+    // The transmission view + sampler + `LightingUbo` buffer are owned by
+    // the caller (main.cpp's ShadowMap + LightingUbo Buffer). Caching them
+    // here lets the first `SetRenderMode(HybridRt)` pick them up whether
+    // they were wired before or after the mode flip.
+    std::unique_ptr<Shader> m_rtSunCompositeShader;
+    std::unique_ptr<RtSunCompositePipeline> m_rtSunCompositePipeline;
+    VkDescriptorSetLayout m_rtSunCompositeSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_rtSunCompositeDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_rtSunCompositeDescriptorSets;
+    VkImageView m_rtSunTransmissionView = VK_NULL_HANDLE;
+    VkSampler m_rtSunTransmissionSampler = VK_NULL_HANDLE;
+    VkBuffer m_rtSunLightingUbo = VK_NULL_HANDLE;
+    VkDeviceSize m_rtSunLightingUboSize = 0;
+
+    void BuildRtSunComposite();
+    void DestroyRtSunComposite();
+    void UpdateRtSunCompositeDescriptors();
+    void DispatchRtSunComposite(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer
