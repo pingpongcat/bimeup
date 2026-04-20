@@ -419,6 +419,35 @@ void RenderLoop::SetRenderMode(RenderMode mode) {
         DestroyRtIndoorPass();
         m_rtTlas = VK_NULL_HANDLE;
     }
+    // Stage 9.8.a — route the tonemap AO sample to the new source. Must run
+    // after the Build/Destroy calls above so the RT AO view is either live
+    // (HybridRt on RT device) or null (raster path / non-RT device) by the
+    // time the descriptor write lands.
+    RefreshTonemapRtRouting();
+}
+
+void RenderLoop::RefreshTonemapRtRouting() {
+    // Route the tonemap's AO sample to the RT image only when both the
+    // mode asks for it AND the RT AO pass actually built (guarded by
+    // `Device::HasRayTracing()` inside `BuildRtAoPass`). On non-RT devices
+    // Hybrid RT accepts the mode flip for UI honesty but there's nothing
+    // to sample from, so the flag stays false → classical frame stays
+    // bit-compatible.
+    const bool shouldUseRtAo =
+        m_renderMode == RenderMode::HybridRt && GetRtAoImageView() != VK_NULL_HANDLE;
+    m_tonemapUseRtAo = shouldUseRtAo;
+    m_exposurePush.useRtAo = shouldUseRtAo ? 1.0F : 0.0F;
+
+    // Rebind descriptor binding 2 to either the RT AO view (routing on)
+    // or the XeGTAO fallback (routing off). Needs the tonemap descriptor
+    // pool to exist — during ctor/resize `CreateTonemapDescriptors` is
+    // called before any RT pass exists, so the ctor path's
+    // `UpdateTonemapDescriptors` already routes to the fallback; this
+    // helper is only meaningful once descriptors + (maybe) an RT pass are
+    // live.
+    if (m_tonemapDescriptorPool != VK_NULL_HANDLE) {
+        UpdateTonemapDescriptors();
+    }
 }
 
 void RenderLoop::SetRtShadowInputs(VkAccelerationStructureKHR tlas,
@@ -648,6 +677,12 @@ void RenderLoop::RecreateForSwapchain() {
         BuildRtAoPass();
         BuildRtIndoorPass();
     }
+    // Stage 9.8.a — rebinding the tonemap's RT AO sampler to the freshly
+    // created RT AO view. Safe no-op in raster mode (shouldUseRtAo ==
+    // false, binding 2 stays on the XeGTAO fallback view — but still
+    // needs a refresh because the ctor-path update above bound the old
+    // view which has just been destroyed).
+    RefreshTonemapRtRouting();
 }
 
 void RenderLoop::CreateCommandPool() {
@@ -1075,10 +1110,13 @@ void RenderLoop::CreateTonemapDescriptors() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Two bindings: 0 = HDR colour resolve, 1 = post-blur AO (half-res R8,
-    // RP.5d). tonemap.frag multiplies AO pre-ACES then runs the ACES
-    // curve. RP.13b retired binding 2 (depth pyramid) along with fog.
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    // Three bindings: 0 = HDR colour resolve, 1 = XeGTAO post-blur AO
+    // (half-res R8, RP.5d), 2 = RT AO image (Stage 9.8.a; falls back to
+    // the XeGTAO view when RT mode is off so the sampler always has a
+    // valid target). tonemap.frag mixes between bindings 1 and 2 via the
+    // `useRtAo` push constant before multiplying into HDR and running
+    // ACES.
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1099,7 +1137,7 @@ void RenderLoop::CreateTonemapDescriptors() {
     uint32_t imageCount = m_swapchain.GetImageCount();
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = imageCount * 2;  // HDR + AO per set
+    poolSize.descriptorCount = imageCount * 3;  // HDR + XeGTAO AO + RT AO per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1125,6 +1163,13 @@ void RenderLoop::CreateTonemapDescriptors() {
 }
 
 void RenderLoop::UpdateTonemapDescriptors() {
+    // RT AO view is shared across all descriptor sets — the RT pass writes
+    // one image per frame regardless of swap count. Resolved once here;
+    // binding 2 falls back to the per-image XeGTAO view when RT isn't
+    // sourcing, so the sampler always has a valid target (the shader's
+    // mix + push-constant gate keeps the raster path bit-compatible).
+    const VkImageView rtAoView = GetRtAoImageView();
+
     for (uint32_t i = 0; i < m_tonemapDescriptorSets.size(); ++i) {
         VkDescriptorImageInfo hdrInfo{};
         hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1136,12 +1181,23 @@ void RenderLoop::UpdateTonemapDescriptors() {
         // after CreateSsaoResources + ClearAoImagesToWhite so the binding
         // ends up pointing at a valid SHADER_READ_ONLY_OPTIMAL image before
         // the first frame dispatches.
+        const VkImageView xegtaoView =
+            i < m_aoViewsA.size() ? m_aoViewsA[i] : VK_NULL_HANDLE;
         VkDescriptorImageInfo aoInfo{};
         aoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        aoInfo.imageView = i < m_aoViewsA.size() ? m_aoViewsA[i] : VK_NULL_HANDLE;
+        aoInfo.imageView = xegtaoView;
         aoInfo.sampler = m_aoSampler;
 
-        std::array<VkWriteDescriptorSet, 2> writes{};
+        // Stage 9.8.a — binding 2 is the RT AO source when Hybrid RT is
+        // active, else falls back to the XeGTAO view so the descriptor
+        // binding is always populated (tonemap.frag's mix at useRtAo=0
+        // ignores this sample, but Vulkan still validates the binding).
+        VkDescriptorImageInfo rtAoInfo{};
+        rtAoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        rtAoInfo.imageView = rtAoView != VK_NULL_HANDLE ? rtAoView : xegtaoView;
+        rtAoInfo.sampler = m_aoSampler;
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_tonemapDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -1157,6 +1213,15 @@ void RenderLoop::UpdateTonemapDescriptors() {
             writes[writeCount].descriptorCount = 1;
             writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[writeCount].pImageInfo = &aoInfo;
+            ++writeCount;
+        }
+        if (rtAoInfo.imageView != VK_NULL_HANDLE && rtAoInfo.sampler != VK_NULL_HANDLE) {
+            writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[writeCount].dstSet = m_tonemapDescriptorSets[i];
+            writes[writeCount].dstBinding = 2;
+            writes[writeCount].descriptorCount = 1;
+            writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[writeCount].pImageInfo = &rtAoInfo;
             ++writeCount;
         }
         vkUpdateDescriptorSets(m_device.GetDevice(), writeCount, writes.data(), 0, nullptr);

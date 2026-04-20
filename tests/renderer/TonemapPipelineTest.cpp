@@ -70,13 +70,16 @@ protected:
         s_context = std::make_unique<VulkanContext>(true);
         s_device = std::make_unique<Device>(s_context->GetInstance());
         s_renderPass = CreateColorOnlyRenderPass(s_device->GetDevice());
-        // tonemap.frag: binding 0 = HDR colour, binding 1 = half-res AO
-        // (RP.5d). RP.13b retired binding 2 (depth pyramid) along with fog.
+        // tonemap.frag: binding 0 = HDR colour, binding 1 = XeGTAO AO
+        // (RP.5d), binding 2 = RT AO (Stage 9.8.a; mixed with binding 1 via
+        // the `useRtAo` push constant).
         s_samplerLayout = std::make_unique<DescriptorSetLayout>(
             *s_device,
             std::vector<LayoutBinding>{
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT}});
+                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
+                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                 VK_SHADER_STAGE_FRAGMENT_BIT}});
 
         std::string shaderDir = BIMEUP_SHADER_DIR;
         s_vert = std::make_unique<Shader>(*s_device, ShaderStage::Vertex,
@@ -152,14 +155,12 @@ TEST_F(TonemapPipelineTest, DestructorCleansUp) {
     // Validation layers would catch leaked pipeline/layout
 }
 
-// RP.13b — tonemap.frag must NOT declare a binding-2 sampler after fog
-// retirement removed the depth-pyramid read. Walks the SPIR-V
-// OpDecorate stream and asserts no sampled image exists at (set 0,
-// binding 2); a regression that re-added the depth sampler would let a
-// 3-binding shader link against the 2-binding CPU layout and only trip
-// at validation time. (Symmetric to the binding-3 and binding-4 guards
-// below that pin earlier retirements.)
-TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingTwo) {
+// Stage 9.8.a reclaimed binding 2 for the RT AO sampler (fog was retired
+// in RP.13b). Walks the SPIR-V OpDecorate stream and asserts that a
+// sampled image IS declared at (set 0, binding 2) — a regression that
+// removed the binding would silently degrade Hybrid RT to XeGTAO AO with
+// no compile-time signal.
+TEST_F(TonemapPipelineTest, FragmentShaderDeclaresRtAoBindingTwo) {
     std::string shaderDir = BIMEUP_SHADER_DIR;
     std::ifstream file(shaderDir + "/tonemap.frag.spv", std::ios::binary);
     ASSERT_TRUE(file.good());
@@ -186,8 +187,8 @@ TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingTwo) {
         }
         idx += len;
     }
-    EXPECT_FALSE(foundBinding2)
-        << "tonemap.frag SPIR-V still declares binding 2 (fog retired in RP.13b)";
+    EXPECT_TRUE(foundBinding2)
+        << "tonemap.frag SPIR-V missing binding 2 (RT AO source, Stage 9.8.a)";
 }
 
 // RP.13a — tonemap.frag must NOT declare a binding-3 sampler after SSIL
@@ -225,17 +226,17 @@ TEST_F(TonemapPipelineTest, FragmentShaderDoesNotDeclareBindingThree) {
         << "tonemap.frag SPIR-V still declares binding 3 (SSIL retired in RP.13a)";
 }
 
-// RP.13b push-constant contract between tonemap.frag and the CPU
-// struct after fog retirement. Only `float exposure` remains, at
-// offset 0, for a 4-byte block. Prior layout was 28 bytes
-// (`vec4 fogColorEnabled` + `float fogStart` + `float fogEnd` +
-// `float exposure`) — RP.13b dropped all but exposure.
-TEST(TonemapPushConstantsTest, SizeIsFourBytes) {
-    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 4U);
+// Stage 9.8.a push-constant contract between tonemap.frag and the CPU
+// struct. `float exposure` at offset 0 (kept from RP.13b), `float useRtAo`
+// at offset 4 (added by Stage 9.8.a to select between XeGTAO AO at binding
+// 1 and RT AO at binding 2). 8 bytes total — RP.13b had this at 4.
+TEST(TonemapPushConstantsTest, SizeIsEightBytes) {
+    EXPECT_EQ(sizeof(TonemapPipeline::PushConstants), 8U);
 }
 
 TEST(TonemapPushConstantsTest, FieldOffsetsMatchShaderLayout) {
     EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, exposure), 0U);
+    EXPECT_EQ(offsetof(TonemapPipeline::PushConstants, useRtAo), 4U);
 }
 
 // RP.12a — tonemap.frag must NOT declare a binding-4 sampler after bloom

@@ -458,3 +458,20 @@ TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
     EXPECT_EQ(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
 }
 
+// Stage 9.8.a — tonemap AO source must follow mode + capability. Default is
+// Rasterised → XeGTAO AO. Flipping to Hybrid RT on an RT-capable device
+// switches the tonemap to sample the RT AO image; on a non-RT device the
+// flag stays false because `BuildRtAoPass` is a no-op (the AO view is null,
+// so there's nothing to route). Flipping back always restores the raster
+// source regardless of capability — bit-compatible raster output guaranteed.
+TEST_F(RenderLoopTest, TonemapRtAoSourcingTracksRenderMode) {
+    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
+    EXPECT_FALSE(m_renderLoop->IsRtAoSourcedInTonemap());
+
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
+    EXPECT_EQ(m_renderLoop->IsRtAoSourcedInTonemap(), m_device->HasRayTracing());
+
+    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
+    EXPECT_FALSE(m_renderLoop->IsRtAoSourcedInTonemap());
+}
+

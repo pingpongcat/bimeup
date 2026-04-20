@@ -220,11 +220,19 @@ public:
     void SetRtAoInputs(float radius);
 
     /// Sampled view of the RT AO pass image (R8_UNORM,
-    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 picks
-    /// this as the AO contribution when `HybridRt` is selected; before
-    /// then it's observable but not consumed. `VK_NULL_HANDLE` when RT
-    /// mode is off or the device lacks RT support.
+    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8.a wires
+    /// this into the tonemap composite when `HybridRt` is selected on an
+    /// RT-capable device; see `IsRtAoSourcedInTonemap()`. `VK_NULL_HANDLE`
+    /// when RT mode is off or the device lacks RT support.
     [[nodiscard]] VkImageView GetRtAoImageView() const;
+
+    /// Stage 9.8.a — true when the tonemap's AO sample comes from the RT
+    /// AO pass instead of XeGTAO. Set by `SetRenderMode(HybridRt)` on an
+    /// RT-capable device; cleared by the flip back to `Rasterised` (or
+    /// when the device can't build the RT AO pass). The raster path is
+    /// bit-compatible whenever this is false — `tonemap.frag`'s
+    /// `useRtAo` push constant degenerates the mix to the XeGTAO sample.
+    [[nodiscard]] bool IsRtAoSourcedInTonemap() const { return m_tonemapUseRtAo; }
 
     /// Stage 9.7.b — per-frame inputs for the RT indoor-fill pass. TLAS
     /// and view are re-used from `SetRtShadowInputs`. `fillDirWorld` is
@@ -506,9 +514,16 @@ private:
     float m_ssaoShadowPower = 1.5F;
 
     // RP.13b — tonemap push-constant state fed into `tonemap.frag` each
-    // frame. Now only holds `exposure`; `SetExposure` writes it and the
-    // struct is uploaded once per tonemap draw via vkCmdPushConstants.
+    // frame. Holds `exposure` + (Stage 9.8.a) `useRtAo`; `SetExposure`
+    // writes the former and `SetRenderMode` writes the latter. Struct is
+    // uploaded once per tonemap draw via vkCmdPushConstants.
     TonemapPipeline::PushConstants m_exposurePush{};
+
+    // Stage 9.8.a — mirror of `m_exposurePush.useRtAo` as a bool, so the
+    // `IsRtAoSourcedInTonemap()` accessor can return a clean bool without
+    // float-compare noise. Single source of truth: `RefreshTonemapRtRouting`
+    // writes both this and the push-constant field together.
+    bool m_tonemapUseRtAo = false;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;
@@ -541,6 +556,14 @@ private:
     void BuildRtShadowPass();
     void DestroyRtShadowPass();
     void DispatchRtShadow(VkCommandBuffer cmd);
+
+    // Stage 9.8.a — recompute the tonemap's AO routing from the current
+    // `m_renderMode` + `m_rtAoPass` state. Sets `m_tonemapUseRtAo`,
+    // `m_exposurePush.useRtAo`, and re-runs `UpdateTonemapDescriptors()`
+    // so binding 2 points at the RT AO view when routing is active or
+    // falls back to the XeGTAO AO view otherwise (raster path remains
+    // bit-compatible because the shader's mix degenerates at useRtAo=0).
+    void RefreshTonemapRtRouting();
 
     // Stage 9.5.b — RT AO wire. Lifecycle mirrors `m_rtShadowPass`: only
     // allocated while `m_renderMode == HybridRt` on an RT-capable device,
