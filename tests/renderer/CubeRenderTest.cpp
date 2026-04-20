@@ -9,6 +9,7 @@
 #include <renderer/Swapchain.h>
 #include <renderer/VulkanContext.h>
 
+#include <array>
 #include <filesystem>
 #include <span>
 
@@ -208,15 +209,17 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.15.b — basic.frag declares a fragment-stage push constant block
-    // (`uint transparentBit`) at offset 64. Pipelines binding basic.frag
-    // must declare the matching range or validation flags the shader/layout
-    // mismatch. The cube test stands in as the renderer-side regression
-    // guard for the layout shape main.cpp uses.
+    // RP.15.b + Stage 9.8.b.1 + Stage 9.8.c.1 — basic.frag declares a
+    // fragment-stage push constant block with three uints at offsets
+    // 64 (`transparentBit`), 68 (`useRtSunPath`) and 72 (`useRtIndoorPath`).
+    // Pipelines binding basic.frag must declare the matching range or
+    // validation flags the shader/layout mismatch. The cube test stands in
+    // as the renderer-side regression guard for the layout shape main.cpp
+    // uses.
     VkPushConstantRange fragPushRange{};
     fragPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragPushRange.offset = 64;
-    fragPushRange.size = sizeof(uint32_t);
+    fragPushRange.size = 3U * sizeof(uint32_t);
 
     PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderPass;
@@ -260,12 +263,14 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     glm::mat4 model(1.0F);
     vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(glm::mat4), &model);
-    // Push the RP.15.b fragment-stage transparent bit. Value 4 matches the
-    // transparent pipeline path — exercising the non-zero path catches a
-    // missing fragment range in the pipeline layout under validation.
-    uint32_t transparentBit = 0x4U;
+    // Push the full RP.15.b + 9.8.b.1 + 9.8.c.1 fragment-stage range:
+    // transparentBit=4 (transparent pipeline path — exercises the non-zero
+    // path so a missing fragment range in the pipeline layout surfaces under
+    // validation) + useRtSunPath=0 + useRtIndoorPath=0 (keep the baked
+    // in-shader lighting paths so the cube still renders).
+    const std::array<uint32_t, 3> fragPush{0x4U, 0U, 0U};
     vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT,
-                       64, sizeof(transparentBit), &transparentBit);
+                       64, static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
 
     VkBuffer vb = vertexBuffer.GetBuffer();
     VkDeviceSize offset = 0;

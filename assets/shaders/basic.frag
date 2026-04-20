@@ -24,11 +24,15 @@ layout(location = 2) out uint outStencilId;
 // output) and 1 when Hybrid RT is active and the downstream sun composite
 // pass (Stage 9.8.b.2) will re-apply the key term using RT visibility —
 // this fragment then skips the sun block so the composite doesn't double
-// up. Transparent draws stay on path 0 in every mode (the composite only
-// covers opaque surfaces).
+// up. Stage 9.8.c.1: `useRtIndoorPath` plays the same role for the indoor
+// fill-light lambert — 0 bakes it here (bit-compatible raster path), 1
+// skips it so the Stage 9.8.c.2 composite can re-apply it with RT wall
+// occlusion. Transparent draws stay on path 0 for both flags in every
+// mode (composites only cover opaque surfaces).
 layout(push_constant) uniform StencilPush {
     layout(offset = 64) uint transparentBit;
     layout(offset = 68) uint useRtSunPath;
+    layout(offset = 72) uint useRtIndoorPath;
 } push;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
@@ -188,7 +192,13 @@ void main() {
         lit += computeTransmittedSun(visibility, fragLightZ, bias, key, transmit);
     }
 
-    lit += lambertContribution(n, lights.fillDirectionIntensity, lights.fillColorEnabled);
+    // Stage 9.8.c.1 — skip the indoor fill-light lambert when the Hybrid
+    // RT composite pass will re-apply it with wall-occlusion visibility.
+    // `useRtIndoorPath == 0` keeps the unshadowed directional fill baked
+    // here (bit-compatible with pre-9.8 output).
+    if (push.useRtIndoorPath == 0U) {
+        lit += lambertContribution(n, lights.fillDirectionIntensity, lights.fillColorEnabled);
+    }
     lit += lambertContribution(n, lights.rimDirectionIntensity, lights.rimColorEnabled);
 
     outColor = vec4(fragColor.rgb * lit, fragColor.a);

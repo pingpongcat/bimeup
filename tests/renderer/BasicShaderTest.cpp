@@ -150,21 +150,25 @@ TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     EXPECT_STREQ(info.pName, "main");
 }
 
-// Stage 9.8.b.1 contract: basic.frag declares a fragment-stage push
-// constant block containing exactly two 32-bit unsigned int members:
+// Stage 9.8.c.1 contract: basic.frag declares a fragment-stage push
+// constant block containing exactly three 32-bit unsigned int members:
 //   - member 0 `transparentBit` at byte offset 64 (RP.12b — 0 opaque, 4
 //     transparent; written to the stencil G-buffer)
 //   - member 1 `useRtSunPath` at byte offset 68 (Stage 9.8.b.1 — 0 keeps
 //     the raster sun-PCF path bit-compatible, 1 skips the in-shader sun
 //     term so the Stage 9.8.b.2 composite can re-apply it with RT
 //     visibility)
+//   - member 2 `useRtIndoorPath` at byte offset 72 (Stage 9.8.c.1 — 0
+//     bakes the indoor fill-light lambert here, 1 skips it so the Stage
+//     9.8.c.2 composite can re-apply it with RT wall-occlusion)
 // Walk the SPIR-V module: find the OpVariable in the PushConstant storage
 // class, follow its OpTypePointer → OpTypeStruct, assert the struct has
-// exactly two members, each is a 32-bit OpTypeInt with signedness=0, and
-// OpMemberDecorate Offsets 64 + 68 are attached at member indices 0 + 1.
-// "Exactly two members" catches both a resurrection of the retired
-// `stencilId` member (RP.6d) and a future regression that drops the
-// Stage-9.8.b.1 `useRtSunPath` mode flag.
+// exactly three members, each is a 32-bit OpTypeInt with signedness=0,
+// and OpMemberDecorate Offsets 64 + 68 + 72 are attached at member
+// indices 0 + 1 + 2. "Exactly three members" catches both a resurrection
+// of the retired `stencilId` member (RP.6d) and a future regression that
+// drops the Stage-9.8.b.1 `useRtSunPath` or Stage-9.8.c.1
+// `useRtIndoorPath` mode flags.
 TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -233,10 +237,11 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     }
 
     // Resolve the struct type behind every PushConstant pointer variable,
-    // then assert exactly one has two 32-bit unsigned int members at
-    // Offsets 64 + 68. "Exactly two members" catches both a resurrection of
-    // the retired `stencilId` member (RP.6d) and a regression that drops
-    // the Stage-9.8.b.1 `useRtSunPath` flag.
+    // then assert exactly one has three 32-bit unsigned int members at
+    // Offsets 64 + 68 + 72. "Exactly three members" catches both a
+    // resurrection of the retired `stencilId` member (RP.6d) and a
+    // regression that drops the Stage-9.8.b.1 `useRtSunPath` or
+    // Stage-9.8.c.1 `useRtIndoorPath` flags.
     auto isU32 = [&](uint32_t typeId) {
         auto it = ints.find(typeId);
         return it != ints.end() && it->second.width == 32U &&
@@ -248,15 +253,18 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
         if (pIt == pointers.end()) continue;
         auto sIt = structs.find(pIt->second.typeId);
         if (sIt == structs.end()) continue;
-        if (sIt->second.memberTypes.size() != 2U) continue;
+        if (sIt->second.memberTypes.size() != 3U) continue;
         auto offIt = memberOffsets.find(pIt->second.typeId);
         if (offIt == memberOffsets.end()) continue;
         auto m0 = offIt->second.find(0U);
         auto m1 = offIt->second.find(1U);
-        if (m0 == offIt->second.end() || m1 == offIt->second.end()) continue;
-        if (m0->second != 64U || m1->second != 68U) continue;
+        auto m2 = offIt->second.find(2U);
+        if (m0 == offIt->second.end() || m1 == offIt->second.end() ||
+            m2 == offIt->second.end()) continue;
+        if (m0->second != 64U || m1->second != 68U || m2->second != 72U) continue;
         if (!isU32(sIt->second.memberTypes[0]) ||
-            !isU32(sIt->second.memberTypes[1])) {
+            !isU32(sIt->second.memberTypes[1]) ||
+            !isU32(sIt->second.memberTypes[2])) {
             continue;
         }
         found = true;
@@ -264,6 +272,6 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     }
     EXPECT_TRUE(found)
         << "basic.frag missing fragment push constants `uint transparentBit` @ "
-           "offset 64 + `uint useRtSunPath` @ offset 68 (exactly two 32-bit "
-           "uint members expected)";
+           "offset 64 + `uint useRtSunPath` @ offset 68 + `uint useRtIndoorPath` "
+           "@ offset 72 (exactly three 32-bit uint members expected)";
 }
