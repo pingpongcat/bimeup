@@ -29,6 +29,7 @@ class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
 class RtShadowPass;
 class RtAoPass;
+class RtIndoorPass;
 
 class RenderLoop {
 public:
@@ -224,6 +225,26 @@ public:
     /// then it's observable but not consumed. `VK_NULL_HANDLE` when RT
     /// mode is off or the device lacks RT support.
     [[nodiscard]] VkImageView GetRtAoImageView() const;
+
+    /// Stage 9.7.b — per-frame inputs for the RT indoor-fill pass. TLAS
+    /// and view are re-used from `SetRtShadowInputs`. `fillDirWorld` is
+    /// the overhead fill's travel direction (matches
+    /// `DirectionalLight::direction` — points *away* from the virtual
+    /// overhead lamp); the raygen inverts it to shoot shadow rays
+    /// toward the light. `enabled` mirrors the scene's
+    /// `indoorLightsEnabled` — when false the per-frame dispatch is
+    /// skipped so zero RT cost is paid while the user has indoor lights
+    /// off, and `basic.frag`'s cheap directional fill remains the sole
+    /// fill source.
+    void SetRtIndoorInputs(const glm::vec3& fillDirWorld, bool enabled);
+
+    /// Sampled view of the RT indoor-fill visibility image (R8_UNORM,
+    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 wires
+    /// this into the hybrid composite; before then it's observable but
+    /// not consumed. `VK_NULL_HANDLE` when RT mode is off, the device
+    /// lacks RT support, or the caller has `enabled = false` and the
+    /// pass never built.
+    [[nodiscard]] VkImageView GetRtIndoorVisibilityView() const;
 
 private:
     void CreateCommandPool();
@@ -536,6 +557,19 @@ private:
     void BuildRtAoPass();
     void DestroyRtAoPass();
     void DispatchRtAo(VkCommandBuffer cmd);
+
+    // Stage 9.7.b — RT indoor-fill wire. Lifecycle mirrors the shadow /
+    // AO passes: only allocated while `m_renderMode == HybridRt` on an
+    // RT-capable device AND `m_rtIndoorEnabled` is true. The pass
+    // shares `m_rtTlas` + `m_rtDepthSampler` + `m_rtView` with the
+    // shadow / AO paths — no parallel scene state.
+    std::unique_ptr<RtIndoorPass> m_rtIndoorPass;
+    glm::vec3 m_rtIndoorDir{0.0F, -1.0F, 0.0F};
+    bool m_rtIndoorEnabled = false;
+
+    void BuildRtIndoorPass();
+    void DestroyRtIndoorPass();
+    void DispatchRtIndoor(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer

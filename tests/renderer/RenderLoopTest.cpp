@@ -430,8 +430,16 @@ TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
     m_renderLoop->SetRtShadowInputs(tlas.GetHandle(),
                                     glm::normalize(glm::vec3(-1, -2, -1)), view);
     m_renderLoop->SetRtAoInputs(1.0F);
+    // Stage 9.7.b — indoor-fill pass is live once HybridRt is selected
+    // (view is allocated); the per-frame dispatch gate on `enabled`
+    // decides whether a trace actually runs. With enabled=true plus a
+    // valid TLAS, the dispatch records under validation during the
+    // EndFrame below.
+    m_renderLoop->SetRtIndoorInputs(glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F)),
+                                    /*enabled=*/true);
     EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
     EXPECT_NE(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
+    EXPECT_NE(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
 
     ASSERT_TRUE(m_renderLoop->BeginFrame());
     EXPECT_TRUE(m_renderLoop->EndFrame());
@@ -447,5 +455,6 @@ TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
     m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
     EXPECT_EQ(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
     EXPECT_EQ(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
+    EXPECT_EQ(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
 }
 

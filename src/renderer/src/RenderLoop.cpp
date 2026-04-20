@@ -4,6 +4,7 @@
 #include <renderer/DepthMipPipeline.h>
 #include <renderer/Device.h>
 #include <renderer/RtAoPass.h>
+#include <renderer/RtIndoorPass.h>
 #include <renderer/RtShadowPass.h>
 #include <renderer/Shader.h>
 #include <renderer/SmaaLut.h>
@@ -149,6 +150,15 @@ bool RenderLoop::EndFrame() {
     // XeGTAO still runs below and feeds the tonemap — the two AO paths
     // are additive, not exclusive, until 9.8 gates them per-mode.
     DispatchRtAo(cmd);
+
+    // Stage 9.7.b — RT indoor-fill dispatch. Gated on the same HybridRt
+    // + valid-TLAS prereqs plus `m_rtIndoorEnabled` from the scene's
+    // `indoorLightsEnabled`. Writes the per-pixel visibility image for
+    // the overhead fill and transitions it to SHADER_READ_ONLY_OPTIMAL
+    // for the 9.8 composite. When indoor lights are off, dispatch is
+    // skipped — the cheap directional fill in `basic.frag` +
+    // `Lighting.cpp` remains the sole fill source.
+    DispatchRtIndoor(cmd);
 
     // RP.4d — build the depth pyramid between the main pass and the
     // tonemap pass. Dispatches linearize then three mip downsamples with
@@ -390,17 +400,23 @@ void RenderLoop::SetRenderMode(RenderMode mode) {
     m_renderMode = mode;
 
     if (m_renderMode == RenderMode::HybridRt) {
-        // Lazy-build is guarded by `Device::HasRayTracing()` inside
-        // `BuildRtShadowPass` / `BuildRtAoPass`; on non-RT devices these are
-        // no-ops and the dispatch paths short-circuit every frame.
+        // Lazy-build is guarded by `Device::HasRayTracing()` inside each
+        // `Build*`; on non-RT devices these are no-ops and the dispatch
+        // paths short-circuit every frame. The indoor pass is built
+        // unconditionally once HybridRt is selected — the per-frame
+        // dispatch gate on `m_rtIndoorEnabled` decides whether a trace
+        // actually runs, so toggling indoor lights at runtime doesn't
+        // need a pipeline rebuild.
         BuildRtShadowPass();
         BuildRtAoPass();
+        BuildRtIndoorPass();
     } else {
         // Wait for in-flight frames so it's safe to destroy the pipelines /
         // storage images without racing a pending trace.
         WaitIdle();
         DestroyRtShadowPass();
         DestroyRtAoPass();
+        DestroyRtIndoorPass();
         m_rtTlas = VK_NULL_HANDLE;
     }
 }
@@ -421,6 +437,15 @@ void RenderLoop::SetRtAoInputs(float radius) { m_rtAoRadius = radius; }
 
 VkImageView RenderLoop::GetRtAoImageView() const {
     return m_rtAoPass ? m_rtAoPass->GetAoImageView() : VK_NULL_HANDLE;
+}
+
+void RenderLoop::SetRtIndoorInputs(const glm::vec3& fillDirWorld, bool enabled) {
+    m_rtIndoorDir = fillDirWorld;
+    m_rtIndoorEnabled = enabled;
+}
+
+VkImageView RenderLoop::GetRtIndoorVisibilityView() const {
+    return m_rtIndoorPass ? m_rtIndoorPass->GetVisibilityImageView() : VK_NULL_HANDLE;
 }
 
 void RenderLoop::BuildRtShadowPass() {
@@ -540,6 +565,63 @@ void RenderLoop::DispatchRtAo(VkCommandBuffer cmd) {
     ++m_rtAoFrameIndex;
 }
 
+void RenderLoop::BuildRtIndoorPass() {
+    if (!m_device.HasRayTracing()) {
+        return;
+    }
+    if (!m_rtIndoorPass) {
+        m_rtIndoorPass = std::make_unique<RtIndoorPass>(m_device);
+    }
+    // `m_rtDepthSampler` is owned by the shadow build path; indoor
+    // borrows it. `SetRenderMode(HybridRt)` calls `BuildRtShadowPass`
+    // first so the sampler is live by the time we get here — but build
+    // it defensively in case the call order is ever reshuffled.
+    if (m_rtDepthSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_NEAREST;
+        si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.minLod = 0.0F;
+        si.maxLod = 0.0F;
+        if (vkCreateSampler(m_device.GetDevice(), &si, nullptr, &m_rtDepthSampler) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("RenderLoop: failed to create RT depth sampler");
+        }
+    }
+    const VkExtent2D extent = m_swapchain.GetExtent();
+    if (!m_rtIndoorPass->Build(extent.width, extent.height, m_shaderDir)) {
+        m_rtIndoorPass.reset();
+    }
+}
+
+void RenderLoop::DestroyRtIndoorPass() { m_rtIndoorPass.reset(); }
+
+void RenderLoop::DispatchRtIndoor(VkCommandBuffer cmd) {
+    if (m_renderMode != RenderMode::HybridRt) {
+        return;
+    }
+    if (!m_rtIndoorEnabled) {
+        return;
+    }
+    if (!m_rtIndoorPass || !m_rtIndoorPass->IsValid()) {
+        return;
+    }
+    if (m_rtTlas == VK_NULL_HANDLE) {
+        return;
+    }
+    // Depth is still in SHADER_READ_ONLY_OPTIMAL from the main pass's
+    // finalLayout; the shadow + AO dispatches that precede this one
+    // only write to their own storage images. Indoor writes its own
+    // visibility image on a disjoint binding, so no inter-dispatch
+    // barrier is needed.
+    m_rtIndoorPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+                             m_rtView, m_proj, m_rtIndoorDir);
+}
+
 void RenderLoop::RecreateForSwapchain() {
     WaitIdle();
     CleanupFrameResources();
@@ -557,13 +639,14 @@ void RenderLoop::RecreateForSwapchain() {
     ClearSmaaChainToZero();
     UpdateTonemapDescriptors();
 
-    // Stage 9.4.b / 9.5.b — the RT visibility / AO images match the
-    // swapchain extent; rebuild on resize when RT mode is active. Each
-    // `Build*` call tears down the old image before allocating the new
-    // one.
+    // Stage 9.4.b / 9.5.b / 9.7.b — the RT visibility / AO / indoor
+    // images match the swapchain extent; rebuild on resize when RT mode
+    // is active. Each `Build*` call tears down the old image before
+    // allocating the new one.
     if (m_renderMode == RenderMode::HybridRt) {
         BuildRtShadowPass();
         BuildRtAoPass();
+        BuildRtIndoorPass();
     }
 }
 
@@ -2051,11 +2134,13 @@ void RenderLoop::Cleanup() {
     m_smaaWeightsFragShader.reset();
     m_smaaBlendFragShader.reset();
 
-    // Stage 9.4.b / 9.5.b — RT pass resources. Each pass owns its own VMA
-    // allocations (visibility / AO image) so the teardown must run before
-    // the allocator shuts down with the rest of the renderer.
+    // Stage 9.4.b / 9.5.b / 9.7.b — RT pass resources. Each pass owns
+    // its own VMA allocations (visibility / AO / indoor image) so the
+    // teardown must run before the allocator shuts down with the rest
+    // of the renderer.
     DestroyRtShadowPass();
     DestroyRtAoPass();
+    DestroyRtIndoorPass();
 
     CleanupFrameResources();
     // RP.16.8 — depth-pyramid / SMAA / SSAO allocate VMA images via their
