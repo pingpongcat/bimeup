@@ -23,6 +23,21 @@ struct RenderQualitySettings {
     renderer::SunLightingScene sun{};
 
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
+
+    // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
+    // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +
+    // the site longitude (UTC offset ≈ longitude / 15°). Year is not
+    // surfaced as a widget but is kept here so tests/callers can pin it.
+    int year{2026};
+    int month{6};          // 1..12
+    int day{21};           // 1..31
+    float hourLocal{12.0F};  // 0..24 local solar time
+
+    // When true, `sun.siteLocation` + `sun.trueNorthRad` are expected to
+    // be pushed in from IfcSite metadata by main.cpp on model load
+    // (RP.16.7). The panel's lat/lon sliders are read-only in that mode.
+    // When false, the sliders own lat/lon.
+    bool useSiteGeolocation{true};
 };
 
 class RenderQualityPanel : public Panel {
