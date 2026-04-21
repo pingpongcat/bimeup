@@ -64,17 +64,20 @@ Render modes after Stage 9:
 | 9.6 | **Window-transmission** — sun light passes through `IfcWindow` geometry. Shadow-ray any-hit treats transmissive materials as attenuators (glass tint × transmission factor). Only active in RT modes. | Visual test: interior floor next to a south-facing window is lit in proportion to sun angle (Hybrid/PT modes); Rasterised mode unaffected. | Transmissive material flag in scene + any-hit shader |
 | 9.7 | **Indoor-light sampling** — when `indoorLightsEnabled`, cast a shadow ray toward the overhead-fill light so it respects walls. Only active in RT modes; raster still uses the cheap directional fill from RP.16.5. | Visual test: corridor behind a wall no longer lit by the indoor fill in RT mode; Rasterised mode unchanged. | `rt_indoor.rgen` hit group |
 | 9.8 | **Hybrid composite** — raster primary (G-buffer + SMAA) + RT visibility/AO/transmission as separable contributions, reassembled in the tonemap pass. Routing flag decides per-contribution which input (raster vs RT) feeds the composite. | Benchmark: Hybrid frame time within budget on reference GPU. Visual test: Rasterised mode produces bit-compatible output with pre-Stage-9 reference renders. | `tonemap.frag` RT input + RenderLoop wire |
+| 9.8.e | **NRD integration** — NVIDIA Real-time Denoiser (open-source MIT, cross-vendor) transforms noisy 1-spp RT outputs into smooth AAA-quality results. Add NRD as git submodule, implement motion-vector generation (velocity G-buffer), wire SIGMA denoiser for RT shadow visibility (1-3ms @ 1080p), wire RELAX denoiser for RTAO + indoor-fill visibility (1-2ms each). NRD requires depth + normals + motion vectors + per-frame history buffers for temporal reprojection. | Visual test: RT shadow/AO/indoor-fill outputs are smooth and stable during camera motion; performance overhead stays within 5ms budget @ 1080p. Benchmark: full Hybrid frame (trace + denoise + composite) under 10ms on reference GPU. | `renderer/NrdDenoiser.{h,cpp}`, motion-vector pass, NRD history buffers |
 | 9.9 | **Optional path tracer** — separate rendering mode; ray-gen accumulates N bounces into an HDR accumulator; resets on camera move. Uses the same `SunLightingScene` + indoor preset as Hybrid. | Visual test: colour bleed from coloured walls + soft sky fill; accumulator resets on orbit/pan. | `pathtrace.rgen` + accumulator target |
 | 9.10 | **UI — render-mode switch** in `RenderQualityPanel`: `{Rasterised (default), Hybrid RT, Path Traced}`. Modes gated on capability probe; disabled modes show a tooltip explaining why. Default stays **Rasterised** on every launch. | UI test: probe-false disables RT modes and keeps Rasterised selected; probe-true enables all three; mode switch recomposes render graph without leaking state into the raster path. | `RenderQualityPanel` Mode section |
 
 ### Ordering
-9.1 → 9.2 → 9.3 (foundation) → 9.4 + 9.5 in either order (additive hybrid effects) → 9.6 (transmission needs 9.4) → 9.7 (indoor light needs 9.4 shape) → 9.8 (hybrid composite + raster-regression guard) → 9.9 (optional PT, parallelisable with 9.10) → 9.10 (UI) → stage gate.
+9.1 → 9.2 → 9.3 (foundation) → 9.4 + 9.5 in either order (additive hybrid effects) → 9.6 (transmission needs 9.4) → 9.7 (indoor light needs 9.4 shape) → 9.8 (hybrid composite + raster-regression guard) → 9.8.e (NRD denoising polishes RT outputs) → 9.9 (optional PT, parallelisable with 9.10) → 9.10 (UI, already folded into 9.8.d) → stage gate.
 
 ### Out of scope (Stage 9)
 - RT reflections on glossy / mirror surfaces — cool but not architectural-render-critical, and most BIM materials are matte. Revisit post-Stage 11 if needed.
-- Denoising: rely on temporal accumulation + a cheap bilateral for RTAO; no ML denoiser.
 - Dynamic light editing: sun/time/site stay the single authoritative inputs; no arbitrary light-placement UI in this stage.
 - **Retiring XeGTAO, shadow maps, or any other classical renderer feature — explicitly NOT in scope. Classical renderer stays the default.**
+
+### Originally out of scope, now in scope
+- **Denoising** — originally deferred ("rely on temporal accumulation + a cheap bilateral; no ML denoiser"), but during 9.8.d testing the noisy 1-spp RT outputs proved unusable for production. Added **9.8.e NRD integration** to transform noisy traces into smooth, AAA-quality results using NVIDIA Real-time Denoiser (open-source, cross-vendor, industry-proven).
 
 ---
 
