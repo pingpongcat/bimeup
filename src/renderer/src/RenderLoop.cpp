@@ -485,9 +485,28 @@ void RenderLoop::RefreshTonemapRtRouting() {
 void RenderLoop::SetRtShadowInputs(VkAccelerationStructureKHR tlas,
                                    const glm::vec3& sunDirWorld,
                                    const glm::mat4& view) {
+    // Only update descriptors if TLAS has changed to avoid updating while in-flight
+    const bool tlasChanged = (tlas != m_rtTlas);
+
     m_rtTlas = tlas;
     m_rtSunDir = sunDirWorld;
     m_rtView = view;
+
+    // Update RT pass descriptors only when TLAS changes (scene rebuild).
+    // Wait for all in-flight frames to finish before updating descriptor sets
+    // to avoid validation errors about updating sets that are in use.
+    if (tlasChanged && m_rtTlas != VK_NULL_HANDLE && m_depthImageView != VK_NULL_HANDLE && m_rtDepthSampler != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(m_device.GetDevice());
+        if (m_rtShadowPass && m_rtShadowPass->IsValid()) {
+            m_rtShadowPass->UpdateAllDescriptors(m_rtTlas, m_depthImageView, m_rtDepthSampler);
+        }
+        if (m_rtAoPass && m_rtAoPass->IsValid()) {
+            m_rtAoPass->UpdateAllDescriptors(m_rtTlas, m_depthImageView, m_rtDepthSampler);
+        }
+        if (m_rtIndoorPass && m_rtIndoorPass->IsValid()) {
+            m_rtIndoorPass->UpdateAllDescriptors(m_rtTlas, m_depthImageView, m_rtDepthSampler);
+        }
+    }
 }
 
 VkImageView RenderLoop::GetRtShadowVisibilityView() const {
@@ -543,6 +562,7 @@ void RenderLoop::BuildRtShadowPass() {
         // gate skip this frame.
         m_rtShadowPass.reset();
     }
+    // Descriptor update happens in SetRtShadowInputs() when TLAS is available
 }
 
 void RenderLoop::DestroyRtShadowPass() {
@@ -566,8 +586,7 @@ void RenderLoop::DispatchRtShadow(VkCommandBuffer cmd) {
     // Depth image is already in SHADER_READ_ONLY_OPTIMAL — the main render
     // pass's finalLayout transition handled it. RtShadowPass::Dispatch
     // owns the visibility-image layout transitions internally.
-    m_rtShadowPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
-                             m_rtView, m_proj, m_rtSunDir);
+    m_rtShadowPass->Dispatch(cmd, m_currentFrame, m_rtView, m_proj, m_rtSunDir);
 }
 
 void RenderLoop::BuildRtAoPass() {
@@ -602,6 +621,7 @@ void RenderLoop::BuildRtAoPass() {
     if (!m_rtAoPass->Build(extent.width, extent.height, m_shaderDir)) {
         m_rtAoPass.reset();
     }
+    // Descriptor update happens in SetRtShadowInputs() when TLAS is available
 }
 
 void RenderLoop::DestroyRtAoPass() { m_rtAoPass.reset(); }
@@ -621,8 +641,7 @@ void RenderLoop::DispatchRtAo(VkCommandBuffer cmd) {
     // immediately precedes this doesn't touch depth. AO raygen reads
     // depth + TLAS and writes its own AO image; no barrier needed between
     // the two RT dispatches since they write to disjoint images.
-    m_rtAoPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
-                         m_rtView, m_proj, m_rtAoRadius, m_rtAoFrameIndex);
+    m_rtAoPass->Dispatch(cmd, m_currentFrame, m_rtView, m_proj, m_rtAoRadius, m_rtAoFrameIndex);
     ++m_rtAoFrameIndex;
 }
 
@@ -657,6 +676,7 @@ void RenderLoop::BuildRtIndoorPass() {
     if (!m_rtIndoorPass->Build(extent.width, extent.height, m_shaderDir)) {
         m_rtIndoorPass.reset();
     }
+    // Descriptor update happens in SetRtShadowInputs() when TLAS is available
 }
 
 void RenderLoop::DestroyRtIndoorPass() { m_rtIndoorPass.reset(); }
@@ -679,24 +699,33 @@ void RenderLoop::DispatchRtIndoor(VkCommandBuffer cmd) {
     // only write to their own storage images. Indoor writes its own
     // visibility image on a disjoint binding, so no inter-dispatch
     // barrier is needed.
-    m_rtIndoorPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
-                             m_rtView, m_proj, m_rtIndoorDir);
+    m_rtIndoorPass->Dispatch(cmd, m_currentFrame, m_rtView, m_proj, m_rtIndoorDir);
 }
 
 void RenderLoop::SetRtSunCompositeInputs(VkImageView shadowTransmissionView,
                                          VkSampler shadowTransmissionSampler,
                                          VkBuffer lightingUbo,
                                          VkDeviceSize lightingUboSize) {
+    const bool inputsChanged = (m_rtSunTransmissionView != shadowTransmissionView ||
+                                m_rtSunTransmissionSampler != shadowTransmissionSampler ||
+                                m_rtSunLightingUbo != lightingUbo ||
+                                m_rtSunLightingUboSize != lightingUboSize);
+
     m_rtSunTransmissionView = shadowTransmissionView;
     m_rtSunTransmissionSampler = shadowTransmissionSampler;
     m_rtSunLightingUbo = lightingUbo;
     m_rtSunLightingUboSize = lightingUboSize;
+
     // If the pipeline is already built (Hybrid RT active), refresh
     // descriptor bindings so the next dispatch picks up the new handles.
     // Before the pipeline exists, the cache is just retained — the later
     // `BuildRtSunComposite` call on `SetRenderMode(HybridRt)` runs
     // `UpdateRtSunCompositeDescriptors` once the sets are allocated.
-    UpdateRtSunCompositeDescriptors();
+    if (inputsChanged && m_rtSunCompositePipeline && !m_rtSunCompositeDescriptorSets.empty()) {
+        // Wait for GPU idle before updating descriptor sets that might be in flight
+        vkDeviceWaitIdle(m_device.GetDevice());
+        UpdateRtSunCompositeDescriptors();
+    }
 }
 
 void RenderLoop::BuildRtSunComposite() {
@@ -962,13 +991,21 @@ void RenderLoop::DispatchRtSunComposite(VkCommandBuffer cmd) {
 
 void RenderLoop::SetRtIndoorCompositeInputs(VkBuffer lightingUbo,
                                             VkDeviceSize lightingUboSize) {
+    const bool inputsChanged = (m_rtIndoorCompositeLightingUbo != lightingUbo ||
+                                m_rtIndoorCompositeLightingUboSize != lightingUboSize);
+
     m_rtIndoorCompositeLightingUbo = lightingUbo;
     m_rtIndoorCompositeLightingUboSize = lightingUboSize;
+
     // Matches `SetRtSunCompositeInputs` semantics: refresh now if the
     // pipeline is already built; otherwise the cache is retained and the
     // `BuildRtIndoorComposite` call on the next `SetRenderMode(HybridRt)`
     // will pick it up via its own descriptor-update call.
-    UpdateRtIndoorCompositeDescriptors();
+    if (inputsChanged && m_rtIndoorCompositePipeline && !m_rtIndoorCompositeDescriptorSets.empty()) {
+        // Wait for GPU idle before updating descriptor sets that might be in flight
+        vkDeviceWaitIdle(m_device.GetDevice());
+        UpdateRtIndoorCompositeDescriptors();
+    }
 }
 
 void RenderLoop::BuildRtIndoorComposite() {

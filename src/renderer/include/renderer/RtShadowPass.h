@@ -72,25 +72,30 @@ public:
     /// on missing / invalid SPIR-V, or on pipeline build failure.
     bool Build(uint32_t width, uint32_t height, const std::string& shaderDir);
 
+    /// Update all per-frame descriptor sets with the given TLAS and depth
+    /// resources. Call this once when resources change (e.g., after
+    /// building the pass or rebuilding the TLAS), not every frame.
+    void UpdateAllDescriptors(VkAccelerationStructureKHR tlas,
+                              VkImageView depthView, VkSampler depthSampler);
+
     /// Record dispatch commands for one frame. Transitions the visibility
-    /// image to `GENERAL`, binds the pipeline + descriptor set (with the
-    /// supplied TLAS + depth view + depth sampler), pushes the
+    /// image to `GENERAL`, binds the pipeline + descriptor set, pushes the
     /// invViewProj + sunDir + extent block, issues `vkCmdTraceRaysKHR` at
     /// `extent`, then transitions visibility back to
     /// `SHADER_READ_ONLY_OPTIMAL` so downstream composite can sample it.
     /// No-op when `IsValid() == false`.
     ///
-    /// The caller holds the depth-read barrier: `depthView` must already
-    /// be in `SHADER_READ_ONLY_OPTIMAL` when this is recorded. `sunDirWorld`
-    /// follows the `DirectionalLight::direction` convention — it is the
-    /// direction sunlight TRAVELS through the scene (points away from the
-    /// sun). The raygen inverts it to shoot rays toward the light source.
+    /// The caller must have called `UpdateAllDescriptors()` at least once
+    /// after building the pass. The caller holds the depth-read barrier:
+    /// depth must already be in `SHADER_READ_ONLY_OPTIMAL` when this is
+    /// recorded. `sunDirWorld` follows the `DirectionalLight::direction`
+    /// convention — it is the direction sunlight TRAVELS through the
+    /// scene (points away from the sun). The raygen inverts it to shoot
+    /// rays toward the light source.
     ///
-    /// `frameIndex` selects which per-frame descriptor set to update/bind
+    /// `frameIndex` selects which per-frame descriptor set to bind
     /// (must be < MAX_FRAMES_IN_FLIGHT from RenderLoop).
     void Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
-                  VkAccelerationStructureKHR tlas,
-                  VkImageView depthView, VkSampler depthSampler,
                   const glm::mat4& view, const glm::mat4& proj,
                   const glm::vec3& sunDirWorld);
 

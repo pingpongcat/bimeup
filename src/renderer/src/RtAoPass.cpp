@@ -269,17 +269,19 @@ void RtAoPass::UpdateDescriptor(uint32_t frameIndex, VkAccelerationStructureKHR 
                            writes.data(), 0, nullptr);
 }
 
+void RtAoPass::UpdateAllDescriptors(VkAccelerationStructureKHR tlas,
+                                    VkImageView depthView, VkSampler depthSampler) {
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        UpdateDescriptor(i, tlas, depthView, depthSampler);
+    }
+}
+
 void RtAoPass::Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
-                        VkAccelerationStructureKHR tlas,
-                        VkImageView depthView, VkSampler depthSampler,
                         const glm::mat4& view, const glm::mat4& proj,
                         float radius, uint32_t frameIndexRng) {
-    if (!IsValid() || tlas == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE ||
-        depthSampler == VK_NULL_HANDLE) {
+    if (!IsValid()) {
         return;
     }
-
-    UpdateDescriptor(frameIndex, tlas, depthView, depthSampler);
 
     VkImageMemoryBarrier toGeneral{};
     toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

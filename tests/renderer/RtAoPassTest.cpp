@@ -253,8 +253,8 @@ TEST_F(RtAoPassTest, DispatchRecordsAndSubmitsCleanlyOnRtDevice) {
     constexpr float kRadius = 1.0F;
     constexpr uint32_t kFrameIndex = 0U;
 
-    pass.Dispatch(cmd, 0, tlas.GetHandle(), depthView, depthSampler,
-                  view, proj, kRadius, kFrameIndex);
+    pass.UpdateAllDescriptors(tlas.GetHandle(), depthView, depthSampler);
+    pass.Dispatch(cmd, 0, view, proj, kRadius, kFrameIndex);
 
     ASSERT_EQ(vkEndCommandBuffer(cmd), VK_SUCCESS);
 

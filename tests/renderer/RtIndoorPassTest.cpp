@@ -251,8 +251,8 @@ TEST_F(RtIndoorPassTest, DispatchRecordsAndSubmitsCleanlyOnRtDevice) {
     // `indoorLightsEnabled = true`.
     const glm::vec3 fillDirWorld = glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F));
 
-    pass.Dispatch(cmd, 0, tlas.GetHandle(), depthView, depthSampler,
-                  view, proj, fillDirWorld);
+    pass.UpdateAllDescriptors(tlas.GetHandle(), depthView, depthSampler);
+    pass.Dispatch(cmd, 0, view, proj, fillDirWorld);
 
     ASSERT_EQ(vkEndCommandBuffer(cmd), VK_SUCCESS);
 

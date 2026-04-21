@@ -75,22 +75,27 @@ public:
     /// failure.
     bool Build(uint32_t width, uint32_t height, const std::string& shaderDir);
 
+    /// Update all per-frame descriptor sets with the given TLAS and depth
+    /// resources. Call this once when resources change (e.g., after
+    /// building the pass or rebuilding the TLAS), not every frame.
+    void UpdateAllDescriptors(VkAccelerationStructureKHR tlas,
+                              VkImageView depthView, VkSampler depthSampler);
+
     /// Record dispatch commands for one frame. Transitions the AO image
     /// to `GENERAL`, binds pipeline + descriptor set, pushes the
     /// constants and issues `vkCmdTraceRaysKHR` at `extent`, then
     /// transitions AO back to `SHADER_READ_ONLY_OPTIMAL` so the composite
     /// pass can sample it. No-op when `IsValid() == false`.
     ///
-    /// The caller holds the depth-read barrier: `depthView` must already
-    /// be in `SHADER_READ_ONLY_OPTIMAL` when this is recorded. `radius`
-    /// is the world-space ray max distance (metres); `frameIndex`
-    /// drives the per-pixel RNG seed.
+    /// The caller must have called `UpdateAllDescriptors()` at least once
+    /// after building the pass. The caller holds the depth-read barrier:
+    /// depth must already be in `SHADER_READ_ONLY_OPTIMAL` when this is
+    /// recorded. `radius` is the world-space ray max distance (metres);
+    /// `frameIndexRng` drives the per-pixel RNG seed.
     ///
-    /// `frameIndex` selects which per-frame descriptor set to update/bind
+    /// `frameIndex` selects which per-frame descriptor set to bind
     /// (must be < MAX_FRAMES_IN_FLIGHT from RenderLoop).
     void Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
-                  VkAccelerationStructureKHR tlas,
-                  VkImageView depthView, VkSampler depthSampler,
                   const glm::mat4& view, const glm::mat4& proj,
                   float radius, uint32_t frameIndexRng);
 
