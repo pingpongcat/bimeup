@@ -15,7 +15,7 @@
 	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
 [submodule "external/web-ifc"]
 	path = external/web-ifc
-	url = ../engine_web-ifc
+	url = https://github.com/ThatOpen/engine_web-ifc
 [submodule "external/imgui"]
 	path = external/imgui
 	url = https://github.com/ocornut/imgui.git

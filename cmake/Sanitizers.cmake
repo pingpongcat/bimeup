@@ -1,4 +1,4 @@
-option(BIMEUP_ENABLE_SANITIZERS "Enable ASan + UBSan in Debug builds" ON)
+option(BIMEUP_ENABLE_SANITIZERS "Enable ASan + UBSan in Debug builds" OFF)
 
 function(bimeup_enable_sanitizers target)
     if(NOT BIMEUP_ENABLE_SANITIZERS)
