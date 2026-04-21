@@ -58,8 +58,11 @@ void TopLevelAS::LoadDispatch() {
         }
         return p;
     };
+    // `bufferDeviceAddress` was promoted to core in Vulkan 1.2, so on a 1.3
+    // instance we load the core function (no KHR suffix). The typedef is
+    // compatible since the signature is identical.
     m_pfnGetBufferAddress =
-        reinterpret_cast<PFN_vkGetBufferDeviceAddressKHR>(load("vkGetBufferDeviceAddressKHR"));
+        reinterpret_cast<PFN_vkGetBufferDeviceAddressKHR>(load("vkGetBufferDeviceAddress"));
     m_pfnGetBuildSizes =
         reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(load("vkGetAccelerationStructureBuildSizesKHR"));
     m_pfnCreateAS =

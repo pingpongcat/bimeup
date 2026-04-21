@@ -566,7 +566,7 @@ void RenderLoop::DispatchRtShadow(VkCommandBuffer cmd) {
     // Depth image is already in SHADER_READ_ONLY_OPTIMAL — the main render
     // pass's finalLayout transition handled it. RtShadowPass::Dispatch
     // owns the visibility-image layout transitions internally.
-    m_rtShadowPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+    m_rtShadowPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
                              m_rtView, m_proj, m_rtSunDir);
 }
 
@@ -621,7 +621,7 @@ void RenderLoop::DispatchRtAo(VkCommandBuffer cmd) {
     // immediately precedes this doesn't touch depth. AO raygen reads
     // depth + TLAS and writes its own AO image; no barrier needed between
     // the two RT dispatches since they write to disjoint images.
-    m_rtAoPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+    m_rtAoPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
                          m_rtView, m_proj, m_rtAoRadius, m_rtAoFrameIndex);
     ++m_rtAoFrameIndex;
 }
@@ -679,7 +679,7 @@ void RenderLoop::DispatchRtIndoor(VkCommandBuffer cmd) {
     // only write to their own storage images. Indoor writes its own
     // visibility image on a disjoint binding, so no inter-dispatch
     // barrier is needed.
-    m_rtIndoorPass->Dispatch(cmd, m_rtTlas, m_depthImageView, m_rtDepthSampler,
+    m_rtIndoorPass->Dispatch(cmd, m_currentFrame, m_rtTlas, m_depthImageView, m_rtDepthSampler,
                              m_rtView, m_proj, m_rtIndoorDir);
 }
 

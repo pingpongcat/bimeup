@@ -89,7 +89,11 @@ public:
     /// convention — it is the direction the fill light travels through
     /// the scene (points *away* from the virtual overhead lamp). The
     /// raygen inverts it to shoot shadow rays toward the light.
-    void Dispatch(VkCommandBuffer cmd, VkAccelerationStructureKHR tlas,
+    ///
+    /// `frameIndex` selects which per-frame descriptor set to update/bind
+    /// (must be < MAX_FRAMES_IN_FLIGHT from RenderLoop).
+    void Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
+                  VkAccelerationStructureKHR tlas,
                   VkImageView depthView, VkSampler depthSampler,
                   const glm::mat4& view, const glm::mat4& proj,
                   const glm::vec3& fillDirWorld);
@@ -107,8 +111,10 @@ private:
     void Reset();
     void CreateVisibilityImage(uint32_t width, uint32_t height);
     void CreateDescriptor();
-    void UpdateDescriptor(VkAccelerationStructureKHR tlas,
+    void UpdateDescriptor(uint32_t frameIndex, VkAccelerationStructureKHR tlas,
                           VkImageView depthView, VkSampler depthSampler);
+
+    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
     const Device& m_device;
 
@@ -122,7 +128,7 @@ private:
 
     VkDescriptorSetLayout m_dsLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_dsPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_ds = VK_NULL_HANDLE;
+    VkDescriptorSet m_descriptorSets[MAX_FRAMES_IN_FLIGHT] = {};
 
     std::unique_ptr<RayTracingPipeline> m_pipeline;
 

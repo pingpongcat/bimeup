@@ -75,9 +75,8 @@ void RtShadowPass::Reset() {
 
     m_pipeline.reset();
 
-    if (m_ds != VK_NULL_HANDLE) {
-        // Freed along with the pool.
-        m_ds = VK_NULL_HANDLE;
+    for (auto& ds : m_descriptorSets) {
+        ds = VK_NULL_HANDLE;
     }
     if (m_dsPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(dev, m_dsPool, nullptr);
@@ -163,29 +162,34 @@ void RtShadowPass::CreateDescriptor() {
     VkDevice dev = m_device.GetDevice();
     m_dsLayout = CreateLayout(dev);
 
+    // Allocate MAX_FRAMES_IN_FLIGHT descriptor sets to avoid updating
+    // a set that's still in use by an in-flight command buffer.
     std::array<VkDescriptorPoolSize, 3> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    sizes[0].descriptorCount = 1;
+    sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sizes[1].descriptorCount = 1;
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT;
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    sizes[2].descriptorCount = 1;
+    sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 1;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
     pi.poolSizeCount = static_cast<uint32_t>(sizes.size());
     pi.pPoolSizes = sizes.data();
     if (vkCreateDescriptorPool(dev, &pi, nullptr, &m_dsPool) != VK_SUCCESS) {
         throw std::runtime_error("RtShadowPass: vkCreateDescriptorPool failed");
     }
 
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_dsLayout);
+
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = m_dsPool;
-    ai.descriptorSetCount = 1;
-    ai.pSetLayouts = &m_dsLayout;
-    if (vkAllocateDescriptorSets(dev, &ai, &m_ds) != VK_SUCCESS) {
+    ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    ai.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(dev, &ai, m_descriptorSets) != VK_SUCCESS) {
         throw std::runtime_error("RtShadowPass: vkAllocateDescriptorSets failed");
     }
 }
@@ -226,7 +230,7 @@ bool RtShadowPass::Build(uint32_t width, uint32_t height, const std::string& sha
     return true;
 }
 
-void RtShadowPass::UpdateDescriptor(VkAccelerationStructureKHR tlas,
+void RtShadowPass::UpdateDescriptor(uint32_t frameIndex, VkAccelerationStructureKHR tlas,
                                     VkImageView depthView, VkSampler depthSampler) {
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
@@ -242,23 +246,25 @@ void RtShadowPass::UpdateDescriptor(VkAccelerationStructureKHR tlas,
     visInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     visInfo.imageView = m_imageView;
 
+    VkDescriptorSet ds = m_descriptorSets[frameIndex];
+
     std::array<VkWriteDescriptorSet, 3> writes{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].pNext = &asWrite;
-    writes[0].dstSet = m_ds;
+    writes[0].dstSet = ds;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_ds;
+    writes[1].dstSet = ds;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[1].pImageInfo = &depthInfo;
 
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_ds;
+    writes[2].dstSet = ds;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -268,7 +274,8 @@ void RtShadowPass::UpdateDescriptor(VkAccelerationStructureKHR tlas,
                            writes.data(), 0, nullptr);
 }
 
-void RtShadowPass::Dispatch(VkCommandBuffer cmd, VkAccelerationStructureKHR tlas,
+void RtShadowPass::Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
+                            VkAccelerationStructureKHR tlas,
                             VkImageView depthView, VkSampler depthSampler,
                             const glm::mat4& view, const glm::mat4& proj,
                             const glm::vec3& sunDirWorld) {
@@ -277,7 +284,7 @@ void RtShadowPass::Dispatch(VkCommandBuffer cmd, VkAccelerationStructureKHR tlas
         return;
     }
 
-    UpdateDescriptor(tlas, depthView, depthSampler);
+    UpdateDescriptor(frameIndex, tlas, depthView, depthSampler);
 
     // Visibility image → GENERAL for the raygen storage write. Source
     // layout depends on whether this is the first dispatch (UNDEFINED) or
@@ -304,9 +311,11 @@ void RtShadowPass::Dispatch(VkCommandBuffer cmd, VkAccelerationStructureKHR tlas
     vkCmdPipelineBarrier(cmd, srcStage, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0,
                          0, nullptr, 0, nullptr, 1, &toGeneral);
 
+    VkDescriptorSet ds = m_descriptorSets[frameIndex];
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_pipeline->GetPipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipeline->GetLayout(), 0, 1, &m_ds, 0, nullptr);
+                            m_pipeline->GetLayout(), 0, 1, &ds, 0, nullptr);
 
     PushConstants pc{};
     pc.invViewProj = glm::inverse(proj * view);

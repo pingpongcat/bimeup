@@ -262,7 +262,7 @@ TEST_F(RtShadowPassTest, DispatchRecordsAndSubmitsCleanlyOnRtDevice) {
                                             0.1F, 100.0F);
     const glm::vec3 sunDir = glm::normalize(glm::vec3(-1, -2, -1));
 
-    pass.Dispatch(cmd, tlas.GetHandle(), depthView, depthSampler, view, proj, sunDir);
+    pass.Dispatch(cmd, 0, tlas.GetHandle(), depthView, depthSampler, view, proj, sunDir);
 
     ASSERT_EQ(vkEndCommandBuffer(cmd), VK_SUCCESS);
 

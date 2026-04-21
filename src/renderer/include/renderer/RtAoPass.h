@@ -85,10 +85,14 @@ public:
     /// be in `SHADER_READ_ONLY_OPTIMAL` when this is recorded. `radius`
     /// is the world-space ray max distance (metres); `frameIndex`
     /// drives the per-pixel RNG seed.
-    void Dispatch(VkCommandBuffer cmd, VkAccelerationStructureKHR tlas,
+    ///
+    /// `frameIndex` selects which per-frame descriptor set to update/bind
+    /// (must be < MAX_FRAMES_IN_FLIGHT from RenderLoop).
+    void Dispatch(VkCommandBuffer cmd, uint32_t frameIndex,
+                  VkAccelerationStructureKHR tlas,
                   VkImageView depthView, VkSampler depthSampler,
                   const glm::mat4& view, const glm::mat4& proj,
-                  float radius, uint32_t frameIndex);
+                  float radius, uint32_t frameIndexRng);
 
     [[nodiscard]] bool IsValid() const;
     [[nodiscard]] VkImage GetAoImage() const { return m_image; }
@@ -103,8 +107,10 @@ private:
     void Reset();
     void CreateAoImage(uint32_t width, uint32_t height);
     void CreateDescriptor();
-    void UpdateDescriptor(VkAccelerationStructureKHR tlas,
+    void UpdateDescriptor(uint32_t frameIndex, VkAccelerationStructureKHR tlas,
                           VkImageView depthView, VkSampler depthSampler);
+
+    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
     const Device& m_device;
 
@@ -118,7 +124,7 @@ private:
 
     VkDescriptorSetLayout m_dsLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_dsPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_ds = VK_NULL_HANDLE;
+    VkDescriptorSet m_descriptorSets[MAX_FRAMES_IN_FLIGHT] = {};
 
     std::unique_ptr<RayTracingPipeline> m_pipeline;
 
