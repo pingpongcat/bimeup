@@ -14,6 +14,7 @@ Device::Device(VkInstance instance) {
     PickPhysicalDevice(instance, VK_NULL_HANDLE, std::nullopt);
     ProbeLineRasterization();
     ProbeRayTracing();
+    ProbeRayQuery();
     CreateLogicalDevice(false);
     CreateAllocator(instance);
 }
@@ -22,6 +23,7 @@ Device::Device(VkInstance instance, VkSurfaceKHR surface) {
     PickPhysicalDevice(instance, surface, std::nullopt);
     ProbeLineRasterization();
     ProbeRayTracing();
+    ProbeRayQuery();
     CreateLogicalDevice(true);
     CreateAllocator(instance);
 }
@@ -31,6 +33,7 @@ Device::Device(VkInstance instance, VkSurfaceKHR surface,
     PickPhysicalDevice(instance, surface, deviceIndexOverride);
     ProbeLineRasterization();
     ProbeRayTracing();
+    ProbeRayQuery();
     CreateLogicalDevice(surface != VK_NULL_HANDLE);
     CreateAllocator(instance);
 }
@@ -222,15 +225,22 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     if (m_hasSmoothLines) {
         enabledExtensions.push_back(VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME);
     }
-    if (m_hasRayTracing) {
-        // `VK_KHR_acceleration_structure` pulls in `deferred_host_operations`,
-        // `bufferDeviceAddress` (1.2 core) and `descriptorIndexing` (1.2 core)
-        // as hard prerequisites. BDA and descriptor_indexing flow through
-        // `VkPhysicalDeviceVulkan12Features` below — NVIDIA rejects the
-        // promoted extension strings on a 1.2+ instance.
+    // The AS stack (`VK_KHR_acceleration_structure` +
+    // `VK_KHR_deferred_host_operations` + the 1.2-core BDA / descriptor_indexing
+    // features chained below) is the shared prerequisite for both Stage 9
+    // RT modes — `VK_KHR_ray_tracing_pipeline` (full RT) and `VK_KHR_ray_query`
+    // (inline ray queries from raster shaders). It's enabled exactly once even
+    // when both modes are active.
+    const bool needsAccelerationStructure = m_hasRayTracing || m_hasRayQuery;
+    if (needsAccelerationStructure) {
         enabledExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
         enabledExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+    }
+    if (m_hasRayTracing) {
         enabledExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+    }
+    if (m_hasRayQuery) {
+        enabledExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
     }
 
     // Chain `smoothLines` into the feature struct so the EdgeOverlayPipeline
@@ -260,6 +270,11 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     rtFeatures.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     rtFeatures.rayTracingPipeline = VK_TRUE;
+    // Stage 9.Q.1 — `rayQuery` opt-in for inline ray queries from raster shaders.
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{};
+    rqFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rqFeatures.rayQuery = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -282,32 +297,40 @@ void Device::CreateLogicalDevice(bool enableSwapchain) {
     if (m_hasSmoothLines) {
         prependFeature(lineFeatures);
     }
-    if (m_hasRayTracing) {
+    if (needsAccelerationStructure) {
         prependFeature(v12Features);
         prependFeature(asFeatures);
+    }
+    if (m_hasRayTracing) {
         prependFeature(rtFeatures);
+    }
+    if (m_hasRayQuery) {
+        prependFeature(rqFeatures);
     }
     createInfo.pNext = featureChainHead;
 
     VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
-    if (result != VK_SUCCESS && m_hasRayTracing) {
+    if (result != VK_SUCCESS && needsAccelerationStructure) {
         // Stage 9.1.a — NVIDIA's driver advertises every RT feature but some
         // versions (observed on 595.44 in headless setups) still reject the
         // logical-device create with `VK_ERROR_INITIALIZATION_FAILED`. The
         // probe is optimistic by design; when the device truly can't start
         // with RT on, we quietly drop it and retry without, so the raster
-        // path keeps working. `HasRayTracing()` then reflects reality.
+        // path keeps working. `HasRayTracing()` / `HasRayQuery()` then
+        // reflect reality.
         if (bimeup::tools::Log::GetLogger()) {
             LOG_WARN("Ray tracing: vkCreateDevice rejected RT extensions "
                      "(VkResult={}); retrying without RT", static_cast<int>(result));
         }
         m_hasRayTracing = false;
+        m_hasRayQuery = false;
         enabledExtensions.erase(
             std::remove_if(enabledExtensions.begin(), enabledExtensions.end(),
                 [](const char* name) {
                     std::string_view n(name);
                     return n == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ||
                            n == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME ||
+                           n == VK_KHR_RAY_QUERY_EXTENSION_NAME ||
                            n == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME;
                 }),
             enabledExtensions.end());
@@ -472,6 +495,69 @@ void Device::ProbeRayTracing() {
                                    "ray_tracing_pipeline enabled"
                                  : "required features unavailable — "
                                    "RT render modes will be disabled");
+    }
+}
+
+void Device::ProbeRayQuery() {
+    // Stage 9.Q.1 — probe for the Stage-9 ray-query render mode. Independent of
+    // `ProbeRayTracing`: a device may expose ray-query without the full
+    // ray-tracing pipeline. Required pieces:
+    //   - `VK_KHR_ray_query` extension string (the actual feature carrier).
+    //   - `VK_KHR_acceleration_structure` + `VK_KHR_deferred_host_operations`
+    //     because ray-query traces against an AS and needs the AS host-build
+    //     prerequisite.
+    //   - `accelerationStructure` + `rayQuery` feature bits.
+    //   - `VkPhysicalDeviceVulkan12Features.bufferDeviceAddress` (1.2-core),
+    //     for the same NVIDIA-rejects-promoted-strings reason as RT.
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> extProps(extCount);
+    vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extCount, extProps.data());
+
+    auto hasExt = [&](std::string_view name) {
+        for (const auto& ext : extProps) {
+            if (std::string_view(ext.extensionName) == name) return true;
+        }
+        return false;
+    };
+
+    const bool extsPresent =
+        hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+        hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        hasExt(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    if (!extsPresent) {
+        if (bimeup::tools::Log::GetLogger()) {
+            LOG_INFO("Ray query: required extensions missing — "
+                     "ray-query render mode will be disabled");
+        }
+        return;
+    }
+
+    VkPhysicalDeviceVulkan12Features v12Features{};
+    v12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.pNext = &v12Features;
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{};
+    rqFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rqFeatures.pNext = &asFeatures;
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &rqFeatures;
+    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
+
+    m_hasRayQuery =
+        (rqFeatures.rayQuery == VK_TRUE) &&
+        (asFeatures.accelerationStructure == VK_TRUE) &&
+        (v12Features.bufferDeviceAddress == VK_TRUE);
+
+    if (bimeup::tools::Log::GetLogger()) {
+        LOG_INFO("Ray query: {}",
+                 m_hasRayQuery ? "VK_KHR_ray_query enabled"
+                               : "rayQuery feature unavailable — "
+                                 "ray-query render mode will be disabled");
     }
 }
 

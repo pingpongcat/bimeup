@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
 ## Current Stage: Stage 9 — Ray Tracing (pivot 2026-04-23: three modes, hybrid-composite dropped)
-## Current Task: Next session — 9.Q (ray_query shadows). Start with `RenderQualityPanel` gaining a three-radio selector (`Rasterised` / `Ray query` / `Ray tracing`), then implement the ray_query mode end-to-end for sun shadows only. Ray-tracing mode is a separate-pipeline future task; hybrid-composite work is fully retired.
+## Current Task: 9.Q.2 — TLAS descriptor binding into the main descriptor-set layout (optional; raster mode leaves it null). `SceneUploader` writes the TLAS into the descriptor after the TLAS build completes.
 
 > **Pivot 2026-04-23 — three render modes, not hybrid.** Render-mode selector becomes three distinct modes, each a complete rendering path:
 >
@@ -270,7 +270,7 @@ Goal: add an RT light-transport render mode *alongside* the classical renderer. 
 
 ### 9.Q — Ray query mode (focus of the next session)
 Scope: classical forward-shaded pipeline unchanged; `basic.frag` + the PCF shadow-map sample path swap for inline `rayQueryInitializeEXT` against the TLAS when the panel's render mode is `Ray query`. Sun shadows only for the first slice — AO, transmission, indoor-fill stay on their classical paths for now.
-- [ ] 9.Q.1 `Device::HasRayQuery()` probe + `VK_KHR_ray_query` enabled on the logical device. Gated the same way as `HasRayTracing`. Panel's third radio is greyed out when false.
+- [x] 9.Q.1 `Device::HasRayQuery()` probe + `VK_KHR_ray_query` enabled on the logical device. New `ProbeRayQuery()` checks for `VK_KHR_ray_query` + `VK_KHR_acceleration_structure` + `VK_KHR_deferred_host_operations` extensions plus the `rayQuery` / `accelerationStructure` / 1.2-core `bufferDeviceAddress` feature bits. Independent of `HasRayTracing` (a device may expose ray-query without the full RT pipeline), but shares the AS extension stack — `CreateLogicalDevice` now enables AS + deferred_host_ops + chains `v12Features` + `asFeatures` once when *either* RT mode is active, then conditionally appends `rtFeatures` (RT pipeline) and `rqFeatures` (ray query). The `vkCreateDevice`-rejects-RT fallback now also clears `m_hasRayQuery` and strips `VK_KHR_RAY_QUERY` from the retry. Tests: 2 new (`RayQueryProbeConsistentWithExtensions` + `DeviceConstructsRegardlessOfRayQuery`) — same shape as the 9.1.a RT probe tests; 273/273 renderer suite ✓.
 - [ ] 9.Q.2 TLAS descriptor binding plumbed into the main descriptor set layout (so `basic.frag` can access it). Binding is optional — raster mode leaves it null.
 - [ ] 9.Q.3 `basic.frag` gains `#extension GL_EXT_ray_query : require` + a `uint useRayQueryShadow` push constant + a ray-query branch replacing the PCF shadow-map sample when the flag is on. `shadow_transmission` sample path stays live for glass tint.
 - [ ] 9.Q.4 `RenderQualityPanel` — third radio (`Ray query`) joins `Rasterised` / (disabled) `Ray tracing`. `main.cpp` maps it onto a new `RenderLoop::RenderMode::RayQuery` + pushes the shader flag each frame.

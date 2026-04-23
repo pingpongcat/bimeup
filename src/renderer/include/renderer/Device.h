@@ -56,6 +56,15 @@ public:
     /// headless setups); the classical raster path then runs unchanged.
     [[nodiscard]] bool HasRayTracing() const { return m_hasRayTracing; }
 
+    /// Stage 9.Q.1 — true when the logical device was successfully created
+    /// with `VK_KHR_ray_query` enabled (the AS stack —
+    /// `VK_KHR_acceleration_structure` + `VK_KHR_deferred_host_operations` +
+    /// `bufferDeviceAddress` — is a hard prerequisite). Independent of
+    /// `HasRayTracing`: a device may expose ray-query without the full
+    /// ray-tracing pipeline. Cleared if `vkCreateDevice` rejects the chain
+    /// (same fallback as ray tracing).
+    [[nodiscard]] bool HasRayQuery() const { return m_hasRayQuery; }
+
 private:
     void CreateAllocator(VkInstance instance);
     void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface,
@@ -63,6 +72,7 @@ private:
     void CreateLogicalDevice(bool enableSwapchain);
     void ProbeLineRasterization();
     void ProbeRayTracing();
+    void ProbeRayQuery();
     static int RateDevice(VkPhysicalDevice device);
     static bool FindGraphicsQueueFamily(VkPhysicalDevice device, uint32_t& index);
     static bool FindPresentQueueFamily(VkPhysicalDevice device, VkSurfaceKHR surface,
@@ -78,6 +88,7 @@ private:
     bool m_hasSmoothLines = false;
     bool m_hasWideLines = false;
     bool m_hasRayTracing = false;
+    bool m_hasRayQuery = false;
     VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 
