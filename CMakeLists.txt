@@ -10,6 +10,19 @@ option(BIMEUP_BUILD_TESTS "Build unit tests" OFF)
 option(BIMEUP_ENABLE_VR "Enable OpenXR VR support" OFF)
 option(BIMEUP_ENABLE_RAYTRACING "Enable Vulkan ray tracing" OFF)
 
+# Debug builds: swap the CMake default `-O0 -g` for `-Og -g`. `-Og` preserves
+# nearly all debuggability (no heavy inlining, locals stay in scope) while
+# folding trivial accessors / constants — typical dev iteration runs several
+# times faster on a Vulkan/ImGui frame with no practical cost to stepping.
+# MSVC's Debug config ships `/RTC1` runtime-checks which conflict with
+# optimization, so we leave it alone there.
+if(NOT MSVC)
+    set(CMAKE_C_FLAGS_DEBUG "-Og -g"
+        CACHE STRING "Flags used by the C compiler during DEBUG builds." FORCE)
+    set(CMAKE_CXX_FLAGS_DEBUG "-Og -g"
+        CACHE STRING "Flags used by the CXX compiler during DEBUG builds." FORCE)
+endif()
+
 # CMake modules
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 include(Sanitizers)
