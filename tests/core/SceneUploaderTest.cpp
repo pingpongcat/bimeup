@@ -1,25 +1,16 @@
 #include <gtest/gtest.h>
 #include <core/SceneUploader.h>
-#include <renderer/AccelerationStructure.h>
-#include <renderer/DescriptorSet.h>
 #include <renderer/Device.h>
 #include <renderer/MeshBuffer.h>
-#include <renderer/TopLevelAS.h>
 #include <renderer/VulkanContext.h>
 #include <scene/Scene.h>
 #include <scene/SceneBuilder.h>
 #include <scene/SceneMesh.h>
 
 using bimeup::core::SceneUploader;
-using bimeup::renderer::AccelerationStructure;
-using bimeup::renderer::DescriptorPool;
-using bimeup::renderer::DescriptorSet;
-using bimeup::renderer::DescriptorSetLayout;
 using bimeup::renderer::Device;
 using bimeup::renderer::MeshBuffer;
 using bimeup::renderer::MeshData;
-using bimeup::renderer::TlasInstance;
-using bimeup::renderer::TopLevelAS;
 using bimeup::renderer::Vertex;
 using bimeup::renderer::VulkanContext;
 using bimeup::scene::BuildResult;
@@ -179,62 +170,6 @@ TEST_F(SceneUploaderVulkanTest, UploadMultipleMeshes) {
     ASSERT_TRUE(n1.mesh.has_value());
     ASSERT_TRUE(n2.mesh.has_value());
     EXPECT_NE(n1.mesh.value(), n2.mesh.value());
-}
-
-// 9.Q.2 — TLAS write path. The descriptor binding for ray-query mode is
-// optional: raster mode never builds a TLAS, so the SceneUploader API must
-// be a no-op when the TLAS is invalid (empty / un-built / RT unavailable).
-TEST_F(SceneUploaderVulkanTest, WriteTlasToDescriptorIsNoOpWhenTlasInvalid) {
-    if (!m_device->HasRayTracing() && !m_device->HasRayQuery()) {
-        GTEST_SKIP() << "VK_KHR_acceleration_structure not enabled on this device";
-    }
-
-    DescriptorSetLayout layout(*m_device, {
-        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT},
-    });
-    DescriptorPool pool(*m_device, 1, {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-    });
-    DescriptorSet set(*m_device, pool, layout);
-
-    TopLevelAS emptyTlas(*m_device);  // Never built — handle is null
-    ASSERT_FALSE(emptyTlas.IsValid());
-
-    EXPECT_NO_THROW(SceneUploader::WriteTlasToDescriptor(set, 0, emptyTlas));
-}
-
-// 9.Q.2 — On RT-capable devices, a built TLAS is written into the descriptor
-// at the requested slot.
-TEST_F(SceneUploaderVulkanTest, WriteTlasToDescriptorWritesValidTlas) {
-    if (!m_device->HasRayTracing() && !m_device->HasRayQuery()) {
-        GTEST_SKIP() << "VK_KHR_acceleration_structure not enabled on this device";
-    }
-
-    AccelerationStructure as(*m_device);
-    MeshData mesh;
-    mesh.vertices = {
-        Vertex{{0, 0, 0}, {0, 0, 1}, {1, 1, 1, 1}},
-        Vertex{{1, 0, 0}, {0, 0, 1}, {1, 1, 1, 1}},
-        Vertex{{0, 1, 0}, {0, 0, 1}, {1, 1, 1, 1}},
-    };
-    mesh.indices = {0, 1, 2};
-    auto blas = as.BuildBlas(mesh);
-    ASSERT_TRUE(as.IsValid(blas));
-
-    TopLevelAS tlas(*m_device);
-    TlasInstance instance{};
-    instance.blasAddress = as.GetDeviceAddress(blas);
-    ASSERT_TRUE(tlas.Build({instance}));
-
-    DescriptorSetLayout layout(*m_device, {
-        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT},
-    });
-    DescriptorPool pool(*m_device, 1, {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-    });
-    DescriptorSet set(*m_device, pool, layout);
-
-    EXPECT_NO_THROW(SceneUploader::WriteTlasToDescriptor(set, 0, tlas));
 }
 
 TEST_F(SceneUploaderVulkanTest, UploadSkipsNodesWithoutMeshIndex) {

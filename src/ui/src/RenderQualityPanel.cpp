@@ -58,32 +58,6 @@ void RenderQualityPanel::OnDraw() {
         return;
     }
 
-    // Stage 9.Q.4 — three-mode render-mode switch. `Ray query` greyed out
-    // when the device probe says no `VK_KHR_ray_query`; tooltip explains
-    // why. `Ray tracing` is a 9.RT hook, always greyed out for now.
-    if (ImGui::CollapsingHeader("Mode")) {
-        auto& mode = m_settings.mode;
-        if (ImGui::RadioButton("Rasterised", mode == RenderMode::Rasterised)) {
-            mode = RenderMode::Rasterised;
-        }
-        ImGui::BeginDisabled(!m_settings.rayQueryAvailable);
-        if (ImGui::RadioButton("Ray query", mode == RenderMode::RayQuery)) {
-            mode = RenderMode::RayQuery;
-        }
-        ImGui::EndDisabled();
-        if (!m_settings.rayQueryAvailable && ImGui::IsItemHovered(
-                ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("GPU lacks VK_KHR_ray_query");
-        }
-        ImGui::BeginDisabled(true);
-        bool rt = mode == RenderMode::RayTracing;
-        ImGui::RadioButton("Ray tracing", rt);
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Future work — separate RT pipeline (Stage 9.RT)");
-        }
-    }
-
     if (ImGui::CollapsingHeader("Sun")) {
         auto& s = m_settings;
 

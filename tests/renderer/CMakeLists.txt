@@ -40,14 +40,6 @@ add_executable(renderer_tests
     SunPositionTest.cpp
     SkyColorTest.cpp
     SunLightingTest.cpp
-    AccelerationStructureTest.cpp
-    TopLevelASTest.cpp
-    RayTracingPipelineTest.cpp
-    RtShadowPassTest.cpp
-    RtAoPassTest.cpp
-    RtIndoorPassTest.cpp
-    RtSunCompositePipelineTest.cpp
-    RtIndoorCompositePipelineTest.cpp
 )
 target_link_libraries(renderer_tests PRIVATE bimeup_renderer bimeup_platform GTest::gtest_main)
 target_compile_definitions(renderer_tests PRIVATE BIMEUP_SHADER_DIR="${BIMEUP_SHADER_OUTPUT_DIR}")
@@ -61,7 +53,7 @@ set(_renderer_test_env
 # tests show up in `ctest -R`. Suite list mirrors `BIMEUP_RENDERER_CPU_FIXTURES`
 # below in negated form so any new GPU suite is automatically picked up there.
 set(_renderer_cpu_filter
-    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:RtSunCompositePipelinePushConstants.*:RtIndoorCompositePipelinePushConstants.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
+    "CameraTest.*:YawPitchFromForwardTest.*:ClipPlaneTest.*:ClipPlaneManagerTest.*:ClipPlanesUboTest.*:DepthLinearizePipelinePushConstants.*:DiskMarkerTest.*:FirstPersonControllerTest.*:HemisphereAmbientTest.*:HighlightTest.*:LightingTest.*:LinearDepthTest.*:OctNormalTest.*:PcfShadowTest.*:ShadowPassTest.*:SmaaBlendPipelinePushConstants.*:SmaaEdgePipelinePushConstants.*:SmaaLutTest.*:SmaaMathTest.*:SmaaWeightsPipelinePushConstants.*:SsaoBlurPipelinePushConstants.*:SkyColorTest.*:SsaoXeGtaoPipelinePushConstants.*:SunLightingTest.*:SunPositionTest.*:TonemapPushConstantsTest.*:TonemapTest.*:ViewportNavigatorTest.*:XeGtaoMathTest.*")
 
 include(GoogleTest)
 
@@ -103,14 +95,6 @@ set(_renderer_gpu_fixtures
     SmaaEdgePipelineTest
     SmaaWeightsPipelineTest
     SmaaBlendPipelineTest
-    AccelerationStructureTest
-    TopLevelASTest
-    RayTracingPipelineTest
-    RtShadowPassTest
-    RtAoPassTest
-    RtIndoorPassTest
-    RtSunCompositePipelineTest
-    RtIndoorCompositePipelineTest
 )
 
 foreach(_fixture IN LISTS _renderer_gpu_fixtures)

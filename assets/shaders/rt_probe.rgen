@@ -1,7 +1,0 @@
-#version 460
-#extension GL_EXT_ray_tracing : require
-
-// Stage 9.3 — Minimal raygen used to validate RT pipeline + SBT wiring.
-// Replaced by real shadow / AO / transmission raygens in 9.4–9.9.
-void main() {
-}

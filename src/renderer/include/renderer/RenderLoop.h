@@ -27,12 +27,6 @@ class DepthLinearizePipeline;
 class DepthMipPipeline;
 class SsaoXeGtaoPipeline;
 class SsaoBlurPipeline;
-class RtShadowPass;
-class RtAoPass;
-class RtIndoorPass;
-class RtSunCompositePipeline;
-class RtIndoorCompositePipeline;
-
 class RenderLoop {
 public:
     static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -67,24 +61,6 @@ public:
     // separable blur smooths away the hemisphere-sample noise. Sampled by
     // the tonemap fragment shader and multiplied into the HDR colour.
     static constexpr VkFormat AO_FORMAT = VK_FORMAT_R8_UNORM;
-
-    /// Stage 9 — render-mode selector. Classical rasterised stays the
-    /// default on every launch; Hybrid RT is opt-in and gated on the
-    /// device's `VK_KHR_ray_tracing_pipeline` capability (see
-    /// `Device::HasRayTracing()`). On non-RT devices, setting the mode to
-    /// `HybridRt` is accepted as state but the per-frame RT dispatch
-    /// short-circuits — the classical frame still cycles unchanged.
-    /// Stage 9.Q.4 — `RayQuery` is the new pivot mode: still the
-    /// forward-shaded raster path, but `basic.frag`'s sun-shadow PCF tap
-    /// swaps for an inline `rayQueryEXT` trace. Gated on
-    /// `Device::HasRayQuery()`. The renderer doesn't need any per-frame
-    /// dispatch for this mode — it's purely a flag main.cpp reads to
-    /// push `useRayQueryShadow = 1` per opaque draw.
-    enum class RenderMode : uint8_t {
-        Rasterised = 0,
-        HybridRt = 1,
-        RayQuery = 2,
-    };
 
     RenderLoop(const Device& device, Swapchain& swapchain,
                const std::string& shaderDir);
@@ -190,125 +166,6 @@ public:
     /// `Swapchain::Recreate(...)` on a resize. The render pass handles are
     /// preserved (format/samples unchanged) so pipelines stay valid.
     void RecreateForSwapchain();
-
-    /// Stage 9.4.b — select render mode. Flipping to `HybridRt` lazy-builds
-    /// the `RtShadowPass` at the current swapchain extent (no-op when the
-    /// device advertises no RT — `HybridRt` still reports via
-    /// `GetRenderMode` so the UI state is honest, but the per-frame
-    /// dispatch is skipped). Flipping back to `Rasterised` tears the RT
-    /// resources down so the classical frame pays zero RT cost.
-    void SetRenderMode(RenderMode mode);
-    [[nodiscard]] RenderMode GetRenderMode() const { return m_renderMode; }
-
-    /// Stage 9.4.b — per-frame inputs for the RT sun-shadow pass. The caller
-    /// owns the BLAS/TLAS lifecycle (build + rebuild on scene edits) and
-    /// hands the TLAS handle in here each frame alongside the current sun
-    /// direction (world-space travel direction, matches
-    /// `DirectionalLight::direction`) and the camera view matrix used to
-    /// reconstruct world-space positions in the raygen. Pass
-    /// `VK_NULL_HANDLE` for the TLAS to temporarily skip the dispatch
-    /// without leaving Hybrid RT mode (e.g. between scene loads).
-    void SetRtShadowInputs(VkAccelerationStructureKHR tlas,
-                           const glm::vec3& sunDirWorld, const glm::mat4& view);
-
-    /// Sampled view of the RT shadow-pass visibility image (R8_UNORM,
-    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 will
-    /// wire this into the hybrid composite; before then it's observable
-    /// but not consumed. Returns `VK_NULL_HANDLE` when RT mode is off or
-    /// the device lacks RT support.
-    [[nodiscard]] VkImageView GetRtShadowVisibilityView() const;
-
-    /// Stage 9.5.b — per-frame input for the RT AO pass. TLAS and view
-    /// matrix are re-used from `SetRtShadowInputs` (same scene, same
-    /// camera), so this setter only takes the AO-specific knob: the
-    /// world-space ray max-distance in metres. Default 1.0 matches the
-    /// architectural scale in the Stage-9 plan. The per-pixel random
-    /// seed's frame-index component is incremented internally on each
-    /// dispatch so a future 9.5.c can drop a temporal accumulator on
-    /// top without changing this API.
-    void SetRtAoInputs(float radius);
-
-    /// Sampled view of the RT AO pass image (R8_UNORM,
-    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8.a wires
-    /// this into the tonemap composite when `HybridRt` is selected on an
-    /// RT-capable device; see `IsRtAoSourcedInTonemap()`. `VK_NULL_HANDLE`
-    /// when RT mode is off or the device lacks RT support.
-    [[nodiscard]] VkImageView GetRtAoImageView() const;
-
-    /// Stage 9.8.a — true when the tonemap's AO sample comes from the RT
-    /// AO pass instead of XeGTAO. Set by `SetRenderMode(HybridRt)` on an
-    /// RT-capable device; cleared by the flip back to `Rasterised` (or
-    /// when the device can't build the RT AO pass). The raster path is
-    /// bit-compatible whenever this is false — `tonemap.frag`'s
-    /// `useRtAo` push constant degenerates the mix to the XeGTAO sample.
-    [[nodiscard]] bool IsRtAoSourcedInTonemap() const { return m_tonemapUseRtAo; }
-
-    /// Stage 9.7.b — per-frame inputs for the RT indoor-fill pass. TLAS
-    /// and view are re-used from `SetRtShadowInputs`. `fillDirWorld` is
-    /// the overhead fill's travel direction (matches
-    /// `DirectionalLight::direction` — points *away* from the virtual
-    /// overhead lamp); the raygen inverts it to shoot shadow rays
-    /// toward the light. `enabled` mirrors the scene's
-    /// `indoorLightsEnabled` — when false the per-frame dispatch is
-    /// skipped so zero RT cost is paid while the user has indoor lights
-    /// off, and `basic.frag`'s cheap directional fill remains the sole
-    /// fill source.
-    void SetRtIndoorInputs(const glm::vec3& fillDirWorld, bool enabled);
-
-    /// Sampled view of the RT indoor-fill visibility image (R8_UNORM,
-    /// `SHADER_READ_ONLY_OPTIMAL` after each dispatch). Stage 9.8 wires
-    /// this into the hybrid composite; before then it's observable but
-    /// not consumed. `VK_NULL_HANDLE` when RT mode is off, the device
-    /// lacks RT support, or the caller has `enabled = false` and the
-    /// pass never built.
-    [[nodiscard]] VkImageView GetRtIndoorVisibilityView() const;
-
-    /// Stage 9.8.b.3 — caller-owned inputs for the Hybrid-RT sun composite:
-    /// the RP.18 shadow-transmission attachment (view + sampler, owned by
-    /// `ShadowMap`) and the scene's `LightingUbo` buffer. The pass samples
-    /// these alongside the main-pass depth + normal G-buffers and the RT
-    /// shadow-visibility image to re-apply the sun term additively into the
-    /// HDR target (see `rt_sun_composite.comp`).
-    ///
-    /// Wiring is lazy: calling this while the render mode is `Rasterised`
-    /// simply caches the handles so a subsequent `SetRenderMode(HybridRt)`
-    /// update picks them up. Passing `VK_NULL_HANDLE` for the view or
-    /// buffer clears the cache; the per-frame dispatch gate then skips
-    /// until the caller re-supplies valid handles.
-    void SetRtSunCompositeInputs(VkImageView shadowTransmissionView,
-                                 VkSampler shadowTransmissionSampler,
-                                 VkBuffer lightingUbo,
-                                 VkDeviceSize lightingUboSize);
-
-    /// Stage 9.8.b.3 — true when the Hybrid-RT sun composite pipeline +
-    /// descriptors are allocated (i.e. Hybrid RT mode is active on an RT-
-    /// capable device and the composite build succeeded). Mirrors
-    /// `IsRtAoSourcedInTonemap` for the sun routing. Observable from tests
-    /// that flip render mode to verify resources come and go in lockstep.
-    [[nodiscard]] bool IsRtSunCompositeBuilt() const {
-        return m_rtSunCompositePipeline != nullptr;
-    }
-
-    /// Stage 9.8.c.3 — wire the `LightingUBO` for the Hybrid-RT indoor-fill
-    /// composite. The indoor composite samples the same buffer the raster
-    /// path uses (`SunLightingScene`-packed); the RT indoor-fill visibility
-    /// view is sourced internally from `m_rtIndoorPass` and needs no caller
-    /// plumbing. Wiring is lazy: calling this while the render mode is
-    /// `Rasterised` caches the handle so a later `SetRenderMode(HybridRt)`
-    /// picks it up. Passing `VK_NULL_HANDLE` / size 0 clears the cache;
-    /// the per-frame dispatch gate then skips until a valid buffer is
-    /// re-supplied. Separate from `SetRtSunCompositeInputs` so that
-    /// enabling one composite doesn't silently couple the other's inputs.
-    void SetRtIndoorCompositeInputs(VkBuffer lightingUbo,
-                                    VkDeviceSize lightingUboSize);
-
-    /// Stage 9.8.c.3 — true when the Hybrid-RT indoor-fill composite
-    /// pipeline + descriptors are allocated. Mirrors
-    /// `IsRtSunCompositeBuilt`. Observable from tests that flip render
-    /// mode to verify resources come and go in lockstep.
-    [[nodiscard]] bool IsRtIndoorCompositeBuilt() const {
-        return m_rtIndoorCompositePipeline != nullptr;
-    }
 
 private:
     void CreateCommandPool();
@@ -570,16 +427,9 @@ private:
     float m_ssaoShadowPower = 1.5F;
 
     // RP.13b — tonemap push-constant state fed into `tonemap.frag` each
-    // frame. Holds `exposure` + (Stage 9.8.a) `useRtAo`; `SetExposure`
-    // writes the former and `SetRenderMode` writes the latter. Struct is
+    // frame. Holds `exposure`; `SetExposure` writes it. Struct is
     // uploaded once per tonemap draw via vkCmdPushConstants.
     TonemapPipeline::PushConstants m_exposurePush{};
-
-    // Stage 9.8.a — mirror of `m_exposurePush.useRtAo` as a bool, so the
-    // `IsRtAoSourcedInTonemap()` accessor can return a clean bool without
-    // float-compare noise. Single source of truth: `RefreshTonemapRtRouting`
-    // writes both this and the push-constant field together.
-    bool m_tonemapUseRtAo = false;
 
     uint32_t m_currentFrame = 0;
     uint32_t m_currentImageIndex = 0;
@@ -589,112 +439,6 @@ private:
     PreMainPassCallback m_preMainPass;
     InPresentPassCallback m_inPresentPass;
 
-    // Stage 9.4.b — RT sun-shadow wire. The pass is only allocated while
-    // `m_renderMode == HybridRt` on an RT-capable device (guarded by
-    // `Device::HasRayTracing()`); otherwise it stays null and the per-frame
-    // dispatch path short-circuits. The depth sampler is a dedicated
-    // NEAREST/clamp sampler used exclusively for depth reads in the
-    // raygen — the depth-pyramid sampler uses LINEAR filtering which is
-    // the wrong semantics for this reconstruction.
-    //
-    // The BLAS/TLAS live outside this class (the caller extracts them
-    // from the scene); `m_rtTlas` is just the non-owning handle the
-    // dispatch binds into descriptor slot 0 each frame. `SetRtShadowInputs`
-    // clears the handle (pass `VK_NULL_HANDLE`) to temporarily skip the
-    // dispatch without leaving Hybrid RT mode — e.g. between scene loads.
-    RenderMode m_renderMode = RenderMode::Rasterised;
-    std::unique_ptr<RtShadowPass> m_rtShadowPass;
-    VkSampler m_rtDepthSampler = VK_NULL_HANDLE;
-    VkAccelerationStructureKHR m_rtTlas = VK_NULL_HANDLE;
-    glm::vec3 m_rtSunDir{0.0F, -1.0F, 0.0F};
-    glm::mat4 m_rtView{1.0F};
-
-    void BuildRtShadowPass();
-    void DestroyRtShadowPass();
-    void DispatchRtShadow(VkCommandBuffer cmd);
-
-    // Stage 9.8.a — recompute the tonemap's AO routing from the current
-    // `m_renderMode` + `m_rtAoPass` state. Sets `m_tonemapUseRtAo`,
-    // `m_exposurePush.useRtAo`, and re-runs `UpdateTonemapDescriptors()`
-    // so binding 2 points at the RT AO view when routing is active or
-    // falls back to the XeGTAO AO view otherwise (raster path remains
-    // bit-compatible because the shader's mix degenerates at useRtAo=0).
-    void RefreshTonemapRtRouting();
-
-    // Stage 9.5.b — RT AO wire. Lifecycle mirrors `m_rtShadowPass`: only
-    // allocated while `m_renderMode == HybridRt` on an RT-capable device,
-    // torn down when the user flips back. The AO pass shares the same
-    // TLAS + depth sampler + view that drive the shadow pass; no parallel
-    // scene state. `m_rtAoFrameIndex` is incremented each dispatch so the
-    // raygen's PCG hash produces different samples per frame — the
-    // foundation for the 9.5.c temporal accumulator without changing the
-    // public API.
-    std::unique_ptr<RtAoPass> m_rtAoPass;
-    float m_rtAoRadius = 1.0F;
-    uint32_t m_rtAoFrameIndex = 0U;
-
-    void BuildRtAoPass();
-    void DestroyRtAoPass();
-    void DispatchRtAo(VkCommandBuffer cmd);
-
-    // Stage 9.7.b — RT indoor-fill wire. Lifecycle mirrors the shadow /
-    // AO passes: only allocated while `m_renderMode == HybridRt` on an
-    // RT-capable device AND `m_rtIndoorEnabled` is true. The pass
-    // shares `m_rtTlas` + `m_rtDepthSampler` + `m_rtView` with the
-    // shadow / AO paths — no parallel scene state.
-    std::unique_ptr<RtIndoorPass> m_rtIndoorPass;
-    glm::vec3 m_rtIndoorDir{0.0F, -1.0F, 0.0F};
-    bool m_rtIndoorEnabled = false;
-
-    void BuildRtIndoorPass();
-    void DestroyRtIndoorPass();
-    void DispatchRtIndoor(VkCommandBuffer cmd);
-
-    // Stage 9.8.b.3 — RT sun composite wire. The compute pipeline + its
-    // descriptor pool / per-swap descriptor sets are allocated on the flip
-    // to `HybridRt` (guarded by `Device::HasRayTracing()`) and torn down
-    // on the flip back to `Rasterised`. Pipeline layout doesn't depend on
-    // swap extent, but the descriptor pool + sets do (HDR / normal views
-    // are per-swap-image), so resizing goes through a full rebuild like
-    // the other RT passes.
-    //
-    // The transmission view + sampler + `LightingUbo` buffer are owned by
-    // the caller (main.cpp's ShadowMap + LightingUbo Buffer). Caching them
-    // here lets the first `SetRenderMode(HybridRt)` pick them up whether
-    // they were wired before or after the mode flip.
-    std::unique_ptr<Shader> m_rtSunCompositeShader;
-    std::unique_ptr<RtSunCompositePipeline> m_rtSunCompositePipeline;
-    VkDescriptorSetLayout m_rtSunCompositeSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_rtSunCompositeDescriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_rtSunCompositeDescriptorSets;
-    VkImageView m_rtSunTransmissionView = VK_NULL_HANDLE;
-    VkSampler m_rtSunTransmissionSampler = VK_NULL_HANDLE;
-    VkBuffer m_rtSunLightingUbo = VK_NULL_HANDLE;
-    VkDeviceSize m_rtSunLightingUboSize = 0;
-
-    void BuildRtSunComposite();
-    void DestroyRtSunComposite();
-    void UpdateRtSunCompositeDescriptors();
-    void DispatchRtSunComposite(VkCommandBuffer cmd);
-
-    // Stage 9.8.c.3 — RT indoor-fill composite wire. Shape identical to
-    // the sun composite above: lazy build on flip to `HybridRt`, rebuild
-    // on swapchain resize, teardown on flip to `Rasterised`. Five
-    // descriptor bindings (depth / normal / RT indoor visibility / UBO /
-    // HDR storage) vs. the sun composite's six — no shadow-transmission
-    // sample since architectural indoor fill doesn't model window tint.
-    std::unique_ptr<Shader> m_rtIndoorCompositeShader;
-    std::unique_ptr<RtIndoorCompositePipeline> m_rtIndoorCompositePipeline;
-    VkDescriptorSetLayout m_rtIndoorCompositeSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_rtIndoorCompositeDescriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_rtIndoorCompositeDescriptorSets;
-    VkBuffer m_rtIndoorCompositeLightingUbo = VK_NULL_HANDLE;
-    VkDeviceSize m_rtIndoorCompositeLightingUboSize = 0;
-
-    void BuildRtIndoorComposite();
-    void DestroyRtIndoorComposite();
-    void UpdateRtIndoorCompositeDescriptors();
-    void DispatchRtIndoorComposite(VkCommandBuffer cmd);
 };
 
 }  // namespace bimeup::renderer

@@ -150,28 +150,12 @@ TEST_F(BasicShaderTest, FragmentShaderStageInfoCorrect) {
     EXPECT_STREQ(info.pName, "main");
 }
 
-// Stage 9.Q.3 contract: basic.frag declares a fragment-stage push
-// constant block containing exactly four 32-bit unsigned int members:
-//   - member 0 `transparentBit` at byte offset 64 (RP.12b — 0 opaque, 4
-//     transparent; written to the stencil G-buffer)
-//   - member 1 `useRtSunPath` at byte offset 68 (Stage 9.8.b.1 — 0 keeps
-//     the raster sun-PCF path bit-compatible, 1 skips the in-shader sun
-//     term so the Stage 9.8.b.2 composite can re-apply it with RT
-//     visibility)
-//   - member 2 `useRtIndoorPath` at byte offset 72 (Stage 9.8.c.1 — 0
-//     bakes the indoor fill-light lambert here, 1 skips it so the Stage
-//     9.8.c.2 composite can re-apply it with RT wall-occlusion)
-//   - member 3 `useRayQueryShadow` at byte offset 76 (Stage 9.Q.3 — 0
-//     keeps the PCF shadow-map sample for raster mode, 1 swaps in an
-//     inline `rayQueryEXT` trace against the TLAS for ray-query mode;
-//     glass-transmission tint composes the same way in either branch)
-// Walk the SPIR-V module: find the OpVariable in the PushConstant storage
-// class, follow its OpTypePointer → OpTypeStruct, assert the struct has
-// exactly four members, each is a 32-bit OpTypeInt with signedness=0,
-// and OpMemberDecorate Offsets 64 + 68 + 72 + 76 are attached at member
-// indices 0 + 1 + 2 + 3. "Exactly four members" catches both a
-// resurrection of the retired `stencilId` member (RP.6d) and a regression
-// that drops any of the per-mode flags.
+// RP.12b contract: basic.frag declares a fragment-stage push constant
+// block containing exactly one 32-bit unsigned int member at byte offset
+// 64 — `transparentBit` (0 opaque / 4 transparent; written to the stencil
+// G-buffer). Walk the SPIR-V module: find the OpVariable in the
+// PushConstant storage class, follow its OpTypePointer → OpTypeStruct,
+// assert exactly one 32-bit OpTypeInt member with signedness=0 at Offset 64.
 TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -240,8 +224,8 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
     }
 
     // Resolve the struct type behind every PushConstant pointer variable,
-    // then assert exactly one has four 32-bit unsigned int members at
-    // Offsets 64 + 68 + 72 + 76.
+    // then assert exactly one has a single 32-bit unsigned int member at
+    // Offset 64.
     auto isU32 = [&](uint32_t typeId) {
         auto it = ints.find(typeId);
         return it != ints.end() && it->second.width == 32U &&
@@ -253,69 +237,17 @@ TEST_F(BasicShaderTest, FragmentShaderDeclaresTransparentBitPushConstant) {
         if (pIt == pointers.end()) continue;
         auto sIt = structs.find(pIt->second.typeId);
         if (sIt == structs.end()) continue;
-        if (sIt->second.memberTypes.size() != 4U) continue;
+        if (sIt->second.memberTypes.size() != 1U) continue;
         auto offIt = memberOffsets.find(pIt->second.typeId);
         if (offIt == memberOffsets.end()) continue;
         auto m0 = offIt->second.find(0U);
-        auto m1 = offIt->second.find(1U);
-        auto m2 = offIt->second.find(2U);
-        auto m3 = offIt->second.find(3U);
-        if (m0 == offIt->second.end() || m1 == offIt->second.end() ||
-            m2 == offIt->second.end() || m3 == offIt->second.end()) continue;
-        if (m0->second != 64U || m1->second != 68U || m2->second != 72U ||
-            m3->second != 76U) continue;
-        if (!isU32(sIt->second.memberTypes[0]) ||
-            !isU32(sIt->second.memberTypes[1]) ||
-            !isU32(sIt->second.memberTypes[2]) ||
-            !isU32(sIt->second.memberTypes[3])) {
-            continue;
-        }
+        if (m0 == offIt->second.end()) continue;
+        if (m0->second != 64U) continue;
+        if (!isU32(sIt->second.memberTypes[0])) continue;
         found = true;
         break;
     }
     EXPECT_TRUE(found)
-        << "basic.frag missing fragment push constants `uint transparentBit` @ "
-           "offset 64 + `uint useRtSunPath` @ offset 68 + `uint useRtIndoorPath` "
-           "@ offset 72 + `uint useRayQueryShadow` @ offset 76 (exactly four "
-           "32-bit uint members expected)";
-}
-
-// Stage 9.Q.3 — ray-query branch lives behind a push-constant gate but
-// the shader still needs to declare the RayQueryKHR capability so the
-// SPIR-V validator + driver compiler accept the inline trace. Walk
-// OpCapability instructions and assert RayQueryKHR (4472) is present.
-TEST_F(BasicShaderTest, FragmentShaderDeclaresRayQueryCapability) {
-    std::string path = std::string(BIMEUP_SHADER_DIR) + "/basic.frag.spv";
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    ASSERT_TRUE(f) << "Missing " << path;
-    const auto bytes = static_cast<std::streamoff>(f.tellg());
-    ASSERT_GT(bytes, 0);
-    ASSERT_EQ(bytes % 4, 0);
-    f.seekg(0);
-    std::vector<uint32_t> words(static_cast<size_t>(bytes) / 4);
-    f.read(reinterpret_cast<char*>(words.data()), bytes);
-
-    ASSERT_GE(words.size(), 5U);
-    ASSERT_EQ(words[0], 0x07230203U) << "Bad SPIR-V magic";
-
-    constexpr uint32_t kOpCapability = 17;
-    constexpr uint32_t kCapabilityRayQueryKHR = 4472;
-
-    bool hasRayQuery = false;
-    for (size_t i = 5; i < words.size();) {
-        const uint32_t header = words[i];
-        const uint32_t opcode = header & 0xFFFFU;
-        const uint32_t count = header >> 16U;
-        ASSERT_GT(count, 0U);
-        ASSERT_LE(i + count, words.size());
-
-        if (opcode == kOpCapability && count >= 2 && words[i + 1] == kCapabilityRayQueryKHR) {
-            hasRayQuery = true;
-            break;
-        }
-        i += count;
-    }
-    EXPECT_TRUE(hasRayQuery)
-        << "basic.frag missing OpCapability RayQueryKHR — `#extension "
-           "GL_EXT_ray_query : require` not active or unused";
+        << "basic.frag missing fragment push constant `uint transparentBit` @ "
+           "offset 64 (exactly one 32-bit uint member expected)";
 }

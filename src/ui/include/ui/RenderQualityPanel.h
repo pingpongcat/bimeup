@@ -75,23 +75,6 @@ struct EdgeOverlaySettings {
     float width{1.0F};
 };
 
-// Stage 9.Q.4 — three-mode user-facing render-mode selector. Pivot
-// 2026-04-23 retired the 9.8.d hybrid-composite design; the new modes are:
-//   - `Rasterised` (default): classical raster path, bit-compatible with
-//     the pre-Stage-9 renderer. Always available.
-//   - `RayQuery`: still the forward-shaded raster path, but `basic.frag`
-//     swaps the PCF shadow-map sample for an inline `rayQueryEXT` trace
-//     against the TLAS. Gated on `Device::HasRayQuery()` — callers
-//     disable the radio when the device doesn't expose `VK_KHR_ray_query`.
-//   - `RayTracing`: future-work placeholder for a fully separate RT
-//     pipeline (9.RT). Permanently disabled in the panel today; the enum
-//     value exists so the UI shape doesn't change when 9.RT lands.
-enum class RenderMode {
-    Rasterised,
-    RayQuery,
-    RayTracing,
-};
-
 struct RenderQualitySettings {
     // RP.16.4.b — three-point `lighting` replaced by sun-driven scene. The
     // panel's Sun widgets (site/date/time) are wired in RP.16.6; 16.7 loads
@@ -101,17 +84,6 @@ struct RenderQualitySettings {
     SmaaSettings smaa{};              // RP.11c — replaces FxaaSettings
     SsaoSettings ssao{};              // RP.20 — XeGTAO tuning knobs
     EdgeOverlaySettings edges{};      // RP.21 — feature-edge overlay
-
-    // Stage 9.Q.4 — render-mode selector. Default `Rasterised` keeps the
-    // out-of-the-box experience bit-compatible with the pre-Stage-9 path.
-    RenderMode mode{RenderMode::Rasterised};
-
-    // Stage 9.Q.4 — set by main.cpp from `Device::HasRayQuery()` so the
-    // panel can grey out the `Ray query` radio when the GPU doesn't
-    // advertise `VK_KHR_ray_query`. The panel does not know about
-    // `Device`; main flips this once at startup. The `Ray tracing` radio
-    // stays permanently disabled regardless of this flag (9.RT placeholder).
-    bool rayQueryAvailable{false};
 
     // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
     // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +

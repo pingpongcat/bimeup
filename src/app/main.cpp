@@ -11,7 +11,6 @@
 #include <ifc/IfcSiteLocation.h>
 #include <platform/Input.h>
 #include <platform/Window.h>
-#include <renderer/AccelerationStructure.h>
 #include <renderer/Buffer.h>
 #include <renderer/Camera.h>
 #include <renderer/ClipPlaneManager.h>
@@ -31,7 +30,6 @@
 #include <renderer/ShadowPass.h>
 #include <renderer/ShadowTransmissionPipeline.h>
 #include <renderer/Swapchain.h>
-#include <renderer/TopLevelAS.h>
 #include <renderer/ViewportNavigator.h>
 #include <renderer/VulkanContext.h>
 #include <scene/AABB.h>
@@ -241,34 +239,17 @@ int main(int argc, char* argv[]) {
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     //                 + clip planes UBO (fragment) + shadow transmission sampler (fragment, RP.18.4)
-    //                 + (Stage 9.Q.4) TLAS (fragment) when the device has ray query.
-    // The TLAS binding is only added on RT-capable devices because
-    // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR requires
-    // VK_KHR_acceleration_structure to be enabled. basic.frag declares the
-    // binding unconditionally, but its access is gated by the
-    // `useRayQueryShadow` push constant — modern Vulkan validators don't
-    // complain about a declared-but-statically-unaccessed binding when
-    // `push.useRayQueryShadow == 0`. The slot also gets written from
-    // `SceneUploader::WriteTlasToDescriptor` after the TLAS is built so
-    // ray-query mode has something to trace against.
-    std::vector<bimeup::renderer::LayoutBinding> dsLayoutBindings{
+    bimeup::renderer::DescriptorSetLayout dsLayout(device, {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-    };
-    std::vector<bimeup::renderer::PoolSize> dsPoolSizes{
+    });
+    bimeup::renderer::DescriptorPool dsPool(device, 1, {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
-    };
-    if (device.HasRayQuery()) {
-        dsLayoutBindings.push_back(
-            {5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT});
-        dsPoolSizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1});
-    }
-    bimeup::renderer::DescriptorSetLayout dsLayout(device, dsLayoutBindings);
-    bimeup::renderer::DescriptorPool dsPool(device, 1, dsPoolSizes);
+    });
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
 
     CameraUBO ubo{};
@@ -499,55 +480,6 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
              sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
 
-    // Stage 9.8.d / 9.Q.4 — BLAS-per-mesh + TLAS-per-node. Built whenever
-    // EITHER ray-tracing OR ray-query is available on the device — both
-    // modes trace against the same TLAS. Strict no-op on non-RT devices
-    // (both classes gate on `device.HasRayTracing` internally; the AS
-    // stack is shared between the two RT modes). Built once here —
-    // dynamic rebuild on scene edits is deferred; hidden nodes still
-    // contribute traces, matching shadow-map behaviour (also from all
-    // nodes).
-    bimeup::renderer::AccelerationStructure rtBlas(device);
-    bimeup::renderer::TopLevelAS rtTlas(device);
-    if (device.HasRayTracing() || device.HasRayQuery()) {
-        std::vector<bimeup::renderer::AccelerationStructure::BlasHandle> sceneMeshBlas(
-            sceneResult->meshes.size(),
-            bimeup::renderer::AccelerationStructure::InvalidHandle);
-        for (std::size_t i = 0; i < sceneResult->meshes.size(); ++i) {
-            auto md = bimeup::core::SceneUploader::ToMeshData(sceneResult->meshes[i]);
-            sceneMeshBlas[i] = rtBlas.BuildBlas(md);
-        }
-
-        std::vector<bimeup::renderer::TlasInstance> instances;
-        instances.reserve(nodeToSceneMeshIdx.size());
-        for (const auto& [nodeId, sceneMeshIdx] : nodeToSceneMeshIdx) {
-            auto h = sceneMeshBlas[sceneMeshIdx];
-            if (!rtBlas.IsValid(h)) continue;
-            const auto& node = sceneResult->scene.GetNode(nodeId);
-            bimeup::renderer::TlasInstance inst{};
-            inst.transform = node.transform;
-            inst.blasAddress = rtBlas.GetDeviceAddress(h);
-            inst.customIndex = node.expressId;
-            inst.mask = 0xFF;
-            // Stage 9.6.a — glass panes opt into FORCE_NO_OPAQUE so the
-            // shadow-ray any-hit shader can attenuate the sun through them.
-            if (sceneResult->meshes[sceneMeshIdx].IsTransparent()) {
-                inst.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
-            }
-            instances.push_back(inst);
-        }
-        rtTlas.Build(instances);
-        LOG_INFO("RT: built {} BLAS + TLAS with {} instances",
-                 rtBlas.BlasCount(), rtTlas.InstanceCount());
-
-        // Stage 9.Q.4 — wire the freshly-built TLAS into binding 5 of the
-        // main descriptor set so basic.frag's ray-query branch has
-        // something to trace against. No-op when `rtTlas.IsValid() == false`
-        // (e.g. an empty scene), in which case raster mode keeps working
-        // and the user just can't pick Ray query yet.
-        bimeup::core::SceneUploader::WriteTlasToDescriptor(descriptorSet, 5, rtTlas);
-    }
-
     // Pipeline
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
@@ -564,25 +496,13 @@ int main(int argc, char* argv[]) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.12b + Stage 9.8.b.1 + Stage 9.8.c.1 + Stage 9.Q.3 fragment-stage
-    // push range at offset 64:
-    //   [64] `uint transparentBit` (RP.12b — 0 opaque, 4 transparent;
-    //        written to the R8_UINT stencil G-buffer for XeGTAO)
-    //   [68] `uint useRtSunPath` (Stage 9.8.b.1 — 0 bakes sun+PCF in the
-    //        shader, 1 skips the sun term so the Hybrid RT composite pass
-    //        can re-apply it with RT visibility)
-    //   [72] `uint useRtIndoorPath` (Stage 9.8.c.1 — 0 bakes the indoor
-    //        fill-light lambert in the shader, 1 skips it so the Hybrid
-    //        RT composite pass can re-apply it with RT wall-occlusion)
-    //   [76] `uint useRayQueryShadow` (Stage 9.Q.3 — 0 keeps the PCF
-    //        shadow-map sample, 1 swaps in an inline `rayQueryEXT` trace
-    //        against the TLAS for the new ray-query render mode)
-    // 16 bytes total. All four members MUST be pushed every draw; Vulkan's
-    // push-constant state is undefined for ranges that weren't written.
+    // RP.12b fragment-stage push range at offset 64: `uint transparentBit`
+    // (0 opaque, 4 transparent; written to the R8_UINT stencil G-buffer for
+    // XeGTAO).
     VkPushConstantRange transparentBitPushRange{};
     transparentBitPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     transparentBitPushRange.offset = 64;
-    transparentBitPushRange.size = 4U * sizeof(uint32_t);
+    transparentBitPushRange.size = sizeof(uint32_t);
 
     bimeup::renderer::PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderLoop.GetRenderPass();
@@ -1193,12 +1113,6 @@ int main(int argc, char* argv[]) {
         rqs.sun.indoorLightsEnabled = true;
         rqs.sun.shadow.enabled = true;
         rqs.sun.shadow.mapResolution = 4096U;
-
-        // Stage 9.Q.4 — panel gates the "Ray query" radio on this probe.
-        // Default mode stays Rasterised so every launch is bit-compatible
-        // with the pre-Stage-9 renderer regardless of GPU capability. The
-        // "Ray tracing" radio stays permanently disabled (9.RT placeholder).
-        rqs.rayQueryAvailable = device.HasRayQuery();
     }
     auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
@@ -1790,51 +1704,6 @@ int main(int argc, char* argv[]) {
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
 
-        // Stage 9.8.d / 9.Q.4 — render-mode sync. The panel selector is the
-        // only source of truth; main.cpp maps it onto `RenderLoop::RenderMode`.
-        // `SetRenderMode` internally `WaitIdle`s and builds/tears-down RT
-        // resources (HybridRt path only — RayQuery has no per-frame RT
-        // dispatch since the trace happens inline in basic.frag), so we only
-        // call it when the mode actually changes. Panel-side gating already
-        // ensures only available modes can be picked.
-        {
-            const auto panelMode = renderQualityPanel->GetSettings().mode;
-            auto desiredMode = bimeup::renderer::RenderLoop::RenderMode::Rasterised;
-            if (panelMode == bimeup::ui::RenderMode::RayQuery && device.HasRayQuery()) {
-                desiredMode = bimeup::renderer::RenderLoop::RenderMode::RayQuery;
-            }
-            if (renderLoop.GetRenderMode() != desiredMode) {
-                renderLoop.SetRenderMode(desiredMode);
-            }
-            if (desiredMode == bimeup::renderer::RenderLoop::RenderMode::HybridRt) {
-                renderLoop.SetRtShadowInputs(rtTlas.GetHandle(), sunPos.dirWorld,
-                                             camera.GetViewMatrix());
-                renderLoop.SetRtAoInputs(1.0F);
-                // Indoor fill direction mirrors the `PackSunLighting`
-                // hardcoded overhead-fill (`normalize(vec3(0.2,-1,0.3))`)
-                // so the RT wall-occlusion pass and the raster lambert
-                // agree on what "the fill light" means geometrically.
-                const glm::vec3 fillDirWorld = glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F));
-                renderLoop.SetRtIndoorInputs(fillDirWorld,
-                                             sunScene.indoorLightsEnabled);
-                // Sun composite needs the RP.18 shadow-transmission view;
-                // fall back to the placeholder (opaque-white transmission)
-                // before the first real shadow build so the composite has
-                // valid bindings.
-                const VkImageView transmissionView = shadowMap
-                    ? shadowMap->GetTransmissionImageView()
-                    : placeholderShadow.GetTransmissionImageView();
-                const VkSampler transmissionSampler = shadowMap
-                    ? shadowMap->GetTransmissionSampler()
-                    : placeholderShadow.GetTransmissionSampler();
-                renderLoop.SetRtSunCompositeInputs(
-                    transmissionView, transmissionSampler,
-                    lightingBuffer.GetBuffer(), sizeof(bimeup::renderer::LightingUbo));
-                renderLoop.SetRtIndoorCompositeInputs(
-                    lightingBuffer.GetBuffer(), sizeof(bimeup::renderer::LightingUbo));
-            }
-        }
-
         // Push AxisSectionController slot state into the shared ClipPlaneManager
         // before we pack it for the shader — the controller's plane entries carry
         // sectionFill=true so the fill pipeline picks them up.
@@ -1887,20 +1756,6 @@ int main(int argc, char* argv[]) {
                 sceneResult->meshes[h].IsTransparent()) return true;
             return handlesWithAlphaOverride.count(h) > 0;
         };
-        // Stage 9.8.b.1 + 9.8.c.1 / 9.Q.4 — opaque-draw push flags:
-        //   `useRtSunPath` / `useRtIndoorPath` (1 in HybridRt mode — defers
-        //     the sun + indoor-fill terms to the composite passes; 0 in
-        //     every other mode so basic.frag bakes them as today)
-        //   `useRayQueryShadow` (1 in RayQuery mode — swaps the sun-block
-        //     PCF tap for the inline rayQueryEXT trace; 0 in every other
-        //     mode so PCF stays the source of sun visibility)
-        // RayQuery and HybridRt are mutually exclusive (the panel can only
-        // select one mode), so the flag pairs never collide.
-        const auto currentMode = renderLoop.GetRenderMode();
-        const uint32_t opaqueHybridFlag =
-            (currentMode == bimeup::renderer::RenderLoop::RenderMode::HybridRt) ? 1U : 0U;
-        const uint32_t opaqueRayQueryFlag =
-            (currentMode == bimeup::renderer::RenderLoop::RenderMode::RayQuery) ? 1U : 0U;
         if (!sectionOnly) {
             for (const auto& [handle, transform] : drawCalls) {
                 if (needsTransparentPass(handle)) {
@@ -1908,11 +1763,12 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                const std::array<uint32_t, 4> fragPush{
-                    0U, opaqueHybridFlag, opaqueHybridFlag, opaqueRayQueryFlag};
+                // RP.12b: opaque draws push transparentBit=0 to mark the
+                // stencil G-buffer.
+                const uint32_t fragPush = 0U;
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
-                                   static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
+                                   sizeof(fragPush), &fragPush);
                 meshBuffer.Draw(cmd, handle);
             }
         }
@@ -2033,16 +1889,10 @@ int main(int argc, char* argv[]) {
                                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
                 // RP.12b: transparent pipeline writes bit 2 into the stencil
                 // G-buffer so XeGTAO can treat glass as transparent.
-                // Stage 9.8.b.1 + 9.8.c.1 + 9.Q.3: transparent always stays
-                // on the raster sun + indoor-fill paths (all three mode
-                // flags = 0) in every render mode — the Hybrid RT composites
-                // only cover front-most opaque surfaces, so switching
-                // transparent to the composite path would drop the sun /
-                // fill term on glass; ray-query equally targets opaque only.
-                const std::array<uint32_t, 4> fragPush{0x4U, 0U, 0U, 0U};
+                const uint32_t fragPush = 0x4U;
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
-                                   static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
+                                   sizeof(fragPush), &fragPush);
                 meshBuffer.Draw(cmd, handle);
             }
         }

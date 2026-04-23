@@ -1,5 +1,4 @@
 #include <gtest/gtest.h>
-#include <renderer/AccelerationStructure.h>
 #include <renderer/Buffer.h>
 #include <renderer/Device.h>
 #include <renderer/Lighting.h>
@@ -7,7 +6,6 @@
 #include <renderer/RenderLoop.h>
 #include <renderer/ShadowPass.h>
 #include <renderer/Swapchain.h>
-#include <renderer/TopLevelAS.h>
 #include <renderer/VulkanContext.h>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,7 +15,6 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-using bimeup::renderer::AccelerationStructure;
 using bimeup::renderer::Buffer;
 using bimeup::renderer::BufferType;
 using bimeup::renderer::Device;
@@ -26,8 +23,6 @@ using bimeup::renderer::MeshData;
 using bimeup::renderer::RenderLoop;
 using bimeup::renderer::ShadowMap;
 using bimeup::renderer::Swapchain;
-using bimeup::renderer::TlasInstance;
-using bimeup::renderer::TopLevelAS;
 using bimeup::renderer::VulkanContext;
 
 // Vulkan context + device + swapchain are shared across all tests in this
@@ -371,137 +366,3 @@ TEST_F(RenderLoopTest, SmaaDisabledStillCyclesFrame) {
     EXPECT_TRUE(m_renderLoop->EndFrame());
     m_renderLoop->WaitIdle();
 }
-
-// Stage 9.4.b — RT render mode plumbing. Default is Rasterised: every
-// existing test above implicitly relies on this, and the classical renderer
-// must stay the out-of-the-box experience (`CLAUDE.md` + Stage-9 ground
-// rules). Switching to Hybrid RT flips on the BLAS/TLAS + RtShadowPass
-// lifecycle; switching back tears them down. Visibility stays un-composited
-// in this task — 9.8 wires the actual contribution into the tonemap.
-TEST_F(RenderLoopTest, DefaultRenderModeIsRasterised) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::Rasterised);
-}
-
-TEST_F(RenderLoopTest, SetRenderModeRoundTrips) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
-    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::HybridRt);
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
-    EXPECT_EQ(m_renderLoop->GetRenderMode(), RenderLoop::RenderMode::Rasterised);
-}
-
-// No TLAS provided: the per-frame dispatch must safely short-circuit so the
-// classical frame still cycles. Runs on every device — exercises the no-TLAS
-// branch of the dispatch gate.
-TEST_F(RenderLoopTest, HybridRtModeCyclesFrameWithoutTlas) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-// Full RT path: build a minimal BLAS/TLAS, hand them to the RenderLoop, and
-// exercise the per-frame shadow dispatch under Vulkan validation. Skipped on
-// non-RT devices — matches the Stage-9 rule that classical renderer stays
-// live when RT is unavailable.
-TEST_F(RenderLoopTest, HybridRtModeWithTlasCyclesFrameOnRtDevice) {
-    if (!m_device->HasRayTracing()) {
-        GTEST_SKIP() << "Device does not advertise RT — dispatch path skipped";
-    }
-
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    const glm::mat4 proj = glm::perspective(glm::radians(60.0F), 800.0F / 600.0F, 0.1F, 100.0F);
-    const glm::mat4 view = glm::lookAt(glm::vec3(0, 0, 2), glm::vec3(0), glm::vec3(0, 1, 0));
-    m_renderLoop->SetProjection(proj, 0.1F, 100.0F);
-
-    MeshData tri;
-    tri.vertices = {
-        {{0.0F, 0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {1, 0, 0, 1}},
-        {{-0.5F, -0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {0, 1, 0, 1}},
-        {{0.5F, -0.5F, 0.0F}, {0.0F, 0.0F, 1.0F}, {0, 0, 1, 1}},
-    };
-    tri.indices = {0, 1, 2};
-
-    AccelerationStructure accel(*m_device);
-    auto blas = accel.BuildBlas(tri);
-    ASSERT_NE(blas, AccelerationStructure::InvalidHandle);
-    TopLevelAS tlas(*m_device);
-    TlasInstance inst{glm::mat4(1.0F), accel.GetDeviceAddress(blas), 0, 0xFF};
-    ASSERT_TRUE(tlas.Build({inst}));
-
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
-    m_renderLoop->SetRtShadowInputs(tlas.GetHandle(),
-                                    glm::normalize(glm::vec3(-1, -2, -1)), view);
-    m_renderLoop->SetRtAoInputs(1.0F);
-    // Stage 9.7.b — indoor-fill pass is live once HybridRt is selected
-    // (view is allocated); the per-frame dispatch gate on `enabled`
-    // decides whether a trace actually runs. With enabled=true plus a
-    // valid TLAS, the dispatch records under validation during the
-    // EndFrame below.
-    m_renderLoop->SetRtIndoorInputs(glm::normalize(glm::vec3(0.2F, -1.0F, 0.3F)),
-                                    /*enabled=*/true);
-    // Stage 9.8.b.3 — sun composite needs the RP.18 shadow-transmission
-    // attachment + the LightingUBO buffer. A ShadowMap is the natural
-    // producer of both handles in a live viewer; construct a small one
-    // here purely to hand valid Vulkan handles to the composite descriptor
-    // writes. A zeroed LightingUbo is fine — the composite samples it, and
-    // validation layers don't care about the math producing a black frame.
-    ShadowMap shadowMap(*m_device, /*resolution=*/256U);
-    LightingUbo lightingUbo{};
-    Buffer lightingBuffer(*m_device, BufferType::Uniform, sizeof(LightingUbo),
-                          &lightingUbo);
-    m_renderLoop->SetRtSunCompositeInputs(shadowMap.GetTransmissionImageView(),
-                                          shadowMap.GetTransmissionSampler(),
-                                          lightingBuffer.GetBuffer(),
-                                          sizeof(LightingUbo));
-    // Stage 9.8.c.3 — indoor composite shares the `LightingUBO` but does
-    // not consume the transmission map (windows are the sun's problem,
-    // not the indoor fill's). Separate setter keeps the API orthogonal.
-    m_renderLoop->SetRtIndoorCompositeInputs(lightingBuffer.GetBuffer(),
-                                             sizeof(LightingUbo));
-    EXPECT_NE(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
-    EXPECT_NE(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
-    EXPECT_NE(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
-    EXPECT_TRUE(m_renderLoop->IsRtSunCompositeBuilt());
-    EXPECT_TRUE(m_renderLoop->IsRtIndoorCompositeBuilt());
-
-    ASSERT_TRUE(m_renderLoop->BeginFrame());
-    EXPECT_TRUE(m_renderLoop->EndFrame());
-    m_renderLoop->WaitIdle();
-}
-
-// Flipping Hybrid RT → Rasterised must release the RT resources (visibility
-// image, descriptors, pipeline) so the classical frame pays no RT cost —
-// mirrors the Stage-9 "BLAS/TLAS lifecycle gated on mode" ground rule.
-TEST_F(RenderLoopTest, SwitchingBackToRasterisedReleasesRtResources) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
-    EXPECT_EQ(m_renderLoop->GetRtShadowVisibilityView(), VK_NULL_HANDLE);
-    EXPECT_EQ(m_renderLoop->GetRtAoImageView(), VK_NULL_HANDLE);
-    EXPECT_EQ(m_renderLoop->GetRtIndoorVisibilityView(), VK_NULL_HANDLE);
-    EXPECT_FALSE(m_renderLoop->IsRtSunCompositeBuilt());
-    EXPECT_FALSE(m_renderLoop->IsRtIndoorCompositeBuilt());
-}
-
-// Stage 9.8.a — tonemap AO source must follow mode + capability. Default is
-// Rasterised → XeGTAO AO. Flipping to Hybrid RT on an RT-capable device
-// switches the tonemap to sample the RT AO image; on a non-RT device the
-// flag stays false because `BuildRtAoPass` is a no-op (the AO view is null,
-// so there's nothing to route). Flipping back always restores the raster
-// source regardless of capability — bit-compatible raster output guaranteed.
-TEST_F(RenderLoopTest, TonemapRtAoSourcingTracksRenderMode) {
-    m_renderLoop = std::make_unique<RenderLoop>(*m_device, *m_swapchain, BIMEUP_SHADER_DIR);
-    EXPECT_FALSE(m_renderLoop->IsRtAoSourcedInTonemap());
-
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::HybridRt);
-    EXPECT_EQ(m_renderLoop->IsRtAoSourcedInTonemap(), m_device->HasRayTracing());
-
-    m_renderLoop->SetRenderMode(RenderLoop::RenderMode::Rasterised);
-    EXPECT_FALSE(m_renderLoop->IsRtAoSourcedInTonemap());
-}
-

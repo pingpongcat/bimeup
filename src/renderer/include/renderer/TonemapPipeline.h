@@ -18,17 +18,13 @@ class Shader;
 /// Target is the sRGB swapchain so the final gamma encode is implicit.
 class TonemapPipeline {
 public:
-    /// RP.11 / RP.13b / 9.8.a knobs fed into `tonemap.frag` via push
-    /// constants. `exposure` is a pre-ACES multiplier on the AO-modulated
-    /// HDR; defaults to 1.0 so unit tests / bare constructors behave
-    /// identically, while the panel seeds a scene-appropriate value
-    /// (~0.6). `useRtAo` selects the AO source — 0.0 samples the XeGTAO
-    /// half-res AO image bound at binding 1 (bit-compatible raster path),
-    /// 1.0 samples the RT AO image bound at binding 2 (Stage 9.8.a hybrid
-    /// composite). RP.13b retired fog.
+    /// RP.11 / RP.13b knobs fed into `tonemap.frag` via push constants.
+    /// `exposure` is a pre-ACES multiplier on the AO-modulated HDR;
+    /// defaults to 1.0 so unit tests / bare constructors behave identically,
+    /// while the panel seeds a scene-appropriate value (~0.6). RP.13b
+    /// retired fog.
     struct PushConstants {
         float exposure{1.0F};
-        float useRtAo{0.0F};
     };
 
     TonemapPipeline(const Device& device,

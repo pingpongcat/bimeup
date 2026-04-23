@@ -209,17 +209,15 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.15.b + Stage 9.8.b.1 + Stage 9.8.c.1 + Stage 9.Q.3 — basic.frag
-    // declares a fragment-stage push constant block with four uints at
-    // offsets 64 (`transparentBit`), 68 (`useRtSunPath`), 72
-    // (`useRtIndoorPath`) and 76 (`useRayQueryShadow`). Pipelines binding
+    // RP.12b — basic.frag declares a fragment-stage push constant block
+    // with one uint at offset 64 (`transparentBit`). Pipelines binding
     // basic.frag must declare the matching range or validation flags the
     // shader/layout mismatch. The cube test stands in as the renderer-side
     // regression guard for the layout shape main.cpp uses.
     VkPushConstantRange fragPushRange{};
     fragPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragPushRange.offset = 64;
-    fragPushRange.size = 4U * sizeof(uint32_t);
+    fragPushRange.size = sizeof(uint32_t);
 
     PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderPass;
@@ -263,15 +261,12 @@ TEST_F(CubeRenderTest, RenderCubeFrameWithoutErrors) {
     glm::mat4 model(1.0F);
     vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(glm::mat4), &model);
-    // Push the full RP.15.b + 9.8.b.1 + 9.8.c.1 + 9.Q.3 fragment-stage
-    // range: transparentBit=4 (transparent pipeline path — exercises the
-    // non-zero path so a missing fragment range in the pipeline layout
-    // surfaces under validation) + useRtSunPath=0 + useRtIndoorPath=0 +
-    // useRayQueryShadow=0 (keep the baked in-shader lighting paths so the
-    // cube still renders without needing a TLAS bound).
-    const std::array<uint32_t, 4> fragPush{0x4U, 0U, 0U, 0U};
+    // Push the RP.12b fragment-stage range: transparentBit=4 (transparent
+    // pipeline path — exercises the non-zero path so a missing fragment
+    // range in the pipeline layout surfaces under validation).
+    const uint32_t fragPush = 0x4U;
     vkCmdPushConstants(cmd, pipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT,
-                       64, static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
+                       64, sizeof(fragPush), &fragPush);
 
     VkBuffer vb = vertexBuffer.GetBuffer();
     VkDeviceSize offset = 0;

@@ -73,12 +73,6 @@ public:
     void UpdateBuffer(uint32_t binding, const Buffer& buffer);
     void UpdateImage(uint32_t binding, VkImageView imageView, VkSampler sampler,
                      VkImageLayout imageLayout);
-    /// Stage 9.Q.2 — bind a top-level acceleration structure to the given
-    /// slot. The descriptor type at `binding` must be
-    /// `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`. Caller must ensure
-    /// `tlas != VK_NULL_HANDLE`; SceneUploader::WriteTlasToDescriptor wraps
-    /// this with the null-TLAS no-op for the raster-mode path.
-    void UpdateAccelerationStructure(uint32_t binding, VkAccelerationStructureKHR tlas);
     void Bind(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, uint32_t setIndex = 0) const;
 
 private:
