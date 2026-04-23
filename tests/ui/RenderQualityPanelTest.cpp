@@ -57,6 +57,14 @@ TEST(RenderQualityPanelTest, DefaultDateTimeIsMidsummerNoon) {
     EXPECT_FLOAT_EQ(s.hourLocal, 12.0F);
 }
 
+TEST(RenderQualityPanelTest, DefaultCustomSunDisabled) {
+    // PRE.4 — Sun sliders default to read-only so expanding the Sun header
+    // doesn't quietly override the runtime sun state. The checkbox is
+    // user-opt-in; until then the date/time/site/indoor widgets are disabled.
+    RenderQualityPanel panel;
+    EXPECT_FALSE(panel.GetSettings().customSunEnabled);
+}
+
 TEST(RenderQualityPanelTest, DefaultUsesSiteGeolocation) {
     // RP.16.7 pushes IfcSite lat/lon in on model load; default ON so users
     // get plausible geography out of the box without touching sliders.

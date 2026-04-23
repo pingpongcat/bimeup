@@ -58,12 +58,27 @@ void RenderQualityPanel::OnDraw() {
         return;
     }
 
+    // PRE.4 — recompute julianDayUtc every frame so the renderer always has
+    // a valid sun from frame 1, regardless of whether the Sun header has
+    // been expanded. Pre-PRE.4 this lived inside the header body, which
+    // meant julianDayUtc stayed at 0 (≈ J2000 epoch) until the user first
+    // clicked the Sun tab — at which point the sun jumped to midsummer
+    // noon, producing the "sudden change" the user flagged.
+    {
+        auto& s = m_settings;
+        s.day = std::clamp(s.day, 1, MaxDayForMonth(s.month, s.year));
+        const float hourUtc = HourLocalToUtc(s.hourLocal, s.sun.siteLocation.longitudeRad);
+        s.sun.julianDayUtc = CalendarToJulianDayUtc(s.year, s.month, s.day, hourUtc);
+    }
+
     if (ImGui::CollapsingHeader("Sun")) {
         auto& s = m_settings;
 
+        ImGui::Checkbox("Custom", &s.customSunEnabled);
+        ImGui::BeginDisabled(!s.customSunEnabled);
+
         ImGui::SliderInt("Month", &s.month, 1, 12);
         const int maxDay = MaxDayForMonth(s.month, s.year);
-        s.day = std::clamp(s.day, 1, maxDay);
         ImGui::SliderInt("Day", &s.day, 1, maxDay);
         ImGui::SliderFloat("Hour (local)", &s.hourLocal, 0.0F, 24.0F, "%.2f");
 
@@ -82,8 +97,7 @@ void RenderQualityPanel::OnDraw() {
 
         ImGui::Checkbox("Artificial interior lights", &s.sun.indoorLightsEnabled);
 
-        const float hourUtc = HourLocalToUtc(s.hourLocal, s.sun.siteLocation.longitudeRad);
-        s.sun.julianDayUtc = CalendarToJulianDayUtc(s.year, s.month, s.day, hourUtc);
+        ImGui::EndDisabled();
     }
 
     if (ImGui::CollapsingHeader("Tonemap")) {

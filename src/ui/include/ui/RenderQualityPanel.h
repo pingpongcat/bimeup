@@ -99,6 +99,13 @@ struct RenderQualitySettings {
     // (RP.16.7). The panel's lat/lon sliders are read-only in that mode.
     // When false, the sliders own lat/lon.
     bool useSiteGeolocation{true};
+
+    // PRE.4 — opt-in gate for the Sun tab's sliders. When false (default),
+    // the date/time/site/indoor-lights widgets render disabled: the user
+    // sees the current state but can't change it. When true, the widgets
+    // are editable. Orthogonal to `useSiteGeolocation`, which is a second
+    // gate on the lat/lon sliders specifically.
+    bool customSunEnabled{false};
 };
 
 class RenderQualityPanel : public Panel {
