@@ -142,6 +142,29 @@ void DescriptorSet::UpdateImage(uint32_t binding, VkImageView imageView, VkSampl
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
+void DescriptorSet::UpdateAccelerationStructure(uint32_t binding,
+                                                VkAccelerationStructureKHR tlas) {
+    // VkWriteDescriptorSetAccelerationStructureKHR is chained via pNext on
+    // the base WriteDescriptorSet — vkUpdateDescriptorSets itself is core,
+    // but the AS write descriptor type requires VK_KHR_acceleration_structure
+    // to be enabled on the device.
+    VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+    asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    asInfo.accelerationStructureCount = 1;
+    asInfo.pAccelerationStructures = &tlas;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.pNext = &asInfo;
+    write.dstSet = m_set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    write.descriptorCount = 1;
+
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
 void DescriptorSet::Bind(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
                          uint32_t setIndex) const {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, setIndex, 1,

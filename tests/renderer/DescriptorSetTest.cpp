@@ -1,17 +1,25 @@
 #include <gtest/gtest.h>
+#include <renderer/AccelerationStructure.h>
 #include <renderer/DescriptorSet.h>
 #include <renderer/Buffer.h>
 #include <renderer/Device.h>
+#include <renderer/MeshBuffer.h>
 #include <renderer/ShadowPass.h>
+#include <renderer/TopLevelAS.h>
 #include <renderer/VulkanContext.h>
 
+using bimeup::renderer::AccelerationStructure;
 using bimeup::renderer::Buffer;
 using bimeup::renderer::BufferType;
 using bimeup::renderer::DescriptorPool;
 using bimeup::renderer::DescriptorSet;
 using bimeup::renderer::DescriptorSetLayout;
 using bimeup::renderer::Device;
+using bimeup::renderer::MeshData;
 using bimeup::renderer::ShadowMap;
+using bimeup::renderer::TlasInstance;
+using bimeup::renderer::TopLevelAS;
+using bimeup::renderer::Vertex;
 using bimeup::renderer::VulkanContext;
 
 class DescriptorSetTest : public ::testing::Test {
@@ -135,6 +143,58 @@ TEST_F(DescriptorSetTest, UpdateWithImage) {
 
     EXPECT_NO_THROW(set.UpdateImage(0, shadowMap.GetImageView(), shadowMap.GetSampler(),
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+}
+
+// 9.Q.2 — Descriptor-set layout must accept the acceleration-structure type
+// at any binding slot. Skipped on devices that don't have the AS extension
+// (neither RT pipeline nor ray-query enabled), because the descriptor type
+// itself is defined by VK_KHR_acceleration_structure.
+TEST_F(DescriptorSetTest, LayoutAcceptsAccelerationStructureBinding) {
+    if (!m_device->HasRayTracing() && !m_device->HasRayQuery()) {
+        GTEST_SKIP() << "VK_KHR_acceleration_structure not enabled on this device";
+    }
+
+    DescriptorSetLayout layout(*m_device, {
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
+        {4, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT},
+    });
+
+    EXPECT_NE(layout.GetLayout(), VK_NULL_HANDLE);
+}
+
+// 9.Q.2 — UpdateAccelerationStructure binds a TLAS handle to the given slot.
+// Builds a 1-triangle BLAS + 1-instance TLAS so the call exercises the same
+// VK_KHR_acceleration_structure write path raster shaders will hit in 9.Q.3.
+TEST_F(DescriptorSetTest, UpdateWithAccelerationStructure) {
+    if (!m_device->HasRayTracing() && !m_device->HasRayQuery()) {
+        GTEST_SKIP() << "VK_KHR_acceleration_structure not enabled on this device";
+    }
+
+    AccelerationStructure as(*m_device);
+    MeshData mesh;
+    mesh.vertices = {
+        Vertex{{0, 0, 0}, {0, 0, 1}, {1, 1, 1, 1}},
+        Vertex{{1, 0, 0}, {0, 0, 1}, {1, 1, 1, 1}},
+        Vertex{{0, 1, 0}, {0, 0, 1}, {1, 1, 1, 1}},
+    };
+    mesh.indices = {0, 1, 2};
+    auto blas = as.BuildBlas(mesh);
+    ASSERT_TRUE(as.IsValid(blas));
+
+    TopLevelAS tlas(*m_device);
+    TlasInstance instance{};
+    instance.blasAddress = as.GetDeviceAddress(blas);
+    ASSERT_TRUE(tlas.Build({instance}));
+
+    DescriptorSetLayout layout(*m_device, {
+        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT},
+    });
+    DescriptorPool pool(*m_device, 1, {
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
+    });
+    DescriptorSet set(*m_device, pool, layout);
+
+    EXPECT_NO_THROW(set.UpdateAccelerationStructure(0, tlas.GetHandle()));
 }
 
 TEST_F(DescriptorSetTest, DestructorCleansUp) {

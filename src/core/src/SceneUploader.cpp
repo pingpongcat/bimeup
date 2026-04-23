@@ -1,5 +1,7 @@
 #include <core/SceneUploader.h>
 
+#include <renderer/DescriptorSet.h>
+#include <renderer/TopLevelAS.h>
 #include <scene/SceneNode.h>
 
 namespace bimeup::core {
@@ -48,6 +50,14 @@ void SceneUploader::Upload(scene::BuildResult& result, renderer::MeshBuffer& mes
             node.mesh.reset();
         }
     }
+}
+
+void SceneUploader::WriteTlasToDescriptor(renderer::DescriptorSet& set, uint32_t binding,
+                                          const renderer::TopLevelAS& tlas) {
+    if (!tlas.IsValid()) {
+        return;
+    }
+    set.UpdateAccelerationStructure(binding, tlas.GetHandle());
 }
 
 } // namespace bimeup::core
