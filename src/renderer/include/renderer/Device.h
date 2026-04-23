@@ -3,12 +3,21 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
+#include <cstdint>
+#include <optional>
+
 namespace bimeup::renderer {
 
 class Device {
 public:
     explicit Device(VkInstance instance);
     Device(VkInstance instance, VkSurfaceKHR surface);
+    /// CLI `--device-id N` override. `deviceIndexOverride` is the 0-based
+    /// index into `vkEnumeratePhysicalDevices` (same order as the "Vulkan
+    /// device: ..." log lines). Throws `std::runtime_error` if the index is
+    /// out of range or the picked device lacks a graphics/present queue.
+    Device(VkInstance instance, VkSurfaceKHR surface,
+           std::optional<std::uint32_t> deviceIndexOverride);
     ~Device();
 
     Device(const Device&) = delete;
@@ -49,7 +58,8 @@ public:
 
 private:
     void CreateAllocator(VkInstance instance);
-    void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
+    void PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface,
+                            std::optional<std::uint32_t> deviceIndexOverride);
     void CreateLogicalDevice(bool enableSwapchain);
     void ProbeLineRasterization();
     void ProbeRayTracing();

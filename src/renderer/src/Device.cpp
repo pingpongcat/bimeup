@@ -11,7 +11,7 @@
 namespace bimeup::renderer {
 
 Device::Device(VkInstance instance) {
-    PickPhysicalDevice(instance, VK_NULL_HANDLE);
+    PickPhysicalDevice(instance, VK_NULL_HANDLE, std::nullopt);
     ProbeLineRasterization();
     ProbeRayTracing();
     CreateLogicalDevice(false);
@@ -19,10 +19,19 @@ Device::Device(VkInstance instance) {
 }
 
 Device::Device(VkInstance instance, VkSurfaceKHR surface) {
-    PickPhysicalDevice(instance, surface);
+    PickPhysicalDevice(instance, surface, std::nullopt);
     ProbeLineRasterization();
     ProbeRayTracing();
     CreateLogicalDevice(true);
+    CreateAllocator(instance);
+}
+
+Device::Device(VkInstance instance, VkSurfaceKHR surface,
+               std::optional<std::uint32_t> deviceIndexOverride) {
+    PickPhysicalDevice(instance, surface, deviceIndexOverride);
+    ProbeLineRasterization();
+    ProbeRayTracing();
+    CreateLogicalDevice(surface != VK_NULL_HANDLE);
     CreateAllocator(instance);
 }
 
@@ -76,7 +85,8 @@ void Device::CreateAllocator(VkInstance instance) {
     }
 }
 
-void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
+void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface,
+                                std::optional<std::uint32_t> deviceIndexOverride) {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
 
@@ -98,7 +108,9 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
     };
 
     long long bestScore = -1;
-    for (const auto& device : devices) {
+    std::uint32_t bestIndex = 0;
+    for (std::uint32_t i = 0; i < deviceCount; ++i) {
+        VkPhysicalDevice device = devices[i];
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(device, &props);
 
@@ -113,7 +125,7 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
         const long long score =
             (hasGraphics && hasPresent) ? RateDevice(device) : -1;
         if (bimeup::tools::Log::GetLogger()) {
-            LOG_INFO("Vulkan device: {} ({}) score={}{}", props.deviceName,
+            LOG_INFO("Vulkan device #{}: {} ({}) score={}{}", i, props.deviceName,
                      typeName(props.deviceType), score,
                      (!hasGraphics ? "  [no graphics queue]"
                       : !hasPresent ? "  [no present queue]"
@@ -122,24 +134,51 @@ void Device::PickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
 
         if (score > bestScore) {
             bestScore = score;
-            m_physicalDevice = device;
-            m_graphicsQueueFamily = graphicsFamily;
-            if (surface != VK_NULL_HANDLE) {
-                FindPresentQueueFamily(device, surface, m_presentQueueFamily);
-                m_hasPresentQueue = true;
-            }
+            bestIndex = i;
         }
     }
 
-    if (m_physicalDevice == VK_NULL_HANDLE) {
+    std::uint32_t chosenIndex = bestIndex;
+    if (deviceIndexOverride.has_value()) {
+        const std::uint32_t wanted = *deviceIndexOverride;
+        if (wanted >= deviceCount) {
+            throw std::runtime_error(
+                "--device-id " + std::to_string(wanted) +
+                " is out of range (0.." + std::to_string(deviceCount - 1) + ")");
+        }
+        VkPhysicalDevice device = devices[wanted];
+        uint32_t graphicsFamily = 0;
+        if (!FindGraphicsQueueFamily(device, graphicsFamily)) {
+            throw std::runtime_error(
+                "--device-id " + std::to_string(wanted) +
+                " picks a device with no graphics queue");
+        }
+        if (surface != VK_NULL_HANDLE) {
+            uint32_t presentFamily = 0;
+            if (!FindPresentQueueFamily(device, surface, presentFamily)) {
+                throw std::runtime_error(
+                    "--device-id " + std::to_string(wanted) +
+                    " picks a device that cannot present to the window surface");
+            }
+        }
+        chosenIndex = wanted;
+    } else if (bestScore < 0) {
         throw std::runtime_error("No suitable GPU found (need graphics queue)");
+    }
+
+    m_physicalDevice = devices[chosenIndex];
+    FindGraphicsQueueFamily(m_physicalDevice, m_graphicsQueueFamily);
+    if (surface != VK_NULL_HANDLE) {
+        FindPresentQueueFamily(m_physicalDevice, surface, m_presentQueueFamily);
+        m_hasPresentQueue = true;
     }
 
     if (bimeup::tools::Log::GetLogger()) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-        LOG_INFO("Selected GPU: {} ({})", props.deviceName,
-                 typeName(props.deviceType));
+        LOG_INFO("Selected GPU #{}: {} ({}){}", chosenIndex, props.deviceName,
+                 typeName(props.deviceType),
+                 deviceIndexOverride.has_value() ? "  [--device-id override]" : "");
     }
 }
 

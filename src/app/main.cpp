@@ -43,6 +43,7 @@
 #include <scene/SceneNode.h>
 #include <scene/SectionCapGeometry.h>
 #include <scene/SectionEdgeGeometry.h>
+#include <tools/CliArgs.h>
 #include <tools/Log.h>
 #include <ui/AxisSectionPanel.h>
 #include <ui/FirstPersonExitPanel.h>
@@ -140,6 +141,17 @@ CollectDrawCalls(const bimeup::scene::Scene& scene) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    bimeup::tools::CliArgs cli = bimeup::tools::ParseCliArgs(argc, argv);
+    if (!cli.ok) {
+        std::fprintf(stderr, "bimeup: %s\n\n", cli.error.c_str());
+        std::fprintf(stderr, "%s", bimeup::tools::CliHelpText("bimeup").c_str());
+        return 2;
+    }
+    if (cli.help) {
+        std::printf("%s", bimeup::tools::CliHelpText("bimeup").c_str());
+        return 0;
+    }
+
     std::printf("bimeup v%s\n", BIMEUP_VERSION);
 
     bimeup::tools::Log::Init("bimeup");
@@ -192,7 +204,7 @@ int main(int argc, char* argv[]) {
     };
     SurfaceGuard surfaceGuard{vulkanContext.GetInstance(), surface};
 
-    bimeup::renderer::Device device(vulkanContext.GetInstance(), surface);
+    bimeup::renderer::Device device(vulkanContext.GetInstance(), surface, cli.deviceId);
     auto fbSize = window.GetFramebufferSize();
     bimeup::renderer::Swapchain swapchain(
         device, surface, VkExtent2D{static_cast<uint32_t>(fbSize.x), static_cast<uint32_t>(fbSize.y)});
@@ -328,8 +340,8 @@ int main(int argc, char* argv[]) {
         renderLoop.RecreateForSwapchain();
     };
 
-    // Load IFC file (use CLI argument if given, otherwise the bundled sample).
-    std::string ifcPath = (argc > 1) ? std::string(argv[1]) : std::string(BIMEUP_SAMPLE_IFC);
+    // Load IFC file (use CLI positional argument if given, otherwise the bundled sample).
+    std::string ifcPath = cli.ifcPath.value_or(std::string(BIMEUP_SAMPLE_IFC));
     LOG_INFO("Loading IFC file: {}", ifcPath);
 
     bimeup::ifc::AsyncLoader asyncLoader;

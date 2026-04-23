@@ -3,6 +3,9 @@
 ## Current Stage: Stage 9 — Ray Tracing (additive, opt-in render mode)
 ## Current Task: 9.9 Optional path tracer (or skip to 10.1). RP.17.6 edge-snap permanently deferred (classical-raster nice-to-have, Stage 9.6 subsumes it via RT).
 
+## Stage CLI — Command-line flags
+- [x] CLI.1 `--device-id <N>` + `-h` / `--help`. New `tools::CliArgs` parser (positional `<ifc-path>`, `--help` / `-h`, `--device-id N|--device-id=N`, friendly error + help on unknown/multiple positionals). `Device` gains a 3-arg ctor `(instance, surface, deviceIndexOverride)` that bypasses the rate-based auto-pick; OOR / no-graphics / no-present overrides throw with a user-readable message. `PickPhysicalDevice` now logs `Vulkan device #N: ...` so the index is visible in the startup log. Tests: 13× `CliArgsTest` (parse, error paths, help text). Wired in `main.cpp` before log init; `argv[1]` positional path now routes through `cli.ifcPath.value_or(BIMEUP_SAMPLE_IFC)`.
+
 > Completion notes live in `git log` (all commits use `[stage.task] description` per CLAUDE.md). This file stays terse — one line per task, sub-tasks one line each. Plan details per stage: `docs/plan/stage_<X>.md`.
 
 ## Stage 1 — Project Bootstrap & Build System
