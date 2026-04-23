@@ -217,6 +217,40 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
         drag.active = false;
     }
 
+    // --- Drag bar + origin dot + grab circle (drawn first so F|S|B pills
+    //     and the × close button sit on top — the grab is the bottom of the
+    //     z-stack within the handle). Background draw list so the whole
+    //     handle sits behind any panels the user opens, matching the nav
+    //     gizmo's stacking.
+    {
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        // Per-axis color (CG convention). UI labels "Y" and "Z" are swapped
+        // relative to the internal `Axis` enum (BIM convention, see
+        // AxisSectionPanel.cpp kAxisButtons), so world Axis::Y is the UI "Z"
+        // (blue / vertical) and world Axis::Z is the UI "Y" (green / depth).
+        // SectionOnly overrides to amber across all axes as a mode cue.
+        const ImU32 perAxisColor = [axis]() -> ImU32 {
+            switch (axis) {
+                case scene::Axis::X: return IM_COL32(230, 70, 70, 255);   // red
+                case scene::Axis::Y: return IM_COL32(80, 140, 240, 255);  // blue
+                case scene::Axis::Z: return IM_COL32(80, 220, 120, 255);  // green
+            }
+            return IM_COL32(80, 220, 120, 255);
+        }();
+        const ImU32 axisColor = (mode == scene::SectionMode::SectionOnly)
+                                    ? IM_COL32(255, 200, 64, 255)  // amber
+                                    : perAxisColor;
+        dl->AddLine(ImVec2{originPx.x, originPx.y},
+                    ImVec2{grabPx.x, grabPx.y}, axisColor, 2.5F);
+        dl->AddCircleFilled(ImVec2{originPx.x, originPx.y}, 3.5F, axisColor);
+        const bool dragging = drag.active && drag.axis == axis;
+        const ImU32 grabColor =
+            dragging ? IM_COL32_WHITE : (grab.hovered ? IM_COL32(160, 255, 200, 255) : axisColor);
+        dl->AddCircleFilled(ImVec2{grabPx.x, grabPx.y}, 9.0F, grabColor);
+        dl->AddCircle(ImVec2{grabPx.x, grabPx.y}, 9.0F,
+                      IM_COL32(0, 0, 0, 200), 0, 1.5F);
+    }
+
     // --- Mode pills (B / F / C) — drawn as one glued segmented button ---
     auto modePill = [&](const char* label, glm::vec2 pos,
                         scene::SectionMode target,
@@ -228,7 +262,7 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
             ImVec2{kPillWidth, 20.0F});
         const bool isActive = (mode == target);
 
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const ImU32 bg =
             isActive    ? IM_COL32(70, 160, 220, 255)
             : r.hovered ? IM_COL32(110, 110, 110, 255)
@@ -262,7 +296,7 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
 
     // Vertical separator lines between adjacent pills for visual segmentation.
     {
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const ImU32 sep = IM_COL32(0, 0, 0, 96);
         for (int i = 1; i < 3; ++i) {
             const glm::vec2 c = groupStart + kHorizontal * (kPillWidth * i);
@@ -276,7 +310,7 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
     const internal::RegionResult closeBtn = internal::HitRegion(
         idBuf, ImVec2{xPx.x - 9.0F, xPx.y - 9.0F}, ImVec2{18.0F, 18.0F});
     {
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const ImU32 bg = closeBtn.hovered ? IM_COL32(220, 70, 70, 255)
                                           : IM_COL32(120, 50, 50, 255);
         dl->AddCircleFilled(ImVec2{xPx.x, xPx.y}, 9.0F, bg);
@@ -290,36 +324,6 @@ inline bool DrawAxisHandle(scene::Axis axis, float& offset,
     if (closeBtn.pressed) {
         open = false;
         changed = true;
-    }
-
-    // --- Drag bar + origin dot + grab circle ---
-    {
-        ImDrawList* dl = ImGui::GetForegroundDrawList();
-        // Per-axis color (CG convention). UI labels "Y" and "Z" are swapped
-        // relative to the internal `Axis` enum (BIM convention, see
-        // AxisSectionPanel.cpp kAxisButtons), so world Axis::Y is the UI "Z"
-        // (blue / vertical) and world Axis::Z is the UI "Y" (green / depth).
-        // SectionOnly overrides to amber across all axes as a mode cue.
-        const ImU32 perAxisColor = [axis]() -> ImU32 {
-            switch (axis) {
-                case scene::Axis::X: return IM_COL32(230, 70, 70, 255);   // red
-                case scene::Axis::Y: return IM_COL32(80, 140, 240, 255);  // blue
-                case scene::Axis::Z: return IM_COL32(80, 220, 120, 255);  // green
-            }
-            return IM_COL32(80, 220, 120, 255);
-        }();
-        const ImU32 axisColor = (mode == scene::SectionMode::SectionOnly)
-                                    ? IM_COL32(255, 200, 64, 255)  // amber
-                                    : perAxisColor;
-        dl->AddLine(ImVec2{originPx.x, originPx.y},
-                    ImVec2{grabPx.x, grabPx.y}, axisColor, 2.5F);
-        dl->AddCircleFilled(ImVec2{originPx.x, originPx.y}, 3.5F, axisColor);
-        const bool dragging = drag.active && drag.axis == axis;
-        const ImU32 grabColor =
-            dragging ? IM_COL32_WHITE : (grab.hovered ? IM_COL32(160, 255, 200, 255) : axisColor);
-        dl->AddCircleFilled(ImVec2{grabPx.x, grabPx.y}, 9.0F, grabColor);
-        dl->AddCircle(ImVec2{grabPx.x, grabPx.y}, 9.0F,
-                      IM_COL32(0, 0, 0, 200), 0, 1.5F);
     }
 
     return changed;

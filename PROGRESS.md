@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage PRE — Pre-Stage-10 UX polish
-## Current Task: PRE.1 — nav gizmo drag-to-orbit
+## Current Stage: Stage 10 — VR Integration (Stage PRE closed 2026-04-23, Stage 9 ray-tracing retired 2026-04-23)
+## Current Task: 10.1 — OpenXR session lifecycle.
 
 > **Pivot 2026-04-23 — three render modes, not hybrid.** Render-mode selector becomes three distinct modes, each a complete rendering path:
 >
@@ -268,7 +268,7 @@ Stripped after the 9.Q.5 visual gate showed ray-query mode either matching the c
 
 ## Stage PRE — Pre-Stage-10 UX polish (2026-04-23)
 - [x] PRE.1 Nav gizmo drag-to-orbit — click + drag inside the hover circle (outside axis discs) orbits the camera. Covers laptops without middle-mouse (touchpad only). Shift halves the gain for fine control. LMB press inside the hover circle is gated out of picking/measure/PoV so the same click can't both select and orbit.
-- [ ] PRE.2 Section handle z-order — grab sphere draws behind F|S|B|X; whole handle sits behind GUI windows (BackgroundDrawList, like the nav gizmo).
+- [x] PRE.2 Section handle z-order — bar/origin/grab now draw first, then F|S|B pills, separators, X; all switched from `GetForegroundDrawList()` to `GetBackgroundDrawList()` so the whole handle sits behind any GUI panels the user opens.
 
 ## Stage 10 — VR Integration
 - [ ] 10.1 OpenXR session lifecycle
