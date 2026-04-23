@@ -241,17 +241,34 @@ int main(int argc, char* argv[]) {
 
     // Descriptor set: camera UBO (vertex) + lighting UBO (fragment) + shadow map sampler (fragment)
     //                 + clip planes UBO (fragment) + shadow transmission sampler (fragment, RP.18.4)
-    bimeup::renderer::DescriptorSetLayout dsLayout(device, {
+    //                 + (Stage 9.Q.4) TLAS (fragment) when the device has ray query.
+    // The TLAS binding is only added on RT-capable devices because
+    // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR requires
+    // VK_KHR_acceleration_structure to be enabled. basic.frag declares the
+    // binding unconditionally, but its access is gated by the
+    // `useRayQueryShadow` push constant — modern Vulkan validators don't
+    // complain about a declared-but-statically-unaccessed binding when
+    // `push.useRayQueryShadow == 0`. The slot also gets written from
+    // `SceneUploader::WriteTlasToDescriptor` after the TLAS is built so
+    // ray-query mode has something to trace against.
+    std::vector<bimeup::renderer::LayoutBinding> dsLayoutBindings{
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
         {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT},
-    });
-    bimeup::renderer::DescriptorPool dsPool(device, 1, {
+    };
+    std::vector<bimeup::renderer::PoolSize> dsPoolSizes{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
-    });
+    };
+    if (device.HasRayQuery()) {
+        dsLayoutBindings.push_back(
+            {5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_FRAGMENT_BIT});
+        dsPoolSizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1});
+    }
+    bimeup::renderer::DescriptorSetLayout dsLayout(device, dsLayoutBindings);
+    bimeup::renderer::DescriptorPool dsPool(device, 1, dsPoolSizes);
     bimeup::renderer::DescriptorSet descriptorSet(device, dsPool, dsLayout);
 
     CameraUBO ubo{};
@@ -482,16 +499,17 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Scene built: {} nodes, {} meshes uploaded",
              sceneResult->scene.GetNodeCount(), meshBuffer.MeshCount());
 
-    // Stage 9.8.d — BLAS-per-mesh + TLAS-per-node for Hybrid RT. Strict
-    // no-op on non-RT devices (both classes gate on `device.HasRayTracing`
-    // internally), so the classical raster frame pays zero RT cost. Built
-    // once here — dynamic rebuild on scene edits (visibility toggles,
-    // isolate) is deferred to Stage 9.10; for now hidden nodes still
-    // contribute RT shadows, which matches the visibility behaviour of
-    // the rasterised shadow map (also built from all nodes).
+    // Stage 9.8.d / 9.Q.4 — BLAS-per-mesh + TLAS-per-node. Built whenever
+    // EITHER ray-tracing OR ray-query is available on the device — both
+    // modes trace against the same TLAS. Strict no-op on non-RT devices
+    // (both classes gate on `device.HasRayTracing` internally; the AS
+    // stack is shared between the two RT modes). Built once here —
+    // dynamic rebuild on scene edits is deferred; hidden nodes still
+    // contribute traces, matching shadow-map behaviour (also from all
+    // nodes).
     bimeup::renderer::AccelerationStructure rtBlas(device);
     bimeup::renderer::TopLevelAS rtTlas(device);
-    if (device.HasRayTracing()) {
+    if (device.HasRayTracing() || device.HasRayQuery()) {
         std::vector<bimeup::renderer::AccelerationStructure::BlasHandle> sceneMeshBlas(
             sceneResult->meshes.size(),
             bimeup::renderer::AccelerationStructure::InvalidHandle);
@@ -521,6 +539,13 @@ int main(int argc, char* argv[]) {
         rtTlas.Build(instances);
         LOG_INFO("RT: built {} BLAS + TLAS with {} instances",
                  rtBlas.BlasCount(), rtTlas.InstanceCount());
+
+        // Stage 9.Q.4 — wire the freshly-built TLAS into binding 5 of the
+        // main descriptor set so basic.frag's ray-query branch has
+        // something to trace against. No-op when `rtTlas.IsValid() == false`
+        // (e.g. an empty scene), in which case raster mode keeps working
+        // and the user just can't pick Ray query yet.
+        bimeup::core::SceneUploader::WriteTlasToDescriptor(descriptorSet, 5, rtTlas);
     }
 
     // Pipeline
@@ -1169,10 +1194,11 @@ int main(int argc, char* argv[]) {
         rqs.sun.shadow.enabled = true;
         rqs.sun.shadow.mapResolution = 4096U;
 
-        // Stage 9.8.d — panel gates the "Hybrid RT" radio on this probe.
+        // Stage 9.Q.4 — panel gates the "Ray query" radio on this probe.
         // Default mode stays Rasterised so every launch is bit-compatible
-        // with the pre-Stage-9 renderer regardless of GPU capability.
-        rqs.rayTracingAvailable = device.HasRayTracing();
+        // with the pre-Stage-9 renderer regardless of GPU capability. The
+        // "Ray tracing" radio stays permanently disabled (9.RT placeholder).
+        rqs.rayQueryAvailable = device.HasRayQuery();
     }
     auto* axisSectionPanel = axisSectionOwned.get();
     planViewPanel = planViewOwned.get();
@@ -1764,19 +1790,19 @@ int main(int argc, char* argv[]) {
         *lightMapped = lightingUbo;
         lightingBuffer.Unmap();
 
-        // Stage 9.8.d — render-mode sync + per-frame RT inputs. The panel
-        // selector is the only source of truth; main.cpp maps it onto
-        // `RenderLoop::RenderMode` and feeds the RT shadow / AO / indoor
-        // passes their per-frame state. `SetRenderMode` internally
-        // `WaitIdle`s and builds/tears-down RT resources, so we only call
-        // it when the mode actually changes.
+        // Stage 9.8.d / 9.Q.4 — render-mode sync. The panel selector is the
+        // only source of truth; main.cpp maps it onto `RenderLoop::RenderMode`.
+        // `SetRenderMode` internally `WaitIdle`s and builds/tears-down RT
+        // resources (HybridRt path only — RayQuery has no per-frame RT
+        // dispatch since the trace happens inline in basic.frag), so we only
+        // call it when the mode actually changes. Panel-side gating already
+        // ensures only available modes can be picked.
         {
             const auto panelMode = renderQualityPanel->GetSettings().mode;
-            const auto desiredMode =
-                (panelMode == bimeup::ui::RenderMode::HybridRt &&
-                 device.HasRayTracing())
-                    ? bimeup::renderer::RenderLoop::RenderMode::HybridRt
-                    : bimeup::renderer::RenderLoop::RenderMode::Rasterised;
+            auto desiredMode = bimeup::renderer::RenderLoop::RenderMode::Rasterised;
+            if (panelMode == bimeup::ui::RenderMode::RayQuery && device.HasRayQuery()) {
+                desiredMode = bimeup::renderer::RenderLoop::RenderMode::RayQuery;
+            }
             if (renderLoop.GetRenderMode() != desiredMode) {
                 renderLoop.SetRenderMode(desiredMode);
             }
@@ -1861,18 +1887,20 @@ int main(int argc, char* argv[]) {
                 sceneResult->meshes[h].IsTransparent()) return true;
             return handlesWithAlphaOverride.count(h) > 0;
         };
-        // Stage 9.8.b.1 + 9.8.c.1 — opaque draws route the sun + indoor-fill
-        // terms to the Hybrid RT composite passes when the mode is
-        // `HybridRt` (both flags = 1). Rasterised mode keeps both flags = 0
-        // so `basic.frag` bakes sun + PCF + transmission + directional fill
-        // exactly as in pre-9.8 output. The 9.8.c.2 composite is not yet
-        // wired into main.cpp via `SetRenderMode(HybridRt)` (that's
-        // 9.8.d), so Hybrid RT visibly loses the contributions today —
-        // expected during the sub-split; visual check deferred to 9.8.d.
+        // Stage 9.8.b.1 + 9.8.c.1 / 9.Q.4 — opaque-draw push flags:
+        //   `useRtSunPath` / `useRtIndoorPath` (1 in HybridRt mode — defers
+        //     the sun + indoor-fill terms to the composite passes; 0 in
+        //     every other mode so basic.frag bakes them as today)
+        //   `useRayQueryShadow` (1 in RayQuery mode — swaps the sun-block
+        //     PCF tap for the inline rayQueryEXT trace; 0 in every other
+        //     mode so PCF stays the source of sun visibility)
+        // RayQuery and HybridRt are mutually exclusive (the panel can only
+        // select one mode), so the flag pairs never collide.
+        const auto currentMode = renderLoop.GetRenderMode();
         const uint32_t opaqueHybridFlag =
-            (renderLoop.GetRenderMode() == bimeup::renderer::RenderLoop::RenderMode::HybridRt)
-                ? 1U
-                : 0U;
+            (currentMode == bimeup::renderer::RenderLoop::RenderMode::HybridRt) ? 1U : 0U;
+        const uint32_t opaqueRayQueryFlag =
+            (currentMode == bimeup::renderer::RenderLoop::RenderMode::RayQuery) ? 1U : 0U;
         if (!sectionOnly) {
             for (const auto& [handle, transform] : drawCalls) {
                 if (needsTransparentPass(handle)) {
@@ -1880,11 +1908,8 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                // Stage 9.Q.3 — useRayQueryShadow always 0 here; ray-query
-                // mode wiring lands in 9.Q.4 (RenderQualityPanel + main.cpp
-                // mode selection). Until then opaque draws stay on the
-                // classical raster sun-shadow path.
-                const std::array<uint32_t, 4> fragPush{0U, opaqueHybridFlag, opaqueHybridFlag, 0U};
+                const std::array<uint32_t, 4> fragPush{
+                    0U, opaqueHybridFlag, opaqueHybridFlag, opaqueRayQueryFlag};
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
                                    static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());

@@ -75,16 +75,21 @@ struct EdgeOverlaySettings {
     float width{1.0F};
 };
 
-// Stage 9.8.d — user-facing render-mode selector. Rasterised (default)
-// stays bit-compatible with the pre-Stage-9 classical renderer; HybridRt
-// routes sun + indoor-fill + AO through the RT composites (gated on
-// `Device::HasRayTracing()` — callers disable the radio when unavailable).
-// `PathTraced` is a 9.9 hook; the panel shows the option disabled for
-// now so the UI shape doesn't need to change when 9.9 lands.
+// Stage 9.Q.4 — three-mode user-facing render-mode selector. Pivot
+// 2026-04-23 retired the 9.8.d hybrid-composite design; the new modes are:
+//   - `Rasterised` (default): classical raster path, bit-compatible with
+//     the pre-Stage-9 renderer. Always available.
+//   - `RayQuery`: still the forward-shaded raster path, but `basic.frag`
+//     swaps the PCF shadow-map sample for an inline `rayQueryEXT` trace
+//     against the TLAS. Gated on `Device::HasRayQuery()` — callers
+//     disable the radio when the device doesn't expose `VK_KHR_ray_query`.
+//   - `RayTracing`: future-work placeholder for a fully separate RT
+//     pipeline (9.RT). Permanently disabled in the panel today; the enum
+//     value exists so the UI shape doesn't change when 9.RT lands.
 enum class RenderMode {
     Rasterised,
-    HybridRt,
-    PathTraced,
+    RayQuery,
+    RayTracing,
 };
 
 struct RenderQualitySettings {
@@ -97,15 +102,16 @@ struct RenderQualitySettings {
     SsaoSettings ssao{};              // RP.20 — XeGTAO tuning knobs
     EdgeOverlaySettings edges{};      // RP.21 — feature-edge overlay
 
-    // Stage 9.8.d — render-mode selector. Default `Rasterised` keeps the
+    // Stage 9.Q.4 — render-mode selector. Default `Rasterised` keeps the
     // out-of-the-box experience bit-compatible with the pre-Stage-9 path.
     RenderMode mode{RenderMode::Rasterised};
 
-    // Stage 9.8.d — set by main.cpp from `Device::HasRayTracing()` so the
-    // panel can grey out the Hybrid RT radio when the GPU doesn't advertise
-    // RT extensions. The panel does not know about `Device`; main flips
-    // this once at startup.
-    bool rayTracingAvailable{false};
+    // Stage 9.Q.4 — set by main.cpp from `Device::HasRayQuery()` so the
+    // panel can grey out the `Ray query` radio when the GPU doesn't
+    // advertise `VK_KHR_ray_query`. The panel does not know about
+    // `Device`; main flips this once at startup. The `Ray tracing` radio
+    // stays permanently disabled regardless of this flag (9.RT placeholder).
+    bool rayQueryAvailable{false};
 
     // RP.16.6 — panel-local date/time/site UI state. On draw, the panel
     // recomputes `sun.julianDayUtc` from (year, month, day, hourLocal) +

@@ -74,9 +74,16 @@ public:
     /// `Device::HasRayTracing()`). On non-RT devices, setting the mode to
     /// `HybridRt` is accepted as state but the per-frame RT dispatch
     /// short-circuits — the classical frame still cycles unchanged.
+    /// Stage 9.Q.4 — `RayQuery` is the new pivot mode: still the
+    /// forward-shaded raster path, but `basic.frag`'s sun-shadow PCF tap
+    /// swaps for an inline `rayQueryEXT` trace. Gated on
+    /// `Device::HasRayQuery()`. The renderer doesn't need any per-frame
+    /// dispatch for this mode — it's purely a flag main.cpp reads to
+    /// push `useRayQueryShadow = 1` per opaque draw.
     enum class RenderMode : uint8_t {
         Rasterised = 0,
         HybridRt = 1,
+        RayQuery = 2,
     };
 
     RenderLoop(const Device& device, Swapchain& swapchain,

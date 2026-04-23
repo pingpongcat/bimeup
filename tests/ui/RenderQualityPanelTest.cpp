@@ -139,19 +139,30 @@ TEST(RenderQualityPanelTest, SmaaQualityPresetsMapToIryokuSearchSteps) {
     EXPECT_EQ(bimeup::ui::MaxSearchStepsDiag(bimeup::ui::SmaaQuality::High), 8);
 }
 
-// Stage 9.8.d — render-mode selector pinned to Rasterised by default so
-// every launch is bit-compatible with the pre-Stage-9 classical renderer.
-// Hybrid RT becomes selectable once `rayTracingAvailable` is flipped by
-// main.cpp after the Device probe — the panel itself does not know about
-// the GPU, so the flag is the only coupling point.
+// Stage 9.Q.4 — three-radio render-mode selector pinned to Rasterised by
+// default so every launch is bit-compatible with the pre-Stage-9 classical
+// renderer. `Ray query` becomes selectable once `rayQueryAvailable` is
+// flipped by main.cpp after `Device::HasRayQuery()`. `Ray tracing` is a
+// future-work hook — the enum value exists so the panel UI shape doesn't
+// need to change when 9.RT lands, but the panel keeps the radio
+// permanently disabled with a tooltip until then.
 TEST(RenderQualityPanelTest, DefaultRenderModeIsRasterised) {
     RenderQualityPanel panel;
     EXPECT_EQ(panel.GetSettings().mode, bimeup::ui::RenderMode::Rasterised);
 }
 
-TEST(RenderQualityPanelTest, DefaultRayTracingAvailabilityIsFalse) {
+TEST(RenderQualityPanelTest, DefaultRayQueryAvailabilityIsFalse) {
     RenderQualityPanel panel;
-    EXPECT_FALSE(panel.GetSettings().rayTracingAvailable);
+    EXPECT_FALSE(panel.GetSettings().rayQueryAvailable);
+}
+
+TEST(RenderQualityPanelTest, RenderModeEnumHasRayQueryAndRayTracing) {
+    // Compile-time guard: the 9.Q.4 pivot retired the 9.8.d
+    // `HybridRt` / `PathTraced` enum values in favour of `RayQuery` /
+    // `RayTracing`. A reintroduction of the old names would fail to
+    // compile this test (and main.cpp's mode mapping).
+    [[maybe_unused]] constexpr auto rq = bimeup::ui::RenderMode::RayQuery;
+    [[maybe_unused]] constexpr auto rt = bimeup::ui::RenderMode::RayTracing;
 }
 
 TEST(RenderQualityPanelTest, MutableSettingsAllowsDateTimeEdits) {

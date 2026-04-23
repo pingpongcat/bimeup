@@ -58,27 +58,30 @@ void RenderQualityPanel::OnDraw() {
         return;
     }
 
-    // Stage 9.8.d — render-mode switch. HybridRt greyed out when the
-    // device probe says no; tooltip explains why. `PathTraced` is a
-    // 9.9 hook, always greyed out for now.
+    // Stage 9.Q.4 — three-mode render-mode switch. `Ray query` greyed out
+    // when the device probe says no `VK_KHR_ray_query`; tooltip explains
+    // why. `Ray tracing` is a 9.RT hook, always greyed out for now.
     if (ImGui::CollapsingHeader("Mode")) {
         auto& mode = m_settings.mode;
         if (ImGui::RadioButton("Rasterised", mode == RenderMode::Rasterised)) {
             mode = RenderMode::Rasterised;
         }
-        ImGui::BeginDisabled(!m_settings.rayTracingAvailable);
-        if (ImGui::RadioButton("Hybrid RT", mode == RenderMode::HybridRt)) {
-            mode = RenderMode::HybridRt;
+        ImGui::BeginDisabled(!m_settings.rayQueryAvailable);
+        if (ImGui::RadioButton("Ray query", mode == RenderMode::RayQuery)) {
+            mode = RenderMode::RayQuery;
         }
         ImGui::EndDisabled();
-        if (!m_settings.rayTracingAvailable && ImGui::IsItemHovered(
+        if (!m_settings.rayQueryAvailable && ImGui::IsItemHovered(
                 ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("GPU lacks VK_KHR_ray_tracing_pipeline");
+            ImGui::SetTooltip("GPU lacks VK_KHR_ray_query");
         }
         ImGui::BeginDisabled(true);
-        bool pt = mode == RenderMode::PathTraced;
-        ImGui::RadioButton("Path Traced", pt);
+        bool rt = mode == RenderMode::RayTracing;
+        ImGui::RadioButton("Ray tracing", rt);
         ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Future work — separate RT pipeline (Stage 9.RT)");
+        }
     }
 
     if (ImGui::CollapsingHeader("Sun")) {
