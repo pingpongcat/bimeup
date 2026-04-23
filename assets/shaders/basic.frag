@@ -1,4 +1,5 @@
-#version 450
+#version 460
+#extension GL_EXT_ray_query : require
 
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec3 fragNormalWorld;
@@ -28,11 +29,18 @@ layout(location = 2) out uint outStencilId;
 // fill-light lambert — 0 bakes it here (bit-compatible raster path), 1
 // skips it so the Stage 9.8.c.2 composite can re-apply it with RT wall
 // occlusion. Transparent draws stay on path 0 for both flags in every
-// mode (composites only cover opaque surfaces).
+// mode (composites only cover opaque surfaces). Stage 9.Q.3:
+// `useRayQueryShadow` is 0 for raster mode (PCF shadow-map sample) and 1
+// for ray-query mode — the inner branch swaps the PCF tap for an inline
+// `rayQueryEXT` trace against the TLAS. Glass transmission (RP.18 tint)
+// composes the same way in either branch: visibility is the only thing
+// that swaps. Mutually exclusive with `useRtSunPath` in practice (only
+// one mode can claim the sun term at a time).
 layout(push_constant) uniform StencilPush {
     layout(offset = 64) uint transparentBit;
     layout(offset = 68) uint useRtSunPath;
     layout(offset = 72) uint useRtIndoorPath;
+    layout(offset = 76) uint useRayQueryShadow;
 } push;
 
 layout(set = 0, binding = 1) uniform LightingUBO {
@@ -62,6 +70,13 @@ layout(set = 0, binding = 3) uniform ClipPlanesUBO {
 // the darkest tap. Sampler border is opaque white so out-of-frustum reads
 // behave as "no glass".
 layout(set = 0, binding = 4) uniform sampler2D shadowTransmissionMap;
+
+// Stage 9.Q.3 — TLAS for inline ray-query shadow traces. Bound only when
+// the device exposes ray-query (Stage 9.Q.1 probe) and the scene's TLAS
+// has been built (`SceneUploader::WriteTlasToDescriptor`). The fragment
+// only samples it when `push.useRayQueryShadow == 1` — raster mode keeps
+// the PCF path and never touches this binding.
+layout(set = 0, binding = 5) uniform accelerationStructureEXT tlas;
 
 vec3 lambertContribution(vec3 n, vec4 dirI, vec4 colE) {
     float enabled = colE.w;
@@ -107,6 +122,32 @@ vec3 computeTransmittedSun(float visibility, float fragLightZ, float bias,
     bool glassAhead = transmit.a < fragLightZ - bias;
     vec3 tint = glassAhead ? transmit.rgb : vec3(1.0);
     return sunColor * (visibility * tint);
+}
+
+// Stage 9.Q.3 — single inline ray-query trace toward the sun. Returns
+// visibility in [0,1] — 1 when the ray reaches the sky unobstructed, 0
+// when something is in the way. Geometric-truth alternative to PCF: no
+// shadow-map bias artefacts, no resolution-bound contact-shadow gap. The
+// `OpaqueEXT | TerminateOnFirstHit` flag pair plus the
+// `SkipClosestHitShader` keep the trace allocation-free — we don't need
+// hit attributes, just a binary occluded/lit answer. Surface-normal bias
+// (epsilon along `n`) keeps the ray from self-intersecting the surface
+// it was launched from. Pulls the sun direction from `LightingUBO` —
+// `keyDirectionIntensity.xyz` is the direction sun light *travels*, so
+// `toLight = -keyDirectionIntensity.xyz`. Glass instances with the
+// 9.6.a `FORCE_NO_OPAQUE` flag don't attenuate this trace (any-hit
+// shaders aren't invoked by ray-query proceed in opaque mode); window
+// transmission is handled separately via the RP.18 transmission map.
+float rayQueryShadow(vec3 worldPos, vec3 worldNormal) {
+    vec3 toSun = normalize(-lights.keyDirectionIntensity.xyz);
+    vec3 origin = worldPos + worldNormal * 0.001;
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, tlas,
+                          gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+                          0xFFu, origin, 0.001, toSun, 1.0e6);
+    rayQueryProceedEXT(rq);
+    return rayQueryGetIntersectionTypeEXT(rq, true) ==
+           gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
 // 3x3 PCF mirror of bimeup::renderer::ComputePcfShadow. Returns visibility in
@@ -170,7 +211,15 @@ void main() {
         // Shadow only attenuates the key light; fill and rim stay unshadowed for now.
         vec3 key = lambertContribution(n, lights.keyDirectionIntensity, lights.keyColorEnabled);
         float shadowEnabled = lights.shadowParams.x;
-        float visibility = mix(1.0, pcfShadow(fragWorldPos), shadowEnabled);
+        // Stage 9.Q.3 — pick visibility source. Ray-query mode (push set
+        // by the panel via the new RenderMode::RayQuery in 9.Q.4) traces
+        // a single shadow ray; raster mode keeps the PCF tap. Glass tint
+        // composes on top of either via the unchanged
+        // `computeTransmittedSun` path below.
+        float rawShadow = (push.useRayQueryShadow == 1U)
+            ? rayQueryShadow(fragWorldPos, n)
+            : pcfShadow(fragWorldPos);
+        float visibility = mix(1.0, rawShadow, shadowEnabled);
         // RP.18.4 / RP.18.7 — sample the window-transmission map at the fragment's
         // lightUV. Need the fragment's own light-space Z too (not just the UV) so
         // `computeTransmittedSun` can gate the tint on "glass is in front of this

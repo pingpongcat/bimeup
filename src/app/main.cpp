@@ -539,7 +539,8 @@ int main(int argc, char* argv[]) {
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
 
-    // RP.12b + Stage 9.8.b.1 + Stage 9.8.c.1 fragment-stage push range at offset 64:
+    // RP.12b + Stage 9.8.b.1 + Stage 9.8.c.1 + Stage 9.Q.3 fragment-stage
+    // push range at offset 64:
     //   [64] `uint transparentBit` (RP.12b — 0 opaque, 4 transparent;
     //        written to the R8_UINT stencil G-buffer for XeGTAO)
     //   [68] `uint useRtSunPath` (Stage 9.8.b.1 — 0 bakes sun+PCF in the
@@ -548,12 +549,15 @@ int main(int argc, char* argv[]) {
     //   [72] `uint useRtIndoorPath` (Stage 9.8.c.1 — 0 bakes the indoor
     //        fill-light lambert in the shader, 1 skips it so the Hybrid
     //        RT composite pass can re-apply it with RT wall-occlusion)
-    // 12 bytes total. All three members MUST be pushed every draw; Vulkan's
+    //   [76] `uint useRayQueryShadow` (Stage 9.Q.3 — 0 keeps the PCF
+    //        shadow-map sample, 1 swaps in an inline `rayQueryEXT` trace
+    //        against the TLAS for the new ray-query render mode)
+    // 16 bytes total. All four members MUST be pushed every draw; Vulkan's
     // push-constant state is undefined for ranges that weren't written.
     VkPushConstantRange transparentBitPushRange{};
     transparentBitPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     transparentBitPushRange.offset = 64;
-    transparentBitPushRange.size = 3U * sizeof(uint32_t);
+    transparentBitPushRange.size = 4U * sizeof(uint32_t);
 
     bimeup::renderer::PipelineConfig pipelineConfig{};
     pipelineConfig.renderPass = renderLoop.GetRenderPass();
@@ -1876,7 +1880,11 @@ int main(int argc, char* argv[]) {
                 }
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(glm::mat4), &transform);
-                const std::array<uint32_t, 3> fragPush{0U, opaqueHybridFlag, opaqueHybridFlag};
+                // Stage 9.Q.3 — useRayQueryShadow always 0 here; ray-query
+                // mode wiring lands in 9.Q.4 (RenderQualityPanel + main.cpp
+                // mode selection). Until then opaque draws stay on the
+                // classical raster sun-shadow path.
+                const std::array<uint32_t, 4> fragPush{0U, opaqueHybridFlag, opaqueHybridFlag, 0U};
                 vkCmdPushConstants(cmd, shadedPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
                                    static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
@@ -2000,12 +2008,13 @@ int main(int argc, char* argv[]) {
                                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
                 // RP.12b: transparent pipeline writes bit 2 into the stencil
                 // G-buffer so XeGTAO can treat glass as transparent.
-                // Stage 9.8.b.1 + 9.8.c.1: transparent always stays on the
-                // raster sun + indoor-fill paths (both flags = 0) in every
-                // render mode — the Hybrid RT composites only cover
-                // front-most opaque surfaces, so switching transparent to the
-                // composite path would drop the sun / fill term on glass.
-                const std::array<uint32_t, 3> fragPush{0x4U, 0U, 0U};
+                // Stage 9.8.b.1 + 9.8.c.1 + 9.Q.3: transparent always stays
+                // on the raster sun + indoor-fill paths (all three mode
+                // flags = 0) in every render mode — the Hybrid RT composites
+                // only cover front-most opaque surfaces, so switching
+                // transparent to the composite path would drop the sun /
+                // fill term on glass; ray-query equally targets opaque only.
+                const std::array<uint32_t, 4> fragPush{0x4U, 0U, 0U, 0U};
                 vkCmdPushConstants(cmd, transparentPipeline->GetLayout(),
                                    VK_SHADER_STAGE_FRAGMENT_BIT, 64,
                                    static_cast<uint32_t>(sizeof(fragPush)), fragPush.data());
