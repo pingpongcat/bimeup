@@ -808,6 +808,30 @@ int main(int argc, char* argv[]) {
     };
     auto imguiWantsMouse = [] { return ImGui::GetIO().WantCaptureMouse; };
 
+    // Nav gizmo rect/center — single source of truth shared by the click-gate
+    // in OnMouseButton and the drag-to-orbit logic in the render loop. Kept in
+    // sync with SetRect/DrawGizmo down in the frame loop (same kCubeSize=96,
+    // 10 px margin from the top-right). hoverRadius mirrors imoguizmo's
+    // hoverCircleRadiusScale (0.88).
+    constexpr float kGizmoSize = 96.0F;
+    constexpr float kGizmoMargin = 10.0F;
+    auto gizmoCenter = [&]() {
+        const auto ws = windowSize();
+        return glm::vec2(ws.x - kGizmoSize * 0.5F - kGizmoMargin,
+                         kGizmoMargin + kGizmoSize * 0.5F);
+    };
+    auto gizmoHoverRadius = []() { return kGizmoSize * 0.5F * 0.88F; };
+    auto insideGizmoHoverCircle = [&](glm::vec2 p) {
+        const glm::vec2 d = p - gizmoCenter();
+        const float r = gizmoHoverRadius();
+        return glm::dot(d, d) <= r * r;
+    };
+
+    // Persistent orbit-from-gizmo state. Armed on LMB press inside the hover
+    // circle *if* DrawGizmo didn't snap an axis on the same frame; cleared on
+    // mouse release.
+    bool gizmoOrbitActive = false;
+
     // Snap a hit point to the nearest of the hit triangle's three vertices,
     // using a screen-aware threshold (~3% of view distance) so close-up snaps
     // tightly while far-away snaps still feel forgiving.
@@ -851,6 +875,14 @@ int main(int argc, char* argv[]) {
         if (btn == bimeup::platform::MouseButton::Left && pressed && !imguiWantsMouse()) {
             auto mouse = input.GetMousePosition();
             const glm::vec2 sp(static_cast<float>(mouse.x), static_cast<float>(mouse.y));
+            // Clicks over the nav gizmo's hover circle are reserved for the
+            // gizmo: axis-snap (handled by DrawGizmo) or drag-to-orbit. Skip
+            // picking/measure/PoV so a gizmo click doesn't also select an
+            // element behind it. Suppressed in first-person mode since the
+            // gizmo is hidden then.
+            if (!firstPersonActive && insideGizmoHoverCircle(sp)) {
+                return;
+            }
             if (measureModeActive) {
                 // Commit the snap candidate updated each hover frame. If the cursor
                 // isn't over geometry, no snap → no point dropped.
@@ -1591,15 +1623,15 @@ int main(int argc, char* argv[]) {
         // Hidden during first-person mode so the exit button owns the corner.
         if (!firstPersonActive) {
             const auto ws = windowSize();
-            constexpr float kCubeSize = 96.0F;
             ImOGuizmo::config.axisLengthScale = 0.15F;
             ImOGuizmo::config.positiveRadiusScale = 0.10F;
             ImOGuizmo::config.negativeRadiusScale = 0.07F;
-            ImOGuizmo::SetRect(ws.x - kCubeSize - 10.0F, 10.0F, kCubeSize);
+            ImOGuizmo::SetRect(ws.x - kGizmoSize - kGizmoMargin, kGizmoMargin, kGizmoSize);
             ImOGuizmo::BeginFrame();
             glm::mat4 viewCopy = camera.GetViewMatrix();
-            if (ImOGuizmo::DrawGizmo(&viewCopy[0][0], &gizmoProj[0][0],
-                                     camera.GetDistance())) {
+            const bool axisSnapped = ImOGuizmo::DrawGizmo(
+                &viewCopy[0][0], &gizmoProj[0][0], camera.GetDistance());
+            if (axisSnapped) {
                 glm::vec3 forward{-viewCopy[0][2], -viewCopy[1][2], -viewCopy[2][2]};
                 const glm::vec2 yp = bimeup::renderer::YawPitchFromForward(forward);
                 camera.SetYawPitch(yp.x, yp.y);
@@ -1607,6 +1639,31 @@ int main(int argc, char* argv[]) {
                     planViewPanel->Deactivate();
                 }
             }
+
+            // Drag-to-orbit on the gizmo's hover circle — lets users without a
+            // middle mouse button (laptop touchpads) orbit the camera. Axis
+            // snap wins over drag on the press frame. Gain is ~2× the viewport
+            // MMB-orbit rate because the gizmo is small (96 px) so motions
+            // would otherwise feel cramped.
+            const ImGuiIO& io = ImGui::GetIO();
+            const glm::vec2 mp(io.MousePos.x, io.MousePos.y);
+            if (!axisSnapped && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                insideGizmoHoverCircle(mp)) {
+                gizmoOrbitActive = true;
+            }
+            if (gizmoOrbitActive) {
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    const float gain = io.KeyShift ? 0.003F : 0.010F;
+                    camera.Orbit(io.MouseDelta.x * gain, io.MouseDelta.y * gain);
+                    if (planViewPanel != nullptr && planViewPanel->ActiveLevel() >= 0) {
+                        planViewPanel->Deactivate();
+                    }
+                } else {
+                    gizmoOrbitActive = false;
+                }
+            }
+        } else {
+            gizmoOrbitActive = false;
         }
 
         // Update camera UBO. Camera::SetPerspective already applies the Vulkan

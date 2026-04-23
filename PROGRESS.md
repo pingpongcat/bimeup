@@ -1,7 +1,7 @@
 # Bimeup — Progress Tracker
 
-## Current Stage: Stage 10 — VR Integration (Stage 9 ray-tracing fully retired 2026-04-23)
-## Current Task: 10.1 — OpenXR session lifecycle.
+## Current Stage: Stage PRE — Pre-Stage-10 UX polish
+## Current Task: PRE.1 — nav gizmo drag-to-orbit
 
 > **Pivot 2026-04-23 — three render modes, not hybrid.** Render-mode selector becomes three distinct modes, each a complete rendering path:
 >
@@ -265,6 +265,10 @@ Stage gate at end of Stage RP: full `ctest -j$(nproc) --output-on-failure` all p
 
 ## Stage 9 — Ray Tracing — RETIRED 2026-04-23
 Stripped after the 9.Q.5 visual gate showed ray-query mode either matching the classical raster output or producing inconsistent shadows around windows; combined with the RT traversal cost per fragment on building-scale geometry, performance was net negative. The classical renderer (RP.18 transmission shadow map + PCF + XeGTAO + SMAA + edge overlay) already does what a textureless BIM viewer needs, so RT is not a fit for this project. All Stage-9 code was deleted (see commit `[STAGE9] Strip Stage 9 ray-tracing entirely`): `AccelerationStructure`, `TopLevelAS`, `RayTracingPipeline`, `RtShadowPass`/`RtAoPass`/`RtIndoorPass`, `RtSunCompositePipeline`/`RtIndoorCompositePipeline`, `Device::HasRayTracing`/`HasRayQuery` probes, the RT extension chain in `CreateLogicalDevice`, the panel's `RenderMode` selector, and all RT shaders + tests. `tonemap.frag` push struct shrank back to 4 B (`exposure` only); `basic.frag` push struct shrank back to 4 B (`transparentBit` only).
+
+## Stage PRE — Pre-Stage-10 UX polish (2026-04-23)
+- [x] PRE.1 Nav gizmo drag-to-orbit — click + drag inside the hover circle (outside axis discs) orbits the camera. Covers laptops without middle-mouse (touchpad only). Shift halves the gain for fine control. LMB press inside the hover circle is gated out of picking/measure/PoV so the same click can't both select and orbit.
+- [ ] PRE.2 Section handle z-order — grab sphere draws behind F|S|B|X; whole handle sits behind GUI windows (BackgroundDrawList, like the nav gizmo).
 
 ## Stage 10 — VR Integration
 - [ ] 10.1 OpenXR session lifecycle
