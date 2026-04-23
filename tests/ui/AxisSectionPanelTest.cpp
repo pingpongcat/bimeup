@@ -49,6 +49,29 @@ TEST(AxisSectionPanelTest, ToggleAxisCreatesSlotAtOffsetZeroCutFront) {
     EXPECT_EQ(ctrl.GetSlot(Axis::X)->mode, SectionMode::CutFront);
 }
 
+TEST(AxisSectionPanelTest, ToggleAxisStartsAtCenterOfPerAxisOffsetRange) {
+    // Offsetting the initial plane to the model's centre matters for IFC files
+    // whose origin sits in a corner — starting at 0 would place the handle
+    // outside the scene. Here the X range is [10, 30] so the centre is 20; the
+    // Y range stays default [-10, 10] so the centre is 0.
+    AxisSectionController ctrl;
+    AxisSectionPanel panel;
+    panel.SetController(&ctrl);
+    panel.SetOffsetRange(glm::vec3(10.0F, -10.0F, -5.0F),
+                         glm::vec3(30.0F, 10.0F, 45.0F));
+
+    panel.ToggleAxis(Axis::X);
+    panel.ToggleAxis(Axis::Y);
+    panel.ToggleAxis(Axis::Z);
+
+    ASSERT_TRUE(ctrl.HasSlot(Axis::X));
+    ASSERT_TRUE(ctrl.HasSlot(Axis::Y));
+    ASSERT_TRUE(ctrl.HasSlot(Axis::Z));
+    EXPECT_FLOAT_EQ(ctrl.GetSlot(Axis::X)->offset, 20.0F);
+    EXPECT_FLOAT_EQ(ctrl.GetSlot(Axis::Y)->offset, 0.0F);
+    EXPECT_FLOAT_EQ(ctrl.GetSlot(Axis::Z)->offset, 20.0F);
+}
+
 TEST(AxisSectionPanelTest, ToggleAxisCreatesThenRemoves) {
     AxisSectionController ctrl;
     AxisSectionPanel panel;

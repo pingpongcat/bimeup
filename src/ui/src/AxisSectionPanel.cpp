@@ -79,7 +79,13 @@ void AxisSectionPanel::ToggleAxis(scene::Axis axis) {
     if (m_controller->HasSlot(axis)) {
         m_controller->ClearSlot(axis);
     } else {
-        m_controller->SetSlot(axis, {0.0F, DefaultModeFor(axis)});
+        // Initial offset at the per-axis centre of the offset range so the
+        // plane lands in the middle of the model. IFC files often place their
+        // origin in a corner, and 0.0F would spawn the handle outside the
+        // scene; centre-of-range works for origin-inside models too since the
+        // range is symmetric about the scene centre.
+        const float center = 0.5F * (OffsetMin(axis) + OffsetMax(axis));
+        m_controller->SetSlot(axis, {center, DefaultModeFor(axis)});
     }
 }
 

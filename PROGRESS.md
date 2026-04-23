@@ -269,6 +269,7 @@ Stripped after the 9.Q.5 visual gate showed ray-query mode either matching the c
 ## Stage PRE — Pre-Stage-10 UX polish (2026-04-23)
 - [x] PRE.1 Nav gizmo drag-to-orbit — click + drag inside the hover circle (outside axis discs) orbits the camera. Covers laptops without middle-mouse (touchpad only). Shift halves the gain for fine control. LMB press inside the hover circle is gated out of picking/measure/PoV so the same click can't both select and orbit.
 - [x] PRE.2 Section handle z-order — bar/origin/grab now draw first, then F|S|B pills, separators, X; all switched from `GetForegroundDrawList()` to `GetBackgroundDrawList()` so the whole handle sits behind any GUI panels the user opens.
+- [x] PRE.3 Initial section offset at model centre — `AxisSectionPanel::ToggleAxis` uses `(OffsetMin + OffsetMax) / 2` per axis instead of `0.0F`, so planes spawn at the scene centre even on IFC models whose origin is in a corner. New test `ToggleAxisStartsAtCenterOfPerAxisOffsetRange` pins the behaviour.
 
 ## Stage 10 — VR Integration
 - [ ] 10.1 OpenXR session lifecycle
