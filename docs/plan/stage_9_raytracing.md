@@ -1,80 +1,125 @@
-## Stage 9 — Ray Tracing (additive, opt-in render mode)
+## Stage 9 — Ray Tracing (three render modes, additive)
 
-**Goal**: Add a Vulkan ray-traced light-transport render mode *alongside*
-the existing rasterised pipeline. The classical renderer stays the
-default — XeGTAO, shadow maps, SMAA, edge overlay, all of it — and
-nothing is removed or swapped out. RT is a new mode the user picks from
-`RenderQualityPanel`; when RT isn't supported by the GPU (or the user
-picks Rasterised), the classical path runs exactly as it does today.
+**Pivot 2026-04-23**: this plan was originally "classical raster + hybrid
+RT composite". That approach hit persistent
+`VUID-vkUpdateDescriptorSets-None-03047` on per-frame descriptor
+rewires and was over-engineered for the viewer's actual needs. Rewritten
+here as three distinct render modes — no hybrid-composite plumbing.
 
-Why additive:
-- The classical renderer is fast, portable, and the user is happy with
-  the look. It must remain the out-of-the-box experience.
-- `VK_KHR_ray_tracing_pipeline` + `VK_KHR_acceleration_structure` are
-  not guaranteed on all GPUs (Intel iGPUs, older AMD, some mobile).
-  Replacing the raster path would break the viewer on those machines.
-- RT gives us capabilities raster can't reach (geometric-truth soft
-  shadows, window-transmission into rooms, multi-bounce GI in the path
-  tracer) — those are the reasons to add it, not to rip out what works.
+**Goal**: Expose three independent render modes in `RenderQualityPanel`,
+each a complete rendering path:
 
-The sun direction, sky colour, site lat/lon, TrueNorth, date and hour
-continue to come from the existing `SunLightingScene` +
-`RenderQualityPanel` flow (Stage RP.16) — one authoritative lighting
-model, read by every render mode. Artificial interior lights come from
-the indoor-preset toggle (also already on `SunLightingScene`).
+1. **Rasterised** (default, unchanged) — the current classical renderer:
+   shadow maps + PCF, RP.18 transmission shadow map, XeGTAO, SMAA, edge
+   overlay. Bit-compatible with today's output.
+2. **Ray query** — still the forward-shaded raster pipeline, but
+   specific visibility lookups in `basic.frag` (and later
+   `ssao_xegtao.comp`) swap for inline `rayQueryInitializeEXT` /
+   `rayQueryProceedEXT` against the TLAS. No dedicated RT pipeline, no
+   SBT, no composite pass, no per-frame RT descriptor dance. Scope for
+   the initial slice: **sun shadow only**.
+3. **Ray tracing** — a fully separate rendering pipeline owning its own
+   frame lifecycle. Not hybrid-composited. Parked as a placeholder until
+   after ray-query mode lands and we have real signal on what this mode
+   needs to deliver.
 
-Render modes after Stage 9:
-- **Rasterised** (default, unchanged) — current classical renderer.
-- **Hybrid RT** — classical raster primary pass, plus RT passes
-  layered *on top* (RT soft sun shadows, RTAO, window transmission,
-  indoor-light occlusion). The raster AO / shadow-map outputs are still
-  produced; the composite uses whichever input the mode selects, so the
-  raster path stays wired and testable.
-- **Path Traced** — pure RT accumulator mode for presentation stills;
-  resets on camera move, lower interactive framerate. Optional.
+### Why three modes, not two
 
-**Sessions**: 3–4
+- **Rasterised stays the default** for the same reasons as before: the
+  classical renderer is fast, portable, works on every GPU, and looks
+  good. It's the out-of-the-box experience. Nothing is removed.
+- **Ray query is the pragmatic upgrade.** For single-ray visibility
+  (sun shadow, AO, transmission gate, wall-occluded indoor fill), a
+  `rayQuery` call in the existing raster shader replaces the classical
+  approximation directly. No new pipeline, no new descriptor pool — the
+  fragment shader just gets a TLAS binding and one extra push-constant
+  bit. This is the high-leverage mode that closes the shadow-map-bias /
+  contact-shadow gap with minimal plumbing.
+- **Ray tracing is the exotic mode** for anything `rayQuery` can't do:
+  multi-bounce GI, a real path tracer, reflection rays requiring
+  recursion or material evaluation at hit-points. Because it's a fully
+  separate renderer (not a composite layered onto raster), it's actually
+  simpler than the retired hybrid — there's no contract to merge raster
+  and RT outputs per contribution.
+
+Sun direction, sky colour, site lat/lon, TrueNorth, date and hour
+continue to come from `SunLightingScene` + `RenderQualityPanel` (Stage
+RP.16). One authoritative lighting model, read by every mode.
+
+**Sessions**: 1–2 for 9.Q (ray query, sun shadows); 9.RT is open-ended
+and deferred.
 
 ### Modules involved
-- `renderer/` (RT pipeline, acceleration structures, hybrid composite)
-- `scene/` (per-mesh BLAS build, TLAS instance list, transmissive-material tagging)
-- `ui/` (render-mode switch in `RenderQualityPanel`; RT modes greyed out with a tooltip when the capability probe says no)
+
+- `renderer/` — `Device` capability probe, main descriptor-set layout
+  gets a TLAS binding, `basic.frag` gains a `rayQuery` branch
+- `scene/` — BLAS-per-mesh + TLAS (already built, 9.1 / 9.2) plus glass
+  instance flags (already built, 9.6.a)
+- `ui/` — `RenderQualityPanel` gains a three-radio mode selector
 
 ### Ground rules for the stage
-- **Nothing from the classical renderer is deleted or replaced**. XeGTAO,
-  `ShadowPass`, `EdgeOverlayPipeline`, SMAA, etc. all stay live.
-- **All RT code sits behind a runtime capability probe**. On machines
-  without RT support, the RT modes are disabled in the UI and no RT
-  resources are allocated.
-- **Every RT task ships with a "raster path still works" guard**. When
-  RT is off the frame must be bit-compatible with today's classical
-  output (no new state leaking into the raster path).
-- **`SunLightingScene` is the single source of truth for lighting**.
-  Both raster and RT read it — no parallel lighting model.
 
-### Tasks
+- **Nothing from the classical renderer is deleted or replaced.**
+  Rasterised stays the default and ships bit-compatible output.
+- **Every mode sits behind a runtime capability probe.** Ray query is
+  gated on `VK_KHR_ray_query`; the Ray tracing radio stays disabled
+  with a tooltip until 9.RT delivers.
+- **No per-frame descriptor rewires.** The lessons from the retired
+  hybrid approach: descriptor sets are wired once at build / swap
+  recreate, never per-frame. Ray query obeys this naturally — the TLAS
+  binding is part of the main descriptor set, written at scene upload.
+- **`SunLightingScene` stays the single source of truth for lighting.**
+  All three modes read the same UBO.
+
+### Preserved (done)
+
+- **9.1** — Runtime RT-capability probe + `AccelerationStructure`
+  (BLAS-per-mesh). Tests green.
+- **9.2** — `TopLevelAS` + `TlasInstance` (transform, BLAS address,
+  customIndex, mask, flags). Tests green.
+
+### Retired (historical record in `PROGRESS.md`)
+
+- **9.3 through 9.8.d** — hybrid RT pipeline + SBT + `RtShadowPass` /
+  `RtAoPass` / `RtIndoorPass` + sun/indoor composite compute pipelines.
+  Code is still in the tree (reverted, unused). Can be deleted once
+  9.Q.4 lands and the panel actively routes to Ray query.
+
+### Tasks — 9.Q (ray query, sun shadows)
 
 | # | Task | Test | Output |
 |---|------|------|--------|
-| 9.1 | Runtime RT-capability probe (`VK_KHR_acceleration_structure`, `VK_KHR_ray_tracing_pipeline`) and BLAS-per-mesh build from `SceneMesh`. Probe is a no-op on unsupported GPUs. | Unit test: probe reports capability booleans on CPU mock; BLAS builds for a triangle mesh, handle valid. | `renderer/AccelerationStructure.{h,cpp}` |
-| 9.2 | TLAS build from scene instances (per-`SceneNode` transform + BLAS handle); rebuild on scene change. Only built when an RT mode is active. | Unit test: TLAS instance count matches scene; rebuild hook fires on scene-edit signal. | `renderer/TopLevelAS.{h,cpp}` |
-| 9.3 | RT pipeline + SBT (ray-gen, closest-hit, miss, any-hit for transmission). Created lazily the first time RT is enabled. | Unit test: pipeline + SBT build with one ray-gen, one miss, N hit groups; handle validation. | `renderer/RayTracingPipeline.{h,cpp}` |
-| 9.4 | **RT sun shadows** — *additive* to the shadow-map path, not a replacement. Uses `SunLightingScene.sun.dirWorld`. Hybrid composite selects RT visibility when RT mode is active; raster-only mode continues to sample the shadow map. | Visual test: Hybrid mode picks up contact shadows + thin-trim shadows the shadow map misses; Rasterised mode output unchanged from today. | `shadow.rgen` + composite path; `ShadowPass` untouched |
-| 9.5 | **RTAO** — *additive* to XeGTAO. Cosine-weighted hemisphere sampling, short ray (≤1 m), temporal accumulation on static camera. Composite picks RTAO in Hybrid mode, XeGTAO otherwise. | Visual test: Hybrid AO is visibly more faithful at silhouettes/corners; Rasterised mode output unchanged. | `rtao.rgen`; XeGTAO pipeline untouched |
-| 9.6 | **Window-transmission** — sun light passes through `IfcWindow` geometry. Shadow-ray any-hit treats transmissive materials as attenuators (glass tint × transmission factor). Only active in RT modes. | Visual test: interior floor next to a south-facing window is lit in proportion to sun angle (Hybrid/PT modes); Rasterised mode unaffected. | Transmissive material flag in scene + any-hit shader |
-| 9.7 | **Indoor-light sampling** — when `indoorLightsEnabled`, cast a shadow ray toward the overhead-fill light so it respects walls. Only active in RT modes; raster still uses the cheap directional fill from RP.16.5. | Visual test: corridor behind a wall no longer lit by the indoor fill in RT mode; Rasterised mode unchanged. | `rt_indoor.rgen` hit group |
-| 9.8 | **Hybrid composite** — raster primary (G-buffer + SMAA) + RT visibility/AO/transmission as separable contributions, reassembled in the tonemap pass. Routing flag decides per-contribution which input (raster vs RT) feeds the composite. | Benchmark: Hybrid frame time within budget on reference GPU. Visual test: Rasterised mode produces bit-compatible output with pre-Stage-9 reference renders. | `tonemap.frag` RT input + RenderLoop wire |
-| 9.9 | **Optional path tracer** — separate rendering mode; ray-gen accumulates N bounces into an HDR accumulator; resets on camera move. Uses the same `SunLightingScene` + indoor preset as Hybrid. | Visual test: colour bleed from coloured walls + soft sky fill; accumulator resets on orbit/pan. | `pathtrace.rgen` + accumulator target |
-| 9.10 | **UI — render-mode switch** in `RenderQualityPanel`: `{Rasterised (default), Hybrid RT, Path Traced}`. Modes gated on capability probe; disabled modes show a tooltip explaining why. Default stays **Rasterised** on every launch. | UI test: probe-false disables RT modes and keeps Rasterised selected; probe-true enables all three; mode switch recomposes render graph without leaking state into the raster path. | `RenderQualityPanel` Mode section |
+| 9.Q.1 | `Device::HasRayQuery()` probe; enable `VK_KHR_ray_query` on the logical device when the extension is advertised and the feature bit is true. Chain the feature struct into `vkCreateDevice` the same way `HasRayTracing` does. | Unit: probe reports true on RT-capable device + GTEST_SKIP on non-RT (same pattern as `HasRayTracing` tests). | `renderer/Device.{h,cpp}` |
+| 9.Q.2 | Add a TLAS binding to the main descriptor-set layout (optional; raster mode leaves it bound to `VK_NULL_HANDLE`). `SceneUploader` writes the TLAS into the descriptor after the TLAS build completes. | Unit: descriptor set layout binds the TLAS type at the new slot; raster mode still works when TLAS is null. | `renderer/DescriptorSet` + `core/SceneUploader` |
+| 9.Q.3 | `basic.frag` gets `#extension GL_EXT_ray_query : require` + `uint useRayQueryShadow` push-constant bit + a ray-query branch replacing the PCF shadow-map sample when the flag is on. Glass transmission (RP.18 tint path) stays active — ray-query shadows and glass tint compose the same way today's PCF + tint do. | Visual test: Ray-query mode produces sharp, bias-free contact shadows that the PCF map misses; no pink/magenta dev banners; Rasterised mode output unchanged. | `basic.frag` |
+| 9.Q.4 | `RenderQualityPanel` gains a three-radio selector (`Rasterised` / `Ray query` / `Ray tracing (disabled)`). `main.cpp` maps it onto a new `RenderLoop::RenderMode::RayQuery` and pushes `useRayQueryShadow = 1` per draw when active. Ray tracing radio is permanently disabled with a "future work" tooltip. | Unit: defaults pinned in `RenderQualityPanelTest`; probe-false hides Ray query; probe-true enables it; Ray tracing always disabled. | `ui/RenderQualityPanel` + `src/app/main.cpp` |
+| 9.Q.5 | Stage gate — visual check (Ray query shadows match / exceed classical shadow map on the sample scene) + full `ctest -j$(nproc) --output-on-failure`. | Full test suite green; screenshot comparison to classical mode documented in the commit. | — |
 
 ### Ordering
-9.1 → 9.2 → 9.3 (foundation) → 9.4 + 9.5 in either order (additive hybrid effects) → 9.6 (transmission needs 9.4) → 9.7 (indoor light needs 9.4 shape) → 9.8 (hybrid composite + raster-regression guard) → 9.9 (optional PT, parallelisable with 9.10) → 9.10 (UI) → stage gate.
+9.Q.1 → 9.Q.2 → 9.Q.3 → 9.Q.4 → 9.Q.5 (stage gate).
+
+### Tasks — 9.RT (full ray tracing, parked)
+
+| # | Task | Status |
+|---|------|--------|
+| 9.RT.1 | Render-mode enum value + panel radio stub (disabled until the pipeline lands). | Parked |
+| 9.RT.2..N | Dedicated ray-gen / closest-hit / miss / any-hit pipeline + SBT + accumulation target + frame loop. Scope to be defined after 9.Q lands. | Parked |
+
+9.RT is explicitly out of scope for the immediate work. If it ever
+happens, it subsumes the original 9.9 path tracer idea.
 
 ### Out of scope (Stage 9)
-- RT reflections on glossy / mirror surfaces — cool but not architectural-render-critical, and most BIM materials are matte. Revisit post-Stage 11 if needed.
-- Denoising: rely on temporal accumulation + a cheap bilateral for RTAO; no ML denoiser.
-- Dynamic light editing: sun/time/site stay the single authoritative inputs; no arbitrary light-placement UI in this stage.
-- **Retiring XeGTAO, shadow maps, or any other classical renderer feature — explicitly NOT in scope. Classical renderer stays the default.**
+
+- RTAO via ray query — deferred. Classical XeGTAO covers it today.
+- Window transmission via ray query — deferred. RP.18 classical
+  transmission shadow map covers it today. Could be folded into 9.Q.3
+  as an any-hit-style walk later.
+- Indoor-fill wall occlusion via ray query — deferred. Raster mode
+  keeps the cheap directional fill.
+- RT reflections, denoisers, dynamic light editing — outside the BIM
+  viewer's use case; revisit post-Stage 11 if ever.
+- **Retiring XeGTAO, shadow maps, or any other classical renderer
+  feature — explicitly NOT in scope. Classical renderer stays the
+  default.**
 
 ---
-
