@@ -47,14 +47,15 @@ TEST(RenderQualityPanelTest, DefaultPanelIsVisible) {
     EXPECT_TRUE(panel.IsVisible());
 }
 
-TEST(RenderQualityPanelTest, DefaultDateTimeIsMidsummerNoon) {
-    // Midsummer-noon default maximises sun elevation at northern-hemisphere
-    // sites — a sensible starting render for architectural viewing.
+TEST(RenderQualityPanelTest, DefaultDateTimeIsMidsummerAfternoon) {
+    // Midsummer-afternoon default: noon puts the sun nearly overhead so
+    // vertical surfaces read as dark; 15:00 local catches facades at an
+    // angle for a more readable architectural render out of the box.
     RenderQualityPanel panel;
     const auto& s = panel.GetSettings();
     EXPECT_EQ(s.month, 6);
     EXPECT_EQ(s.day, 21);
-    EXPECT_FLOAT_EQ(s.hourLocal, 12.0F);
+    EXPECT_FLOAT_EQ(s.hourLocal, 15.0F);
 }
 
 TEST(RenderQualityPanelTest, DefaultCustomSunDisabled) {

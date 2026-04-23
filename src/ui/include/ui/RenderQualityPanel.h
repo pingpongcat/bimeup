@@ -92,7 +92,10 @@ struct RenderQualitySettings {
     int year{2026};
     int month{6};          // 1..12
     int day{21};           // 1..31
-    float hourLocal{12.0F};  // 0..24 local solar time
+    // 15:00 local (mid-afternoon). Noon puts the sun nearly overhead so
+    // vertical surfaces read as dark; 15:00 is the standard architectural
+    // "afternoon" pose where facades catch direct light at an angle.
+    float hourLocal{15.0F};  // 0..24 local solar time
 
     // When true, `sun.siteLocation` + `sun.trueNorthRad` are expected to
     // be pushed in from IfcSite metadata by main.cpp on model load

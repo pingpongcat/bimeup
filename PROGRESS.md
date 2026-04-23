@@ -271,6 +271,7 @@ Stripped after the 9.Q.5 visual gate showed ray-query mode either matching the c
 - [x] PRE.2 Section handle z-order — bar/origin/grab now draw first, then F|S|B pills, separators, X; all switched from `GetForegroundDrawList()` to `GetBackgroundDrawList()` so the whole handle sits behind any GUI panels the user opens.
 - [x] PRE.3 Initial section offset at model centre — `AxisSectionPanel::ToggleAxis` uses `(OffsetMin + OffsetMax) / 2` per axis instead of `0.0F`, so planes spawn at the scene centre even on IFC models whose origin is in a corner. New test `ToggleAxisStartsAtCenterOfPerAxisOffsetRange` pins the behaviour.
 - [x] PRE.4 Sun tab "Custom" toggle — `RenderQualitySettings::customSunEnabled` (default false) gates the date/time/site/indoor widgets. Also hoisted the `julianDayUtc` recompute out of the `CollapsingHeader("Sun")` body so the renderer has a valid sun from frame 1; before, `julianDayUtc` stayed at 0 until the Sun header was first expanded, which is why expanding it "suddenly" changed the scene. New test `DefaultCustomSunDisabled` pins the default.
+- [x] PRE.5 Default hour 15:00 local — noon puts the sun overhead and leaves vertical surfaces dark; 15:00 is the standard architectural afternoon pose so facades catch angled direct light. Updated `DefaultDateTimeIsMidsummerAfternoon` test.
 
 ## Stage 10 — VR Integration
 - [ ] 10.1 OpenXR session lifecycle
